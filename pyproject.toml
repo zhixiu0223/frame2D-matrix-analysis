@@ -9,6 +9,7 @@ description = "2D 矩陣位移法(直接勁度法)通用框架分析"
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
+    "matplotlib",
 ]
 
 [tool.setuptools]

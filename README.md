@@ -27,6 +27,8 @@ tests/
 
 ```python
 from frame2d import Frame2D, solve
+from frame2d.plotting import plot_all
+import matplotlib.pyplot as plt
 
 f = Frame2D()
 f.add_node(0, 0, 0).add_node(1, 0, 4).add_node(2, 6, 4).add_node(3, 6, 0)
@@ -40,7 +42,33 @@ f.point_load(1, fx=12.0)
 result = solve(f)
 print(result.reactions)
 print(result.member_results[0].end_forces_local)  # [Fx1,Fy1,M1,Fx2,Fy2,M2]
+
+fig = plot_all(f, result)   # 六合一: 結構圖/受力圖/變形圖/軸力圖/剪力圖/彎矩圖
+fig.savefig('output.png')   # Pydroid3上可改用 plt.show() 直接跳出檢視畫面
 ```
+
+更多範例見 `examples/demo_plots.py`。
+
+## 後處理/視覺化 (frame2d.plotting)
+
+```python
+from frame2d.plotting import plot_structure, plot_loads, plot_diagram, plot_deformed, plot_all
+```
+
+- `plot_structure(frame)` — ① 結構尺寸圖 (節點/桿件編號、支承符號)
+- `plot_loads(frame)` — ② 受力圖 (點載重箭頭+分佈載重箭頭)
+- `plot_diagram(frame, result, kind='N'|'V'|'M')` — ③④⑤ 軸力/剪力/彎矩圖
+- `plot_deformed(frame, result)` — ⑥ 變形圖 (自動抓合理放大倍率)
+- `plot_all(frame, result)` — 六張一次畫在 2x3 網格
+
+繪圖只是把 `SolveResult` 的數字換一種視角呈現,不會重新計算任何力學——
+所有圖表的數值來源都是 `solve()` 算出來的同一份結果。
+
+**注意事項:**
+- 標題用英文,避免不同環境(手機/Termux/伺服器)字型缺 CJK 字形時變成方框
+- 變形圖用 Hermite cubic 內插,節點值精確;若某根桿件跨中有分佈載重
+  且只用單一元素代表整根桿件,內插出來的跨中撓度會略微低估真實下垂量
+  (真實解在均佈載重下是四次多項式),想要更精確可以把該桿件切成多個元素
 
 ## DOF 設計note
 
@@ -69,6 +97,7 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 |---|---|---|
 | 懸臂梁點載重 | 解析解 (PL³/3EI) | rel_err ~1e-16 |
 | 簡支梁均佈載重 | 解析解 (5wL⁴/384EI, wL²/8) | rel_err ~1e-16 |
+| Case-04/04.5 側移剛架 | 使用者自己的 sd_framework/anastruct notebook | rel_err < 2.3e-4 (2支承反力+6桿端彎矩) |
 | Case-08 兩層兩跨鋼架 | SW FEA 第三方工具 | rel_err < 0.2% (9個反力分量) |
 
 下一步可以把 slope_deflection_framework 的 Case-01~08 全部轉成 Frame2D 模型,

@@ -41,4 +41,15 @@ M_reaction = result.reactions[f.dofs_of(0)[2]]
 assert abs(Fy_reaction - P) < 1e-8, f"垂直方向不平衡: reaction={Fy_reaction}, 應為{P}"
 assert abs(M_reaction - P * L) < 1e-8, f"彎矩不平衡: reaction={M_reaction}, 應為{P*L}"
 
+# 迴歸測試: postprocess.member_internal_forces() 沿桿長的M(x)公式,
+# 用這個案例(M1=40非零)專門鎖住之前抓到的正負號bug——
+# 簡支梁(M1=M2≈0)測不出這個bug, 因為正負號怎麼取結果都是0
+from frame2d.postprocess import member_internal_forces
+x, N, V, M = member_internal_forces(f, result, 0, n=5)
+ef = result.member_results[0].end_forces_local
+M1_local = ef[2]
+assert abs(M[0] - (-M1_local)) < 1e-8, f"M(0)應為-M1={-M1_local}, 得到{M[0]}"
+assert abs(M[-1] - ef[5]) < 1e-6, f"M(L)應為M2={ef[5]}, 得到{M[-1]}"
+print(f"PASS: member_internal_forces() M(x)公式正確 (M(0)=-M1, M(L)=M2, 非零M1情況下驗證)")
+
 print("PASS: 懸臂梁點載重 完全吻合解析解")
