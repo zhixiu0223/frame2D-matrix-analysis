@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: frame2d
+Version: 0.1.0
+Summary: 2D 矩陣位移法(直接勁度法)通用框架分析
+Requires-Python: >=3.9
+Requires-Dist: numpy
