@@ -97,8 +97,10 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 |---|---|---|
 | 懸臂梁點載重 | 解析解 (PL³/3EI) | rel_err ~1e-16 |
 | 簡支梁均佈載重 | 解析解 (5wL⁴/384EI, wL²/8) | rel_err ~1e-16 |
-| Case-04/04.5 側移剛架 | 使用者自己的 sd_framework/anastruct notebook | rel_err < 2.3e-4 (2支承反力+6桿端彎矩) |
+| Case-01~08 (共11案例) | 使用者自己的 sd_framework.py 本體直接執行 | rel_err < 1e-3 (46個獨立數值) |
 | Case-08 兩層兩跨鋼架 | SW FEA 第三方工具 | rel_err < 0.2% (9個反力分量) |
+
+`test_all_slope_deflection_cases.py` 把 slope_deflection_framework 的 Case-01~08(含 04.5/06.5/07.5,共11個案例)全部轉成 Frame2D 模型,幾何/支承/載重都是照 `samples/model_*.py` 的 `draw_geometry()` 讀出來的真實定義,不是憑印象猜的;正確答案是直接執行使用者的 `sd_framework.py` 本體(`SlopeDeflectionSolver._solve_core()`)算出來的,不是讀 notebook/PDF 截圖轉錄。
 
 下一步可以把 slope_deflection_framework 的 Case-01~08 全部轉成 Frame2D 模型,
 系統化地跑一輪回歸測試——這個框架已經證明了同時處理點載重+分佈載重+

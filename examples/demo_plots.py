@@ -22,7 +22,7 @@ f.add_member(2, node_i=3, node_j=2, section='sec')
 f.fix(0)
 f.fix(3)
 f.point_load(1, fx=P)
-f.distributed_load(1, w=-24.0)
+f.distributed_load(1, w=-3.0)
 
 result = solve(f)
 fig = plot_all(f, result)

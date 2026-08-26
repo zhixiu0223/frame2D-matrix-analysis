@@ -226,10 +226,14 @@ def plot_diagram(frame, result, kind, ax=None, scale=None):
                 color='crimson', alpha=0.2)
 
         # 標示: 兩端點 + 桿件內部所有局部極值(轉折點, 即幾何不連續/曲線變號的地方)
+        # 標籤往外(遠離桿件軸線的方向)偏移一點, 避免壓在曲線上被誤讀
         for i in _label_indices(vals):
+            sign = 1 if vals[i] >= 0 else -1
+            off_x = -perp_x * sign * 10
+            off_y = -perp_y * sign * 10
             ax.annotate(f'{vals[i]:.3g}', (px[i], py[i]), fontsize=7, color='crimson',
-                        ha='center', va='center',
-                        bbox=dict(boxstyle='round,pad=0.1', fc='white', ec='none', alpha=0.75))
+                        ha='center', va='center', xytext=(off_x, off_y), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='crimson', lw=0.5, alpha=0.9))
 
     ax.set_title(label)
     return ax
@@ -251,10 +255,19 @@ def plot_deformed(frame, result, ax=None, scale=None):
         fig, ax = plt.subplots()
     plot_structure(frame, ax=ax, show_node_ids=False, show_member_ids=False, show_dimensions=False)
 
+    # 用實際內插出來的變形曲線(不是只看節點平移量)算最大偏移量, 才不會漏掉
+    # "兩端節點位移都是0、但轉角很大"的情況(例如簡支梁純轉角撐起中間撓度)
     if scale is None:
-        max_disp = max(np.max(np.abs(result.displacements[0::3])),
-                        np.max(np.abs(result.displacements[1::3])), 1e-9)
-        scale = _auto_scale(frame) * 0.1 / max_disp
+        max_offset = 1e-9
+        for mid in frame.members:
+            ni, nj = _member_endpoints(frame, mid)
+            L, angle = member_geometry(ni, nj)
+            base_x = ni.x + np.linspace(0, L, 21) * np.cos(angle)
+            base_y = ni.y + np.linspace(0, L, 21) * np.sin(angle)
+            X, Y = member_deformed_shape(frame, result, mid, scale=1.0, n=21)
+            offset = np.hypot(X - base_x, Y - base_y)
+            max_offset = max(max_offset, np.max(offset))
+        scale = _auto_scale(frame) * 0.1 / max_offset
 
     for mid in frame.members:
         X, Y = member_deformed_shape(frame, result, mid, scale=scale, n=21)
