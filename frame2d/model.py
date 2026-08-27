@@ -90,8 +90,16 @@ class Frame2D:
 
     def add_truss(self, id: int, node_i: int, node_j: int, section: str):
         """桁架元素的簡寫: 等同 add_member(..., member_type='truss')。
-        兩端視為鉸接, 只傳軸力。"""
+        兩端視為鉸接, 只傳軸力。可承受拉力或壓力(例如撐架的撐桿)。"""
         self.members[id] = Member(id, node_i, node_j, section, member_type='truss')
+        return self
+
+    def add_cable(self, id: int, node_i: int, node_j: int, section: str):
+        """纜線元素的簡寫: 等同 add_member(..., member_type='cable')。
+        跟truss一樣兩端鉸接、只傳軸力, 但只能受拉(壓力=0, 物理上代表纜線鬆弛
+        退出作用)。solve()會自動偵測受壓的纜線、移除其勁度貢獻、重新求解,
+        反覆直到沒有纜線受壓為止(見 solve.py 的說明)。"""
+        self.members[id] = Member(id, node_i, node_j, section, member_type='cable')
         return self
 
     def fix(self, node: int):

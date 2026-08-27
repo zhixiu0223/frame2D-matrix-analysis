@@ -105,7 +105,8 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | Case-01~08 (共11案例) | 使用者自己的 sd_framework.py 本體直接執行 | rel_err < 1e-3 (46個獨立數值) |
 | Case-08 兩層兩跨鋼架 (純點載重+含UDL) | SW FEA 第三方工具 | 直接吻合, 零翻轉 (18個反力分量) |
 | 桁架(truss)單桿軸力 | 解析解 (PL/EA) | rel_err ~1e-10 |
-| 桁架(truss)對稱雙桿撐架 | 節點法(method of joints)獨立手算 | rel_err ~1e-6 (含受壓方向) |
+| 桁架(truss)對稱雙桿撐架 | 節點法(method of joints)獨立手算 + SW FEA第三方app | rel_err ~1e-6, 反力/軸力皆吻合(含受壓大小方向) |
+| 纜線(cable)受拉/受壓自動鬆弛 | 跟truss結果交叉比對(受拉時) + 整體力平衡檢查 | 完全一致, 零殘差 |
 
 ## 桁架(truss)元素
 
@@ -116,15 +117,33 @@ truss桿件、沒有frame桿件)的轉角自由度沒有任何勁度貢獻, solv
 跳過(不會變成奇異矩陣), 但如果對這種節點外加彎矩會直接報錯(沒有任何桿件
 能抵抗該彎矩)。
 
-**分佈載重(distributed_load)不能加在truss桿件上**——truss沒有彎曲勁度,
+**分佈載重(distributed_load)不能加在truss/cable桿件上**——兩者都沒有彎曲勁度,
 `fixed_end_forces_udl` 假設的是frame元素的彎曲能力, 硬加會直接報錯。要模擬
-桁架自重, 改成在兩端節點各加一半重量的 `point_load`。
+自重, 改成在兩端節點各加一半重量的 `point_load`。
 
-繪圖時 `plot_structure` 會自動把truss桿件畫成虛線(frame桿件是實線), 方便
-區分, 這對之後要做混合frame+truss的結構(例如斜張橋: 塔柱+橋面用frame,
-纜線用truss)會很有用——但目前還沒有處理「纜線只能受拉、不能受壓」這個
-斜張橋特有的非線性問題, 純線性桁架元素如果算出壓力, 物理上對真實纜線來說
-是不合理的(纜線會鬆弛退出作用), 需要額外的迭代檢查機制, 這部分還沒實作。
+繪圖時 `plot_structure` 會自動把truss/cable桿件畫成虛線(frame桿件是實線),
+支承符號請用 `pin()`(鉸接三角形), 不要用 `fix()`(固定端牆面排線)——桁架/
+纜線節點本來就沒有轉角勁度, 用pin在視覺上才符合物理意涵, 也才會跟SW FEA
+這類工具畫出來的鉸接符號一致。`plot_deformed` 會在每個有位移的節點旁標出
+實際位移量(Δ=...), 方便快速比對材料/斷面設定是否正確, 不用只看變形形狀。
+
+## 纜線(cable)元素 — 只能受拉, 自動處理鬆弛
+
+`f.add_cable(id, node_i, node_j, section)` 建立纜線元素——跟truss一樣兩端
+鉸接、只傳軸力, 但**只能受拉**。如果某條cable在某個載重組合下該受壓
+(物理上代表它會鬆弛退出作用), `solve()` 會自動偵測、移除該桿件的勁度貢獻、
+重新求解, 反覆直到沒有cable受壓為止(經典的tension-only member迭代解法)。
+`SolveResult.slack_cables` 是最終判定鬆弛的cable id集合, 每個
+`MemberResult.slack` 也會標記該桿件這次是否被判定鬆弛(鬆弛時
+`end_forces_local`全部是0)。
+
+如果移除所有鬆弛cable之後結構變成機構(無法承受載重), 或超過預設20次迭代
+仍未收斂, 會拋出`RuntimeError`並說明原因——這通常代表模型設計本身有問題
+(例如某個節點的所有cable在這個載重下都會鬆弛), 不是求解器的bug。
+
+truss跟cable的差別: **truss可以同時承受拉力跟壓力**(適合撐架、桁架的斜撐桿),
+**cable只能受拉**(適合真正的纜線、吊索——這是斜張橋的纜線該用的元素類型,
+不能直接用truss, 否則載重方向不對時會算出不合理的壓力)。
 
 `test_all_slope_deflection_cases.py` 把 slope_deflection_framework 的 Case-01~08(含 04.5/06.5/07.5,共11個案例)全部轉成 Frame2D 模型,幾何/支承/載重都是照 `samples/model_*.py` 的 `draw_geometry()` 讀出來的真實定義,不是憑印象猜的;正確答案是直接執行使用者的 `sd_framework.py` 本體(`SlopeDeflectionSolver._solve_core()`)算出來的,不是讀 notebook/PDF 截圖轉錄。
 

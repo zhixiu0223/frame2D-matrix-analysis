@@ -16,7 +16,7 @@ f.add_node(0, 0, 0)
 f.add_node(1, L, 0)
 f.add_section('s', E=E, I=1.0, A=A)   # I對truss無意義, 隨便給
 f.add_truss(0, 0, 1, 's')
-f.fix(0)
+f.pin(0)   # 桁架節點沒有轉角勁度, 用pin(鉸接符號)比fix(固定端符號)更符合物理意涵
 f.point_load(1, fx=P)
 r = solve(f)
 
@@ -44,8 +44,8 @@ f.add_node(2, 2, 3)
 f.add_section('s', E=E, I=1.0, A=A)
 f.add_truss(0, 0, 2, 's')   # 桿0: 節點0-節點2
 f.add_truss(1, 1, 2, 's')   # 桿1: 節點1-節點2
-f.fix(0)
-f.fix(1)
+f.pin(0)
+f.pin(1)
 f.point_load(2, fy=-P)
 r = solve(f)
 

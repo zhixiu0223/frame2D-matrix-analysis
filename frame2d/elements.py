@@ -66,8 +66,10 @@ def member_stiffness_local_truss(E, A, L):
 
 
 def member_local_stiffness_dispatch(member_type, E, I, A, L):
-    """依member_type選擇對應的局部勁度矩陣公式"""
-    if member_type == 'truss':
+    """依member_type選擇對應的局部勁度矩陣公式。
+    'truss'跟'cable'共用同一條軸力公式(兩端鉸接、只傳軸力), 差別在
+    solve.py會不會把受壓的cable桿件當成鬆弛移除, truss則不管拉壓都保留。"""
+    if member_type in ('truss', 'cable'):
         return member_stiffness_local_truss(E, A, L)
     return member_stiffness_local(E, I, A, L)
 

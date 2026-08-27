@@ -253,8 +253,9 @@ def _label_indices(vals, atol=1e-6):
     return sorted(idxs)
 
 
-def plot_deformed(frame, result, ax=None, scale=None):
-    """⑥ 變形圖"""
+def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
+    """⑥ 變形圖 (show_values=True: 在每個節點旁標出實際位移量, 方便對照SW FEA
+    這類會直接印出位移數字的工具, 快速確認斷面/材料設定是否正確)"""
     if ax is None:
         fig, ax = plt.subplots()
     plot_structure(frame, ax=ax, show_node_ids=False, show_member_ids=False, show_dimensions=False)
@@ -276,6 +277,17 @@ def plot_deformed(frame, result, ax=None, scale=None):
     for mid in frame.members:
         X, Y = member_deformed_shape(frame, result, mid, scale=scale, n=21)
         ax.plot(X, Y, color='blue', lw=2)
+
+    if show_values:
+        for nid, n in frame.nodes.items():
+            ux, uy, _ = frame.dofs_of(nid)
+            dx, dy = result.displacements[ux], result.displacements[uy]
+            mag = np.hypot(dx, dy)
+            if mag < 1e-12:
+                continue   # 支承等位移=0的節點不標, 避免畫面雜亂
+            ax.annotate(f'Δ={mag:.4g}', (n.x, n.y), fontsize=7, color='darkblue',
+                        xytext=(5, -10), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
     ax.set_title(f'Deformation (scale x{scale:.1f})')
     return ax
