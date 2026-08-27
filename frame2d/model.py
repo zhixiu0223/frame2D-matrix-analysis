@@ -66,6 +66,22 @@ class DistributedLoad:
             self.w_end = self.w_start
 
 
+@dataclass
+class MemberPointLoad:
+    """桿件內部任意位置(不一定在節點上)的集中力/集中力矩。
+    a: 距node_i沿桿軸的距離(局部座標, 0<=a<=L)。
+    fx: 沿局部+x方向(軸向)的力; fy: 沿局部+y方向(橫向)的力,
+    跟distributed_load的w同一套正負號慣例; m: 逆時針為正的集中力矩。
+    不會新增節點、不切割桿件——用等效節點載重(work-equivalent)處理,
+    跟distributed_load同一套機制(見solve.py)。
+    """
+    member: int
+    a: float
+    fx: float = 0.0
+    fy: float = 0.0
+    m: float = 0.0
+
+
 class Frame2D:
     def __init__(self):
         self.nodes: dict[int, Node] = {}
@@ -74,6 +90,7 @@ class Frame2D:
         self.supports: list[Support] = []
         self.point_loads: list[PointLoad] = []
         self.distributed_loads: list[DistributedLoad] = []
+        self.member_point_loads: list[MemberPointLoad] = []
 
     # ---- 建模 API ----
     def add_node(self, id: int, x: float, y: float):
@@ -121,6 +138,13 @@ class Frame2D:
 
     def distributed_load(self, member: int, w: float, w_end: float = None):
         self.distributed_loads.append(DistributedLoad(member, w, w_end))
+        return self
+
+    def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):
+        """桿件內部任意位置(距node_i為a)加集中力/集中力矩, 不新增節點。
+        跟point_load(node,...)的差別: 這裡a是桿件"局部"座標(沿桿軸距離node_i
+        多遠), 不是節點id。"""
+        self.member_point_loads.append(MemberPointLoad(member, a, fx, fy, m))
         return self
 
     # ---- DOF 查詢 (唯一允許碰自由度編號的地方) ----

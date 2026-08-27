@@ -135,3 +135,48 @@ def fixed_end_forces_udl(w_start, w_end, L):
     M2 = M2_u + M2_t
 
     return np.array([0.0, V1, M1, 0.0, V2, M2])
+
+
+def fixed_end_forces_point_load(P, a, L):
+    """局部座標系下, 桿件內部任意位置(距node_i為a, 0<=a<=L)的橫向點載重P
+    (沿局部+y方向為正)之固定端反力。回傳格式跟 fixed_end_forces_udl 一致
+    (直接當work-equivalent等效節點載重使用, 不取負號)。
+
+    公式來源: 用EI*v''=M(x)分段雙重積分, 配合固定-固定邊界條件, 從梁的
+    微分方程直接推導(非憑記憶抄書, 避免重蹈M(x)公式曾經正負號抄反的錯誤),
+    並用簡支梁決定性反力(R1=Pb/L, R2=Pa/L, 純靜力學、不受此公式正確性影響)
+    交叉驗證過, 見 tests/test_member_point_load.py。
+    """
+    b = L - a
+    V1 = P * b**2 * (3 * a + b) / L**3
+    M1 = P * a * b**2 / L**2
+    V2 = P * a**2 * (3 * b + a) / L**3
+    M2 = -P * a**2 * b / L**2
+    return np.array([0.0, V1, M1, 0.0, V2, M2])
+
+
+def fixed_end_forces_point_moment(M0, a, L):
+    """局部座標系下, 桿件內部任意位置(距node_i為a)的集中力矩M0
+    (逆時針為正, 跟theta同號約定)之固定端反力。回傳格式同上。
+    公式來源同fixed_end_forces_point_load的說明。
+    """
+    b = L - a
+    V1 = 6.0 * M0 * a * b / L**3
+    M1 = M0 * b * (2 * a - b) / L**2
+    V2 = -6.0 * M0 * a * b / L**3
+    M2 = M0 * a * (2 * b - a) / L**2
+    return np.array([0.0, V1, M1, 0.0, V2, M2])
+
+
+def fixed_end_forces_axial_point_load(P, a, L):
+    """局部座標系下, 桿件內部任意位置(距node_i為a)的軸向集中力P
+    (沿局部+x方向為正)之固定端反力。
+
+    推導: 固定-固定桿件受軸向點載重, 等同兩根軸向彈簧(勁度EA/a, EA/b)
+    在中間節點串聯承受外力P, 節點位移 u=P*a*b/(EA*L), 兩端固定端反力
+    F1=EA/a*u=P*b/L, F2=EA/b*u=P*a/L (簡單物理量, 不需要sympy推導)。
+    """
+    b = L - a
+    F1 = P * b / L
+    F2 = P * a / L
+    return np.array([F1, 0.0, 0.0, F2, 0.0, 0.0])

@@ -21,6 +21,13 @@
   反推才抓到 M(L)應該等於M2, 而不是+M1+Fy1*L那樣算出來的80。
   已重新驗證: 懸臂梁 M(L)=0=M2 (原本錯誤版本算出80), 簡支梁跨中M=22.5=wL²/8 依然吻合。
 
+  桿件內部集中力/力矩(member_point_load)的貢獻(見tests/test_member_point_load.py
+  的簡支梁決定性反力反推驗證): 在a點處,
+    N(x) 於 x>=a 處跳躍 -fx (fx沿局部+x, N拉力為正, 符號跟軸力慣例對齊)
+    V(x) 於 x>=a 處跳躍 +fy (剛好就是fy本身, 因為V(x)本來就是"Fy1+累積量"這套邏輯)
+    M(x) 於 x>=a 處額外貢獻 fy*(x-a) (V跳躍的積分, 跟連續分佈載重的累積量同一套機制)
+    M(x) 於 x>=a 處另外再跳躍 +m (集中力矩造成的彎矩不連續, 不影響V)
+
 變形內插用 Hermite cubic shape function (homogeneous解), 節點值精確,
 但若桿件跨中有分佈載重且只用單一元素代表整根桿件, 內插的跨中撓度會略微
 低估實際下垂量(因為真實解在均佈載重下是四次多項式, 不是三次)——
@@ -46,7 +53,10 @@ def _cumulative_M_from_W(w_start, w_end, x, L):
 
 
 def member_internal_forces(frame, result, member_id, n=21):
-    """回傳局部座標系下沿桿長分佈的 (x, N, V, M) 陣列"""
+    """回傳局部座標系下沿桿長分佈的 (x, N, V, M) 陣列。
+    取樣點會自動包含每個member_point_load的確切位置(左右各插一個極近的點),
+    這樣繪圖時跳躍不連續處才會畫成真正的垂直線, 不會被線性內插抹平成斜線。
+    """
     mr = result.member_results[member_id]
     L = mr.L
     Fx1, Fy1, M1 = mr.end_forces_local[0], mr.end_forces_local[1], mr.end_forces_local[2]
@@ -58,10 +68,28 @@ def member_internal_forces(frame, result, member_id, n=21):
             w_end += dl.w_end
 
     x = np.linspace(0, L, n)
-    N = np.full(n, -Fx1)   # 拉力為正的工程慣例 (Fx1本身是"壓力為正", 取負號校正)
+    eps = L * 1e-6
+    extra = []
+    for pl in frame.member_point_loads:
+        if pl.member == member_id:
+            extra += [max(0.0, pl.a - eps), min(L, pl.a + eps)]
+    if extra:
+        x = np.unique(np.concatenate([x, extra]))
+
+    N = np.full(x.shape, -Fx1)   # 拉力為正的工程慣例 (Fx1本身是"壓力為正", 取負號校正)
     W = _cumulative_W(w_start, w_end, x, L)
     V = Fy1 + W
     M = -M1 + Fy1 * x + _cumulative_M_from_W(w_start, w_end, x, L)
+
+    for pl in frame.member_point_loads:
+        if pl.member != member_id:
+            continue
+        step = (x >= pl.a - 1e-12).astype(float)
+        N += -pl.fx * step
+        V += pl.fy * step
+        M += pl.fy * np.clip(x - pl.a, 0, None)
+        M += pl.m * step
+
     return x, N, V, M
 
 

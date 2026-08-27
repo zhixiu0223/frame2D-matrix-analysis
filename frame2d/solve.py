@@ -27,6 +27,9 @@ from .elements import (
     member_stiffness_global,
     transformation_matrix,
     fixed_end_forces_udl,
+    fixed_end_forces_point_load,
+    fixed_end_forces_point_moment,
+    fixed_end_forces_axial_point_load,
 )
 
 
@@ -114,6 +117,36 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
 
         f_FE_global = T.T @ f_FE_local
         idx = np.array(member_dofs[dl.member])
+        F[idx] += f_FE_global
+
+    # ---- 2b. 桿件內部集中力/力矩 -> 固定端反力 -> 等效節點載重疊加進F ----
+    for pl_m in frame.member_point_loads:
+        m = frame.members[pl_m.member]
+        if m.member_type in ('truss', 'cable'):
+            raise ValueError(
+                f"member {pl_m.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
+                " 不能承受橫向集中力/力矩。如果要模擬桁架/纜線中間的集中力,"
+                " 改成拆成兩段桿件、在新節點上用point_load。")
+        L = member_L[pl_m.member]
+        T = member_T[pl_m.member]
+        a = pl_m.a
+        if not (0.0 <= a <= L + 1e-9):
+            raise ValueError(f"member {pl_m.member} 的member_point_load位置a={a}超出桿件範圍[0,{L}]")
+        a = min(max(a, 0.0), L)
+
+        f_FE_local = np.zeros(6)
+        if abs(pl_m.fx) > 0:
+            f_FE_local += fixed_end_forces_axial_point_load(pl_m.fx, a, L)
+        if abs(pl_m.fy) > 0:
+            f_FE_local += fixed_end_forces_point_load(pl_m.fy, a, L)
+        if abs(pl_m.m) > 0:
+            f_FE_local += fixed_end_forces_point_moment(pl_m.m, a, L)
+
+        fixed_end_local[pl_m.member] = fixed_end_local.get(
+            pl_m.member, np.zeros(6)) + f_FE_local
+
+        f_FE_global = T.T @ f_FE_local
+        idx = np.array(member_dofs[pl_m.member])
         F[idx] += f_FE_global
 
     # ---- 3. 集中載重疊加進F ----

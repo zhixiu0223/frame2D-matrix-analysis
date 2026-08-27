@@ -37,13 +37,22 @@ SW FEA 的載重介面對照 frame2d 現況:
 
 **優先順序:**
 
-### Phase 1: 桿件中間的集中力 + 集中力矩
+### Phase 1: 桿件中間的集中力 + 集中力矩 ✅ 已完成
 最常用、也是驗證「element load → equivalent nodal load」這個矩陣位移法
 核心模式的最佳題目。做法照現有 `distributed_load` 的模式:算出固定端反力
 → 等效節點載重疊加進F → 回代時扣回來。**不新增節點**(不切割member,
 不污染拓樸),用等效節點載重表示,這樣M(x)/V(x)公式也可以直接沿用現有的
 `member_internal_forces`架構(局部段落分開處理)。
-驗證: 懸臂梁受任意位置集中力/力矩, 跟解析解(標準懸臂梁公式)比對, 機器精度。
+
+**實作記錄**: `member_point_load(member, a, fx, fy, m)`,固定端反力公式用
+sympy從梁的微分方程(EI*v''=M(x)分段雙重積分)直接推導,不是憑記憶抄書
+(避免重蹈`postprocess.py`的M(x)公式曾經正負號抄反的錯誤)。驗證優先用
+簡支梁的「決定性反力」(純靜力學R=Pb/L等, 完全不依賴固定端反力公式本身
+對不對)當第一層基準,再用懸臂梁解析解撓度公式交叉確認。四個案例(橫向
+點載重反力、懸臂梁撓度、點力矩反力、軸向點載重)全數一次通過,機器精度。
+`postprocess.member_internal_forces`跟`plotting.plot_loads`也都更新支援,
+N/V/M圖能正確畫出跳躍不連續(剪力跳躍、彎矩斜率變化、彎矩跳躍三種情況都
+驗證過)。見`tests/test_member_point_load.py`。
 
 ### Phase 2: 局部段均佈載重
 `distributed_load` 的 `DistributedLoad` dataclass 這次直接加上 `x_start`,

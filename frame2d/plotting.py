@@ -179,6 +179,35 @@ def plot_loads(frame, ax=None):
         ax.annotate(w_label, (mx, my), color='orange', fontsize=8,
                     xytext=(0, 10), textcoords='offset points', ha='center')
 
+    for pl in frame.member_point_loads:
+        ni, nj = _member_endpoints(frame, pl.member)
+        L, angle = member_geometry(ni, nj)
+        c, s = np.cos(angle), np.sin(angle)
+        px, py = ni.x + pl.a * c, ni.y + pl.a * s   # 桿件內部位置(局部座標a換算成全域座標)
+        mag = np.hypot(pl.fx, pl.fy)
+        if mag > 1e-9:
+            # fx,fy是局部座標分量, 換算成全域方向畫箭頭
+            gdx = pl.fx * c - pl.fy * s
+            gdy = pl.fx * s + pl.fy * c
+            Larrow = scale * 0.15
+            dx, dy = gdx / mag * Larrow, gdy / mag * Larrow
+            tail_x, tail_y = px - dx, py - dy
+            ax.annotate('', xy=(px, py), xytext=(tail_x, tail_y),
+                        arrowprops=dict(arrowstyle='->', color='crimson', lw=2))
+            parts = []
+            if abs(pl.fx) > 1e-9:
+                parts.append(f'fx={pl.fx:.3g}')
+            if abs(pl.fy) > 1e-9:
+                parts.append(f'fy={pl.fy:.3g}')
+            ax.annotate(', '.join(parts), (tail_x, tail_y), color='crimson', fontsize=8,
+                        ha='center', xytext=(0, -10 if dy >= 0 else 10), textcoords='offset points')
+            extra_pts_x += [tail_x]
+            extra_pts_y += [tail_y]
+        if abs(pl.m) > 1e-9:
+            ax.annotate(f'm={pl.m:.3g}', (px, py), color='darkmagenta', fontsize=8,
+                        xytext=(8, -12), textcoords='offset points')
+            ax.plot(px, py, 'D', color='darkmagenta', ms=5, zorder=2)
+
     # 直接手動計算範圍再 set_xlim/ylim, 比依賴 relim/autoscale 對 annotate 更可靠
     if extra_pts_x:
         xs = [n.x for n in frame.nodes.values()] + extra_pts_x
