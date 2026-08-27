@@ -1,0 +1,112 @@
+# frame2d — 2D 矩陣位移法(直接勁度法)通用框架分析
+
+從 [slope_deflection_framework](https://github.com/zhixiu0223/slope_deflection_framework)
+分出的新專案:傾角變位法 repo 保留「每一步推導透明」的教學價值,這裡專注「任意拓樸都能解」。
+
+## 目前範疇 (刻意設限,避免無限擴張)
+
+- 2D Euler-Bernoulli 樑柱元素 (frame member),每節點3自由度 (ux, uy, rot)
+- **尚未支援**: truss member(純軸力元素)、內部鉸接(internal hinge)、
+  幾何非線性(P-Delta)、材料非線性——這些等基本框架穩定後再視需求加入,
+  不要為了還沒出現的需求先付架構成本
+
+## 結構
+
+```
+frame2d/
+  model.py    — Node / Section / Member / Support / PointLoad / DistributedLoad / Frame2D (建模API)
+  elements.py — 局部6x6勁度矩陣、座標轉換矩陣、均佈載重固定端反力公式
+  solve.py    — 組裝、邊界條件(partition method)、求解、桿端內力回代
+tests/
+  test_cantilever.py            — 懸臂梁點載重 vs 解析解 (機器精度)
+  test_simply_supported_udl.py  — 簡支梁均佈載重 vs 解析解 (機器精度, 驗證分佈載重公式)
+  test_case08_vs_swfea.py       — 兩層兩跨鋼架 vs SW FEA第三方工具報告 (rel_err<0.2%)
+```
+
+## 使用範例
+
+```python
+from frame2d import Frame2D, solve
+from frame2d.plotting import plot_all
+import matplotlib.pyplot as plt
+
+f = Frame2D()
+f.add_node(0, 0, 0).add_node(1, 0, 4).add_node(2, 6, 4).add_node(3, 6, 0)
+f.add_section('sec', E=200e9, I=8e-5, A=1e-2)
+f.add_member(0, node_i=0, node_j=1, section='sec')
+f.add_member(1, node_i=1, node_j=2, section='sec')
+f.add_member(2, node_i=3, node_j=2, section='sec')
+f.fix(0).fix(3)
+f.point_load(1, fx=12.0)
+
+result = solve(f)
+print(result.reactions)
+print(result.member_results[0].end_forces_local)  # [Fx1,Fy1,M1,Fx2,Fy2,M2]
+
+fig = plot_all(f, result)   # 六合一: 結構圖/受力圖/變形圖/軸力圖/剪力圖/彎矩圖
+fig.savefig('output.png')   # Pydroid3上可改用 plt.show() 直接跳出檢視畫面
+```
+
+更多範例見 `examples/demo_plots.py`。
+
+## 後處理/視覺化 (frame2d.plotting)
+
+```python
+from frame2d.plotting import plot_structure, plot_loads, plot_diagram, plot_deformed, plot_all
+```
+
+- `plot_structure(frame)` — ① 結構尺寸圖 (節點/桿件編號、支承符號)
+- `plot_loads(frame)` — ② 受力圖 (點載重箭頭+分佈載重箭頭)
+- `plot_diagram(frame, result, kind='N'|'V'|'M')` — ③④⑤ 軸力/剪力/彎矩圖
+- `plot_deformed(frame, result)` — ⑥ 變形圖 (自動抓合理放大倍率)
+- `plot_all(frame, result)` — 六張一次畫在 2x3 網格
+
+繪圖只是把 `SolveResult` 的數字換一種視角呈現,不會重新計算任何力學——
+所有圖表的數值來源都是 `solve()` 算出來的同一份結果。
+
+**注意事項:**
+- 標題用英文,避免不同環境(手機/Termux/伺服器)字型缺 CJK 字形時變成方框
+- 變形圖用 Hermite cubic 內插,節點值精確;若某根桿件跨中有分佈載重
+  且只用單一元素代表整根桿件,內插出來的跨中撓度會略微低估真實下垂量
+  (真實解在均佈載重下是四次多項式),想要更精確可以把該桿件切成多個元素
+
+## DOF 設計note
+
+`Frame2D.dofs_of(node_id)` 目前用 `3*node_id` 直接算,假設節點id從0連續編號。
+這是刻意的MVP簡化——真正的 DOFManager(支援不連續id、truss少一個自由度、
+release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在硬做只是
+「為了還沒出現的需求先付架構成本」。呼叫端一律透過 `dofs_of()`,不要自己算
+`3*node_id`,將來換底層實作時呼叫端不用改。
+
+## 分佈載重方向慣例 — 重要note
+
+`distributed_load(member, w)` 的 w 是「沿桿件局部 +y 方向」為正,局部座標系
+由 `elements.member_geometry()` 用 `atan2(dy,dx)` 算出(標準右手系,angle=0時
+局部y=全域y)。w<0 就是物理上的「向下」,直接照直覺用即可。
+
+這個慣例已經三方驗證過,而且**全部直接吻合、不需要任何翻轉或特例**:
+- sd_framework/anastruct(11個案例、46個數值,見下方驗證狀態表)
+- SW FEA(Android app)的 Case-08 報告(純點載重版 + 含均佈載重版,共18個反力
+  分量,見`test_case08_vs_swfea.py`)——P1/P2 水平點載重沿全域 +x(向右),
+  均佈載重沿全域 -y(向下),反力 Rx/Ry/M 三個分量、節點位移 dX/dY 全部直接對上。
+
+開發過程中一度誤判過 SW FEA 的方向慣例(見git歷史), 原因是: (1) 一開始用
+app 對話框裡轉盤圖示的視覺猜測角度方向, 沒有實際根據; (2) PDF反力數字抄錄時
+Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭方向重建、並且用
+「節點位移方向」(dX/dY, 比反力更不容易受慣例混淆的物理量)交叉確認後,才發現
+三方本來就是同一套標準慣例, 之前的"SW FEA內部不一致"是誤判, 已更正。
+
+## 驗證狀態
+
+| 案例 | 方法 | 結果 |
+|---|---|---|
+| 懸臂梁點載重 | 解析解 (PL³/3EI) | rel_err ~1e-16 |
+| 簡支梁均佈載重 | 解析解 (5wL⁴/384EI, wL²/8) | rel_err ~1e-16 |
+| Case-01~08 (共11案例) | 使用者自己的 sd_framework.py 本體直接執行 | rel_err < 1e-3 (46個獨立數值) |
+| Case-08 兩層兩跨鋼架 (純點載重+含UDL) | SW FEA 第三方工具 | 直接吻合, 零翻轉 (18個反力分量) |
+
+`test_all_slope_deflection_cases.py` 把 slope_deflection_framework 的 Case-01~08(含 04.5/06.5/07.5,共11個案例)全部轉成 Frame2D 模型,幾何/支承/載重都是照 `samples/model_*.py` 的 `draw_geometry()` 讀出來的真實定義,不是憑印象猜的;正確答案是直接執行使用者的 `sd_framework.py` 本體(`SlopeDeflectionSolver._solve_core()`)算出來的,不是讀 notebook/PDF 截圖轉錄。
+
+下一步可以把 slope_deflection_framework 的 Case-01~08 全部轉成 Frame2D 模型,
+系統化地跑一輪回歸測試——這個框架已經證明了同時處理點載重+分佈載重+
+多節點多桿件的正確性,可以正式當作那個對照工作的求解器核心。
