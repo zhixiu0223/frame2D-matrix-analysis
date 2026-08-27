@@ -27,11 +27,15 @@ class Section:
 
 @dataclass
 class Member:
-    """2D 樑柱元素:每端3個自由度(ux, uy, rot),共6個自由度"""
+    """2D 桿件元素。member_type='frame'(預設): 樑柱元素, 每端3個自由度
+    (ux,uy,rot), 可傳軸力+剪力+彎矩。member_type='truss': 桁架元素, 兩端鉸接,
+    只能傳軸力(彎曲/剪力勁度為0), 用同一組6自由度格式儲存(v,theta永遠是0),
+    方便共用組裝程式碼, 不用另外做一套DOF系統。"""
     id: int
     node_i: int      # 近端節點id
     node_j: int      # 遠端節點id
     section: str      # 對應 Section.name
+    member_type: str = 'frame'   # 'frame' 或 'truss'
 
 
 @dataclass
@@ -80,8 +84,14 @@ class Frame2D:
         self.sections[name] = Section(name, E, I, A)
         return self
 
-    def add_member(self, id: int, node_i: int, node_j: int, section: str):
-        self.members[id] = Member(id, node_i, node_j, section)
+    def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame'):
+        self.members[id] = Member(id, node_i, node_j, section, member_type)
+        return self
+
+    def add_truss(self, id: int, node_i: int, node_j: int, section: str):
+        """桁架元素的簡寫: 等同 add_member(..., member_type='truss')。
+        兩端視為鉸接, 只傳軸力。"""
+        self.members[id] = Member(id, node_i, node_j, section, member_type='truss')
         return self
 
     def fix(self, node: int):

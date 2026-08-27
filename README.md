@@ -104,6 +104,27 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | 簡支梁均佈載重 | 解析解 (5wL⁴/384EI, wL²/8) | rel_err ~1e-16 |
 | Case-01~08 (共11案例) | 使用者自己的 sd_framework.py 本體直接執行 | rel_err < 1e-3 (46個獨立數值) |
 | Case-08 兩層兩跨鋼架 (純點載重+含UDL) | SW FEA 第三方工具 | 直接吻合, 零翻轉 (18個反力分量) |
+| 桁架(truss)單桿軸力 | 解析解 (PL/EA) | rel_err ~1e-10 |
+| 桁架(truss)對稱雙桿撐架 | 節點法(method of joints)獨立手算 | rel_err ~1e-6 (含受壓方向) |
+
+## 桁架(truss)元素
+
+`f.add_truss(id, node_i, node_j, section)` 建立兩端鉸接、只傳軸力的桁架元素
+(跟預設的 `add_member` 樑柱元素共用同一個 `Frame2D`/`Section` API, 差別只在
+`member_type='truss'`, 局部勁度矩陣的彎曲block是零矩陣)。純桁架節點(只連接
+truss桿件、沒有frame桿件)的轉角自由度沒有任何勁度貢獻, solver會自動偵測並
+跳過(不會變成奇異矩陣), 但如果對這種節點外加彎矩會直接報錯(沒有任何桿件
+能抵抗該彎矩)。
+
+**分佈載重(distributed_load)不能加在truss桿件上**——truss沒有彎曲勁度,
+`fixed_end_forces_udl` 假設的是frame元素的彎曲能力, 硬加會直接報錯。要模擬
+桁架自重, 改成在兩端節點各加一半重量的 `point_load`。
+
+繪圖時 `plot_structure` 會自動把truss桿件畫成虛線(frame桿件是實線), 方便
+區分, 這對之後要做混合frame+truss的結構(例如斜張橋: 塔柱+橋面用frame,
+纜線用truss)會很有用——但目前還沒有處理「纜線只能受拉、不能受壓」這個
+斜張橋特有的非線性問題, 純線性桁架元素如果算出壓力, 物理上對真實纜線來說
+是不合理的(纜線會鬆弛退出作用), 需要額外的迭代檢查機制, 這部分還沒實作。
 
 `test_all_slope_deflection_cases.py` 把 slope_deflection_framework 的 Case-01~08(含 04.5/06.5/07.5,共11個案例)全部轉成 Frame2D 模型,幾何/支承/載重都是照 `samples/model_*.py` 的 `draw_geometry()` 讀出來的真實定義,不是憑印象猜的;正確答案是直接執行使用者的 `sd_framework.py` 本體(`SlopeDeflectionSolver._solve_core()`)算出來的,不是讀 notebook/PDF 截圖轉錄。
 

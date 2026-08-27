@@ -50,6 +50,28 @@ def member_stiffness_local(E, I, A, L):
     return k
 
 
+def member_stiffness_local_truss(E, A, L):
+    """局部座標系下的 6x6 勁度矩陣, 純桁架(軸力)元素:
+    只有軸向(u1,u2, 索引0,3)有勁度, 彎曲/剪力相關項全為0
+    (跟frame共用同一個6x6格式+同一個transformation_matrix, 組裝程式碼不用改,
+    只是彎曲block是零矩陣 -- 物理上代表這根桿件兩端都是鉸接, 只能傳軸力)
+    """
+    EA_L = E * A / L
+    k = np.zeros((6, 6))
+    k[0, 0] = EA_L
+    k[0, 3] = -EA_L
+    k[3, 0] = -EA_L
+    k[3, 3] = EA_L
+    return k
+
+
+def member_local_stiffness_dispatch(member_type, E, I, A, L):
+    """依member_type選擇對應的局部勁度矩陣公式"""
+    if member_type == 'truss':
+        return member_stiffness_local_truss(E, A, L)
+    return member_stiffness_local(E, I, A, L)
+
+
 def transformation_matrix(angle):
     """全域 -> 局部 的 6x6 旋轉矩陣 T,使 k_global = T^T @ k_local @ T"""
     c, s = np.cos(angle), np.sin(angle)
@@ -64,10 +86,10 @@ def transformation_matrix(angle):
     return T
 
 
-def member_stiffness_global(section, node_i, node_j):
+def member_stiffness_global(section, node_i, node_j, member_type='frame'):
     """組出全域座標系下的 6x6 勁度矩陣,回傳 (k_global, L, angle, T)"""
     L, angle = member_geometry(node_i, node_j)
-    k_local = member_stiffness_local(section.E, section.I, section.A, L)
+    k_local = member_local_stiffness_dispatch(member_type, section.E, section.I, section.A, L)
     T = transformation_matrix(angle)
     k_global = T.T @ k_local @ T
     return k_global, L, angle, T

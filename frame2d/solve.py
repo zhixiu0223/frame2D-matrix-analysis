@@ -15,6 +15,7 @@ from .model import Frame2D
 from .elements import (
     member_geometry,
     member_stiffness_local,
+    member_local_stiffness_dispatch,
     member_stiffness_global,
     transformation_matrix,
     fixed_end_forces_udl,
@@ -70,7 +71,7 @@ def solve(frame: Frame2D) -> SolveResult:
         section = frame.sections[m.section]
         node_i = frame.nodes[m.node_i]
         node_j = frame.nodes[m.node_j]
-        k_global, L, angle, T = member_stiffness_global(section, node_i, node_j)
+        k_global, L, angle, T = member_stiffness_global(section, node_i, node_j, m.member_type)
 
         dofs = frame.dofs_of(m.node_i) + frame.dofs_of(m.node_j)  # 6個編號
         member_dofs[mid] = dofs
@@ -84,6 +85,12 @@ def solve(frame: Frame2D) -> SolveResult:
     # ---- 2. 分佈載重 -> 固定端反力 -> 等效節點載重疊加進F ----
     for dl in frame.distributed_loads:
         m = frame.members[dl.member]
+        if m.member_type == 'truss':
+            raise ValueError(
+                f"member {dl.member} 是桁架元素(truss), 兩端鉸接、沒有彎曲勁度,"
+                " 不能承受垂直分佈載重(fixed_end_forces_udl假設的是有彎曲能力的"
+                " frame元素)。如果要模擬桁架自重, 改成在兩端節點各加一半重量的"
+                " point_load。")
         L = member_L[dl.member]
         T = member_T[dl.member]
         f_FE_local = fixed_end_forces_udl(dl.w_start, dl.w_end, L)
@@ -104,7 +111,21 @@ def solve(frame: Frame2D) -> SolveResult:
 
     # ---- 4. 邊界條件: partition method (劃掉被拘束的自由度) ----
     fixed_mask = _support_dof_mask(frame)
-    free = np.where(~fixed_mask)[0]
+
+    # 純桁架節點(只有truss桿件連接, 沒有任何frame桿件)的轉角自由度(rot),
+    # 完全沒有任何桿件貢獻勁度(truss只傳軸力), 也沒有被支承拘束的話,
+    # K的那一列/行會是全零, 直接丟進去解會是奇異矩陣。
+    # 這種"沒有任何勁度、也沒有外加彎矩"的自由度物理上不作功, 直接跳過不解,
+    # 位移設0即可(既不影響其他自由度的解, 也不會有反力)。
+    diag = np.diag(K)
+    inactive_mask = (~fixed_mask) & (np.isclose(diag, 0.0))
+    if np.any(inactive_mask) and np.any(np.abs(F[inactive_mask]) > 1e-9):
+        raise ValueError(
+            "有自由度(通常是純桁架節點的轉角)完全沒有勁度貢獻, 卻被施加了外力"
+            "(例如對一個只連接truss桿件的節點加彎矩)。這種自由度沒有任何元素"
+            "可以抵抗該外力, 系統無法平衡, 請檢查模型。")
+
+    free = np.where((~fixed_mask) & (~inactive_mask))[0]
     sup = np.where(fixed_mask)[0]
 
     K_ff = K[np.ix_(free, free)]
@@ -127,8 +148,8 @@ def solve(frame: Frame2D) -> SolveResult:
         u_local = T @ u_member_global
 
         section = frame.sections[m.section]
-        k_local = member_stiffness_local(
-            section.E, section.I, section.A, member_L[mid])
+        k_local = member_local_stiffness_dispatch(
+            m.member_type, section.E, section.I, section.A, member_L[mid])
 
         f_FE = fixed_end_local.get(mid, np.zeros(6))
         end_forces_local = k_local @ u_local - f_FE

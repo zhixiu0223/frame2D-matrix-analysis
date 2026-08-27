@@ -4,7 +4,13 @@
 設計原則(呼應規劃階段的討論): 不要讓繪圖程式自己重新計算力學,
 所有數值都是從 SolveResult 這份「唯一的正確答案」推導出來的不同視角。
 
-桿端內力 V(x)/M(x) 公式推導與驗證:
+桿端內力 N(x)/V(x)/M(x) 公式推導與驗證:
+  N(x) = -Fx1_local            (Fx1本身是"壓力為正"的節點力慣例, 取負號校正成
+                                 標準工程慣例"拉力為正"。這個bug是做truss驗證
+                                 時才抓到的: test_truss.py用一根單純受拉的桿件
+                                 驗證軸力應該是正的, 結果早期版本(N=+Fx1)對一個
+                                 A字撐架的壓力桿算出正值, 顯示成好像在受拉,
+                                 已修正並在test_truss.py鎖住這個正負號)
   V(x) = Fy1_local + W(x)              W(x) = 0到x的累積分佈載重
   M(x) = -M1_local + Fy1_local*x + ∫[0,x] W(s) ds
 
@@ -52,7 +58,7 @@ def member_internal_forces(frame, result, member_id, n=21):
             w_end += dl.w_end
 
     x = np.linspace(0, L, n)
-    N = np.full(n, Fx1)
+    N = np.full(n, -Fx1)   # 拉力為正的工程慣例 (Fx1本身是"壓力為正", 取負號校正)
     W = _cumulative_W(w_start, w_end, x, L)
     V = Fy1 + W
     M = -M1 + Fy1 * x + _cumulative_M_from_W(w_start, w_end, x, L)

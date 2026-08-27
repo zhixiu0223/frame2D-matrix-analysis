@@ -24,11 +24,15 @@ def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, sho
         fig, ax = plt.subplots()
     for mid, m in frame.members.items():
         ni, nj = _member_endpoints(frame, mid)
-        ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1)
+        if m.member_type == 'truss':
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k--', lw=1.3, zorder=1)  # 桁架: 虛線, 較細
+        else:
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1)    # 樑柱: 實線
         if show_member_ids:
             L, _ = member_geometry(ni, nj)
             xm, ym = (ni.x + nj.x) / 2, (ni.y + nj.y) / 2
-            label = f'M{mid} (L={L:.2f})' if show_dimensions else f'M{mid}'
+            tag = f'M{mid}' if m.member_type == 'frame' else f'T{mid}'
+            label = f'{tag} (L={L:.2f})' if show_dimensions else tag
             ax.annotate(label, (xm, ym), color='blue', fontsize=8,
                         ha='center', va='center',
                         bbox=dict(boxstyle='round,pad=0.1', fc='white', ec='none', alpha=0.7))
