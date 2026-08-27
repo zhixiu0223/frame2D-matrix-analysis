@@ -25,13 +25,15 @@ def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, sho
     for mid, m in frame.members.items():
         ni, nj = _member_endpoints(frame, mid)
         if m.member_type == 'truss':
-            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k--', lw=1.3, zorder=1)  # 桁架: 虛線, 較細
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k--', lw=1.3, zorder=1)      # 桁架: 黑虛線
+        elif m.member_type == 'cable':
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], color='teal', ls=':', lw=1.3, zorder=1)  # 纜線: 藍綠點線
         else:
-            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1)    # 樑柱: 實線
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1)        # 樑柱: 實線
         if show_member_ids:
             L, _ = member_geometry(ni, nj)
             xm, ym = (ni.x + nj.x) / 2, (ni.y + nj.y) / 2
-            tag = f'M{mid}' if m.member_type == 'frame' else f'T{mid}'
+            tag = {'frame': f'M{mid}', 'truss': f'T{mid}', 'cable': f'C{mid}'}[m.member_type]
             label = f'{tag} (L={L:.2f})' if show_dimensions else tag
             ax.annotate(label, (xm, ym), color='blue', fontsize=8,
                         ha='center', va='center',
