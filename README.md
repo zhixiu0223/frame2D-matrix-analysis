@@ -3,12 +3,18 @@
 從 [slope_deflection_framework](https://github.com/zhixiu0223/slope_deflection_framework)
 分出的新專案:傾角變位法 repo 保留「每一步推導透明」的教學價值,這裡專注「任意拓樸都能解」。
 
-## 目前範疇 (刻意設限,避免無限擴張)
+下一步規劃見 [ROADMAP.md](ROADMAP.md)。
 
-- 2D Euler-Bernoulli 樑柱元素 (frame member),每節點3自由度 (ux, uy, rot)
-- **尚未支援**: truss member(純軸力元素)、內部鉸接(internal hinge)、
-  幾何非線性(P-Delta)、材料非線性——這些等基本框架穩定後再視需求加入,
-  不要為了還沒出現的需求先付架構成本
+## 目前範疇
+
+- 2D Euler-Bernoulli 樑柱元素 (frame),每節點3自由度 (ux, uy, rot)
+- 桁架元素 (truss):兩端鉸接、僅軸向勁度,可拉可壓
+- 纜線元素 (cable):跟truss共用軸向公式,但只受拉,受壓時自動判定鬆弛、
+  移除勁度貢獻、重新求解,反覆迭代至收斂(見下方「纜線元素」章節)
+- **尚未支援**: 桿件中間的集中力/力矩、局部段均佈載重、支承強制位移(沉陷)、
+  內部鉸接(internal hinge)、幾何非線性(P-Delta)、材料非線性——這些等基本
+  框架穩定後再視需求加入,不要為了還沒出現的需求先付架構成本(詳細優先順序
+  見ROADMAP.md)
 
 ## 結構
 
