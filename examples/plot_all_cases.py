@@ -1,3 +1,19 @@
+"""
+產生Case-01~08(共11案例)全部的六合一圖
+
+注意: 這支腳本裡不同案例用不同的斷面(EI)數值, 這是刻意的, 不是不一致:
+  - Case-01~08(無UDL版本): E=1.0, I=15000.0 (見下方 EI 字典) —— 對應 sd_framework
+    自己的 EI_numeric=15000.0 抽象單位慣例, 這樣才能跟 sd_framework/anastruct
+    的驗證數字直接對上(見 tests/test_all_slope_deflection_cases.py)
+  - Case-08 UDL版本: E=150e6 kN/m²(=150GPa), I=1e-6 m^4 —— 對應SW FEA .frame
+    檔案裡真實的鋼材斷面, 這樣才能跟SW FEA報告的數字對上(見
+    tests/test_case08_vs_swfea.py)
+
+這兩組EI差100倍(15000 vs 150), 但兩邊反力/彎矩的驗證都通過, 因為對「每根桿件
+都用同一種斷面」的構架來說, 反力/彎矩只取決於桿件間的相對勁度比例, 不取決於
+EI的絕對大小 —— EI只影響變形量的縮放。所以要跟哪個來源比對, 就要用那個來源
+自己的EI, 兩邊沒有矛盾。
+"""
 import os
 import matplotlib
 matplotlib.use('Agg')

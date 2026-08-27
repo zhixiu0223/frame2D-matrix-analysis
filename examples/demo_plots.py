@@ -10,7 +10,9 @@ from frame2d import Frame2D, solve
 from frame2d.plotting import plot_all
 
 # ---- Case-04: 單跨門型鋼架, 水平力+梁均佈載重 ----
-E, I, A = 200e6, 8e-5, 1e-2
+# 斷面用 sd_framework 自己的 EI_numeric=15000.0 慣例(見tests/test_case04_vs_sdframework.py),
+# 已經跟 sd_framework/anastruct 驗證過吻合。E=1.0,I=EI直接當EI用,A給近似剛體的大數字。
+E, I, A = 1.0, 15000.0, 1e8
 H, L, P = 4.0, 6.0, 12.0
 
 f = Frame2D()
@@ -22,7 +24,7 @@ f.add_member(2, node_i=3, node_j=2, section='sec')
 f.fix(0)
 f.fix(3)
 f.point_load(1, fx=P)
-f.distributed_load(1, w=-3.0)
+f.distributed_load(1, w=-24.0)   # Case-04.5的梁均佈載重, 已驗證過的數值
 
 result = solve(f)
 fig = plot_all(f, result)
