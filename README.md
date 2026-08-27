@@ -82,14 +82,19 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 
 `distributed_load(member, w)` 的 w 是「沿桿件局部 +y 方向」為正,局部座標系
 由 `elements.member_geometry()` 用 `atan2(dy,dx)` 算出(標準右手系,angle=0時
-局部y=全域y)。**這跟 SW FEA (Android app) 的方向慣例相反**——比對 Case-08 時
-發現要用正值(w=+12000)才能跟SW FEA報告吻合,推測是SW FEA內部用螢幕座標
-(Y向下為正)。這不是bug,只是不同工具的輸入慣例不同,使用本套件時請自行
-依「local +y 實際指向哪個全域方向」決定w的正負號(可以用
-`member_geometry(node_i,node_j)` 印出 angle 來確認)。
+局部y=全域y)。w<0 就是物理上的「向下」,直接照直覺用即可。
 
-同樣地,`SolveResult.reactions` 的整體正負號慣例(定義為 `K@u - F`,即「結構
-受到的外力」)也跟SW FEA報告的Rx/Ry/M相反號——比對時記得統一。
+這個慣例已經三方驗證過,而且**全部直接吻合、不需要任何翻轉或特例**:
+- sd_framework/anastruct(11個案例、46個數值,見下方驗證狀態表)
+- SW FEA(Android app)的 Case-08 報告(純點載重版 + 含均佈載重版,共18個反力
+  分量,見`test_case08_vs_swfea.py`)——P1/P2 水平點載重沿全域 +x(向右),
+  均佈載重沿全域 -y(向下),反力 Rx/Ry/M 三個分量、節點位移 dX/dY 全部直接對上。
+
+開發過程中一度誤判過 SW FEA 的方向慣例(見git歷史), 原因是: (1) 一開始用
+app 對話框裡轉盤圖示的視覺猜測角度方向, 沒有實際根據; (2) PDF反力數字抄錄時
+Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭方向重建、並且用
+「節點位移方向」(dX/dY, 比反力更不容易受慣例混淆的物理量)交叉確認後,才發現
+三方本來就是同一套標準慣例, 之前的"SW FEA內部不一致"是誤判, 已更正。
 
 ## 驗證狀態
 
@@ -98,7 +103,7 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 | 懸臂梁點載重 | 解析解 (PL³/3EI) | rel_err ~1e-16 |
 | 簡支梁均佈載重 | 解析解 (5wL⁴/384EI, wL²/8) | rel_err ~1e-16 |
 | Case-01~08 (共11案例) | 使用者自己的 sd_framework.py 本體直接執行 | rel_err < 1e-3 (46個獨立數值) |
-| Case-08 兩層兩跨鋼架 | SW FEA 第三方工具 | rel_err < 0.2% (9個反力分量) |
+| Case-08 兩層兩跨鋼架 (純點載重+含UDL) | SW FEA 第三方工具 | 直接吻合, 零翻轉 (18個反力分量) |
 
 `test_all_slope_deflection_cases.py` 把 slope_deflection_framework 的 Case-01~08(含 04.5/06.5/07.5,共11個案例)全部轉成 Frame2D 模型,幾何/支承/載重都是照 `samples/model_*.py` 的 `draw_geometry()` 讀出來的真實定義,不是憑印象猜的;正確答案是直接執行使用者的 `sd_framework.py` 本體(`SlopeDeflectionSolver._solve_core()`)算出來的,不是讀 notebook/PDF 截圖轉錄。
 

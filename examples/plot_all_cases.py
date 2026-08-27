@@ -138,7 +138,8 @@ f.point_load(6, fx=10.0)
 f.point_load(3, fx=15.0)
 save(f, 'Case-08: Two-Story Two-Bay (P1=15,P2=10, no UDL)', 'case08')
 
-# ---- Case-08 UDL版 (對照SW FEA報告那組, w1=10,w2=12) ----
+# ---- Case-08 UDL版 (P1,P2向右+樑重向下, 三方[frame2d/sd_framework/SW FEA]
+#      皆直接吻合, 見 tests/test_case08_vs_swfea.py) ----
 f2 = Frame2D()
 for nid, (x, y) in nodes.items():
     f2.add_node(nid, x, y)
@@ -147,12 +148,12 @@ for mid, ni, nj in members:
     f2.add_member(mid, ni, nj, 's')
 for n in [0, 1, 2]:
     f2.fix(n)
-f2.point_load(6, fx=-10000)
-f2.point_load(3, fx=-15000)
-f2.distributed_load(8, w=12000)
-f2.distributed_load(9, w=12000)
-f2.distributed_load(3, w=10000)
-f2.distributed_load(4, w=10000)
-save(f2, 'Case-08 (UDL): Two-Story Two-Bay vs SW FEA (P1=15kN,P2=10kN,w1=10kN/m,w2=12kN/m)', 'case08_udl')
+f2.point_load(6, fx=10000)
+f2.point_load(3, fx=15000)
+f2.distributed_load(8, w=-12000)
+f2.distributed_load(9, w=-12000)
+f2.distributed_load(3, w=-10000)
+f2.distributed_load(4, w=-10000)
+save(f2, 'Case-08 (UDL): P1=15kN,P2=10kN right, w1=10kN/m,w2=12kN/m down', 'case08_udl')
 
 print('全部完成')
