@@ -40,10 +40,13 @@ class Member:
 
 @dataclass
 class Support:
+    """支承: None=該方向自由, 數值=該方向指定位移(0.0=固定在原位,
+    非0=強制位移/沉陷分析)。統一了fixed/pin/roller/settlement,
+    不用另外做一個SupportDisplacement類別。"""
     node: int
-    ux: bool = False   # True = 這個方向被拘束
-    uy: bool = False
-    rot: bool = False
+    ux: float = None
+    uy: float = None
+    rot: float = None
 
 
 @dataclass
@@ -124,16 +127,23 @@ class Frame2D:
         return self
 
     def fix(self, node: int):
-        self.supports.append(Support(node, ux=True, uy=True, rot=True))
+        self.supports.append(Support(node, ux=0.0, uy=0.0, rot=0.0))
         return self
 
     def pin(self, node: int):
-        self.supports.append(Support(node, ux=True, uy=True, rot=False))
+        self.supports.append(Support(node, ux=0.0, uy=0.0, rot=None))
         return self
 
     def roller_y(self, node: int):
         """只拘束 uy (最常見的滾支承方向)"""
-        self.supports.append(Support(node, ux=False, uy=True, rot=False))
+        self.supports.append(Support(node, ux=None, uy=0.0, rot=None))
+        return self
+
+    def support(self, node: int, ux: float = None, uy: float = None, rot: float = None):
+        """通用支承: None=該方向自由, 數值=該方向指定位移
+        (0.0=固定在原位, 非0=強制位移/沉陷)。fix/pin/roller_y是這個的
+        簡寫, 要做斜支承、沉陷分析等特殊情況直接用這個。"""
+        self.supports.append(Support(node, ux=ux, uy=uy, rot=rot))
         return self
 
     def point_load(self, node: int, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):

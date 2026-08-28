@@ -71,14 +71,23 @@ Phase 1點載重公式沿桿長積分的推廣: 不手動謄寫龐大的sympy封
 `postprocess.member_internal_forces`/`plotting.plot_loads`也都更新支援
 多筆、各自範圍不同的局部段載重疊加。見`tests/test_partial_udl.py`。
 
-### Phase 3: Support改成「指定值」而非布林值
+### Phase 3: Support改成「指定值」而非布林值 ✅ 已完成
 `Support(node, ux=True/False)` → `Support(node, ux=None/0.0/指定值)`,
 `None`=自由, `0.0`=固定在原位, 非零值=強制位移(沉陷/施工誤差分析)。
 這個改動統一了fixed/pin/roller/settlement, 不用另外做一個
 `SupportDisplacement` API。核心公式: 邊界條件從「劃掉」變成
 `K_ff u_f = F_f - K_fc u_c`(u_c為已知的支承位移向量), 改動集中在
 `solve.py`, 不影響其他模組。
-驗證: 簡支梁其中一端沉陷已知量, 跟解析解比對。
+
+**實作記錄**: `fix()`/`pin()`/`roller_y()`維持原本行為(內部用0.0),
+新增`support(node, ux=, uy=, rot=)`通用API可以直接設定沉陷量。驗證用
+兩層: (1) 靜定結構支承沉陷應該零反力零內力(純剛體轉動, 不依賴任何公式,
+是結構學最基本的性質), (2) 一次靜不定梁支承沉陷對照傾角變位法經典公式
+M_A=-3EIΔ/L²(跟使用者自己的sd_framework同一種方法)。過程中因為
+`Support`從布林值改成數值, 意外抓到`plotting.py`一個真的bug: 原本用
+`if support.rot and ...`判斷是否為固定端, 但`0.0`在Python布林判斷裡是
+假值, 導致固定端符號被誤判——已修正成`is not None`判斷。全部既有測試
+(11個既有tests/*.py)重跑確認零回歸。見`tests/test_support_displacement.py`。
 
 ### Phase 4 (較晚, 需要先做DOFManager才能開始): Internal hinge / element release
 桿件端點內鉸(例如 A──────○B, B端不傳彎矩)。這個會需要先把

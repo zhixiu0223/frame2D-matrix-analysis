@@ -84,6 +84,23 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 「為了還沒出現的需求先付架構成本」。呼叫端一律透過 `dofs_of()`,不要自己算
 `3*node_id`,將來換底層實作時呼叫端不用改。
 
+## 支承 — fixed/pin/roller/沉陷 統一API
+
+`Support(node, ux=None/0.0/數值, uy=..., rot=...)`——`None`=該方向自由,
+`0.0`=固定在原位,非零數值=強制位移(沉陷/施工誤差分析)。`fix()`/`pin()`/
+`roller_y()`是這個的簡寫(內部都是0.0), 通用的`f.support(node, ux=, uy=,
+rot=)`可以直接設定沉陷量。核心公式從`K_ff u_f = F_f`(劃掉拘束自由度)
+改成`K_ff u_f = F_f - K_fc u_c`(u_c放已知的指定位移值), fix/pin/roller
+因為u_c全部是0.0, 結果完全不變(已跑過全部既有測試確認零回歸)。
+驗證: 靜定結構沉陷應該零內力(結構學基本性質), 一次靜不定梁沉陷對照
+傾角變位法經典公式 M=-3EIΔ/L², 見`tests/test_support_displacement.py`。
+
+**注意**: 這次改動過程中抓到一個真的bug——`plotting.py`畫支承符號時原本用
+`if support.rot and support.ux and support.uy`判斷"是否為固定端", 但
+`Support`從布林值改成數值後, `fix()`設的是`0.0`, 在Python布林判斷裡`0.0`
+是假值, 導致固定端符號會被誤判成別種支承圖示。已修正成`is not None`判斷,
+並確認三種支承符號(fixed/pin/roller)視覺上都正確。
+
 ## 桿件內部集中力/力矩 (不在節點上)
 
 `f.member_point_load(member, a, fx=0.0, fy=0.0, m=0.0)`——`a`是距離
@@ -141,6 +158,8 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | 桿件中間軸向點載重 | 彈簧串聯解析解 | rel_err ~1e-16 |
 | 局部段均佈/梯形載重(簡支梁反力) | 純靜力學決定性反力 | rel_err ~1e-6 |
 | 局部段公式退化(c=0,d=L) | 既有全長UDL公式 | rel_err ~1e-14 |
+| 靜定梁支承沉陷 | 結構學基本性質(靜定結構沉陷零內力) | abs_err ~1e-15 |
+| 一次靜不定梁支承沉陷 | 傾角變位法經典公式 (M=-3EIΔ/L²) | rel_err ~1e-16 |
 
 ## 桁架(truss)元素
 

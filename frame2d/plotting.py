@@ -65,6 +65,9 @@ def _draw_support_symbol(ax, x, y, support, size):
     """
     n_hatch = 5
     hatch_y0 = y - size
+    rot_c = support.rot is not None
+    ux_c = support.ux is not None
+    uy_c = support.uy is not None
 
     def _draw_hatch(base_y):
         ax.plot([x - size, x + size], [base_y, base_y], 'k-', lw=1.3, zorder=1)
@@ -72,10 +75,10 @@ def _draw_support_symbol(ax, x, y, support, size):
             hx = x - size + 2 * size * i / n_hatch
             ax.plot([hx, hx - size * 0.4], [base_y, base_y - size * 0.5], 'k-', lw=0.8, zorder=1)
 
-    if support.rot and support.ux and support.uy:
+    if rot_c and ux_c and uy_c:
         # Fixed: 直接在節點位置畫橫線+排線(牆面), 沒有三角形
         _draw_hatch(y)
-    elif support.ux and support.uy and not support.rot:
+    elif ux_c and uy_c and not rot_c:
         # Hinge/Pin: 三角形(頂點在節點) + 排線
         ax.plot([x - size, x, x + size, x - size], [hatch_y0, y, hatch_y0, hatch_y0],
                 'k-', lw=1.3, zorder=1)

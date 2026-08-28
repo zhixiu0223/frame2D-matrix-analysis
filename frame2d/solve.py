@@ -53,19 +53,25 @@ class SolveResult:
     slack_cables: set = None           # 最終解裡判定為鬆弛的cable member_id集合
 
 
-def _support_dof_mask(frame: Frame2D) -> np.ndarray:
-    """回傳長度n_dof的布林陣列, True=被支承拘束(位移=0)"""
+def _support_dof_values(frame: Frame2D):
+    """回傳(mask, values): mask是長度n_dof的布林陣列(True=被支承拘束,
+    不管是fix的0.0還是強制位移的非0), values是同長度陣列, 在mask=True的
+    位置填入指定的位移值。"""
     n = frame.n_dof()
-    fixed = np.zeros(n, dtype=bool)
+    mask = np.zeros(n, dtype=bool)
+    values = np.zeros(n)
     for s in frame.supports:
         ux, uy, rot = frame.dofs_of(s.node)
-        if s.ux:
-            fixed[ux] = True
-        if s.uy:
-            fixed[uy] = True
-        if s.rot:
-            fixed[rot] = True
-    return fixed
+        if s.ux is not None:
+            mask[ux] = True
+            values[ux] = s.ux
+        if s.uy is not None:
+            mask[uy] = True
+            values[uy] = s.uy
+        if s.rot is not None:
+            mask[rot] = True
+            values[rot] = s.rot
+    return mask, values
 
 
 def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
@@ -166,8 +172,8 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
         F[uy] += pl.fy
         F[rot] += pl.m
 
-    # ---- 4. 邊界條件: partition method (劃掉被拘束的自由度) ----
-    fixed_mask = _support_dof_mask(frame)
+    # ---- 4. 邊界條件: partition method, 支援非零指定位移(K_ff u_f = F_f - K_fc u_c) ----
+    fixed_mask, u_prescribed = _support_dof_values(frame)
 
     # 純桁架/纜線節點(沒有任何frame桿件連接, 或連接的cable全部鬆弛)的轉角自由度,
     # 完全沒有任何桿件貢獻勁度, 也沒有被支承拘束的話, K的那一列/行會是全零,
@@ -181,11 +187,17 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
             "系統無法平衡, 請檢查模型。")
 
     free = np.where((~fixed_mask) & (~inactive_mask))[0]
+    sup = np.where(fixed_mask)[0]
+
+    u = np.zeros(n)
+    u[sup] = u_prescribed[sup]   # 指定位移值(fix/pin/roller是0.0, 沉陷分析是非0)
 
     K_ff = K[np.ix_(free, free)]
     F_f = F[free]
+    if len(sup) > 0:
+        K_fc = K[np.ix_(free, sup)]
+        F_f = F_f - K_fc @ u[sup]   # 已知位移對自由自由度的等效載重貢獻
 
-    u = np.zeros(n)
     if len(free) > 0:
         try:
             u_f = np.linalg.solve(K_ff, F_f)
