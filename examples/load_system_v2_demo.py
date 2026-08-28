@@ -57,6 +57,26 @@ fig1.tight_layout()
 fig1.savefig(f'{OUT}/phase1_point_load_demo.png', dpi=120)
 plt.close(fig1)
 
+# 注意: 上面六合一圖裡「變形圖」的 Δmax 標籤, 是用單一桿件的Hermite內插算的,
+# 桿件內部有點載重時內插撓度會低估實際值(見postprocess.py的說明)。
+# 如果要精確的撓度數值(例如要跟SW FEA這類逐點計算的工具比對), 建議直接在
+# 載重點插入一個真實節點, 把桿件拆成兩段 -- 該點的位移就是FEM節點解, 沒有
+# 內插誤差。這裡示範精確算法:
+f1_exact = Frame2D()
+f1_exact.add_node(0, 0, 0)
+f1_exact.add_node(1, a, 0)     # 直接在載重位置a放節點
+f1_exact.add_node(2, L, 0)
+f1_exact.add_section('s', E=E, I=I, A=A)
+f1_exact.add_member(0, 0, 1, 's')
+f1_exact.add_member(1, 1, 2, 's')
+f1_exact.pin(0)
+f1_exact.roller_y(2)
+f1_exact.point_load(1, fy=-P)   # 載重直接當節點載重, 不用member_point_load
+r1_exact = solve(f1_exact)
+d_exact = r1_exact.displacements[f1_exact.dofs_of(1)[1]]
+print(f"\n[精確撓度] 在載重點x={a}處插入節點求解(沒有Hermite內插誤差): {d_exact*1000:.4f} mm")
+print("  (這個數字才適合拿去跟SW FEA逐點計算的撓度值比對, 不是六合一圖裡的Δmax)")
+
 
 # ==================== Phase 2: 局部段均佈載重 ====================
 # 簡支梁, 跨度12m, 均佈載重20kN/m只加在[3,7]這一段(不是整根梁都有)。

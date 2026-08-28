@@ -313,7 +313,7 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
         scale = _auto_scale(frame) * 0.1 / max_offset
 
     for mid in frame.members:
-        X, Y = member_deformed_shape(frame, result, mid, scale=scale, n=21)
+        X, Y = member_deformed_shape(frame, result, mid, scale=scale, n=41)
         ax.plot(X, Y, color='blue', lw=2)
 
     if show_values:
@@ -325,6 +325,25 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
                 continue   # 支承等位移=0的節點不標, 避免畫面雜亂
             ax.annotate(f'Δ={mag:.4g}', (n.x, n.y), fontsize=7, color='darkblue',
                         xytext=(5, -10), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
+
+        # 每根桿件內部(不只節點)的最大偏移量也標出來 -- 簡支梁這類兩端節點
+        # 位移剛好=0(支承)、真正最大撓度發生在跨間的情況, 不然會漏標
+        for mid in frame.members:
+            ni, nj = _member_endpoints(frame, mid)
+            L, angle = member_geometry(ni, nj)
+            n_sample = 41
+            t = np.linspace(0, L, n_sample)
+            base_x = ni.x + t * np.cos(angle)
+            base_y = ni.y + t * np.sin(angle)
+            X1, Y1 = member_deformed_shape(frame, result, mid, scale=scale, n=n_sample)      # 放大過的(畫圖用)
+            X1r, Y1r = member_deformed_shape(frame, result, mid, scale=1.0, n=n_sample)       # 真實值(標籤用)
+            offset_real = np.hypot(X1r - base_x, Y1r - base_y)
+            i_max = np.argmax(offset_real)
+            if offset_real[i_max] < 1e-9 or not (0 < i_max < n_sample - 1):
+                continue   # 端點已經在上面節點迴圈標過, 這裡只標"桿件內部"的最大值避免重複
+            ax.annotate(f'Δmax={offset_real[i_max]:.4g}', (X1[i_max], Y1[i_max]), fontsize=7, color='darkblue',
+                        xytext=(5, -12), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
     ax.set_title(f'Deformation (scale x{scale:.1f})')
