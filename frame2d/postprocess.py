@@ -143,18 +143,23 @@ def member_internal_forces(frame, result, member_id, n=21):
     return x, N, V, M
 
 
-def _hermite_shape(x, L):
-    """回傳 Hermite cubic shape function 在 x 處的值 [N1,N2,N3,N4] (對應 v1,theta1,v2,theta2)"""
-    xi = x / L
-    N1 = 1 - 3 * xi**2 + 2 * xi**3
-    N2 = L * (xi - 2 * xi**2 + xi**3)
-    N3 = 3 * xi**2 - 2 * xi**3
-    N4 = L * (-xi**2 + xi**3)
-    return N1, N2, N3, N4
+def member_deformed_shape(frame, result, member_id, scale=1.0, n=51):
+    """回傳桿件變形後的全域座標 (X, Y) 陣列 (含放大係數scale)。
 
+    精確作法(不是近似, 也不是另外的"精確版"): 直接對已經驗證過的 M(x)
+    (member_internal_forces) 除以EI做兩次數值積分, 用兩端FEM算出來的真實
+    節點位移釘住積分常數, 得到唯一一條v(x)撓度曲線。這樣桿件內部有集中力
+    (member_point_load)或局部段均佈載重時撓度曲線依然精確——不會像單純
+    兩端內插一條三次多項式(舊做法)那樣, 在桿件內部有集中力時可能低估撓度
+    20%以上、位置也偏(見開發過程中實測的case: L=10,P=30,a=3.5, 舊內插法
+    低估了約23%)。求解器本身(節點位移/反力/N,V,M)一直都是精確的, 這個
+    修正只是讓「畫變形曲線」這一步的方法, 跟求解器同一個精確度等級,
+    不需要另外維護一個「近似畫圖版」+「精確驗算版」。
 
-def member_deformed_shape(frame, result, member_id, scale=1.0, n=21):
-    """回傳桿件變形後的全域座標 (X, Y) 陣列 (含放大係數scale)"""
+    對truss/cable(沒有彎曲勁度, M(x)恆為0), 這個方法自動退化成兩端直線
+    內插, 跟truss/cable「桿件維持直線不彎曲」的物理行為一致, 不需要
+    另外特殊處理。
+    """
     from .elements import member_geometry, transformation_matrix
     m = frame.members[member_id]
     node_i = frame.nodes[m.node_i]
@@ -167,15 +172,35 @@ def member_deformed_shape(frame, result, member_id, scale=1.0, n=21):
     u_local = T @ u_global_member
     u1, v1, th1, u2, v2, th2 = u_local
 
-    x = np.linspace(0, L, n)
-    X_local = np.zeros(n)
-    Y_local = np.zeros(n)
-    for k, xx in enumerate(x):
-        N1, N2, N3, N4 = _hermite_shape(xx, L)
-        v = N1 * v1 + N2 * th1 + N3 * v2 + N4 * th2
-        u_ax = u1 + (u2 - u1) * (xx / L)   # 軸向位移線性內插
-        X_local[k] = xx + scale * u_ax
-        Y_local[k] = scale * v
+    section = frame.sections[m.section]
+    EI = section.E * section.I
+
+    if m.member_type in ('truss', 'cable') or abs(EI) < 1e-30:
+        # 沒有彎曲勁度: 桿件維持直線, 兩端內插即為精確解
+        x = np.linspace(0, L, n)
+        Y_local = v1 + (v2 - v1) * (x / L)
+    else:
+        n_fine = max(n, 101)   # 積分用細網格(含載重/段落邊界附近的加密點), 保證精度
+        x_fine, N_f, V_f, M_f = member_internal_forces(frame, result, member_id, n=n_fine)
+        kappa = M_f / EI
+        # 累積梯形積分: 曲率 -> 斜率(不定積分, 從0開始, 積分常數還沒定)
+        slope_indef = np.concatenate([[0.0], np.cumsum((kappa[1:] + kappa[:-1]) / 2 * np.diff(x_fine))])
+        # 斜率 -> 撓度(不定積分, 從0開始)
+        defl_indef = np.concatenate([[0.0], np.cumsum((slope_indef[1:] + slope_indef[:-1]) / 2 * np.diff(x_fine))])
+        # 邊界條件 v(0)=v1, v(L)=v2 (FEM算出的真實節點位移) 釘住兩個積分常數
+        C2 = v1
+        C1 = (v2 - v1 - defl_indef[-1]) / L
+        Y_fine = defl_indef + C1 * x_fine + C2
+        # 注意: x_fine不是均勻網格(member_internal_forces會在集中力/段落邊界
+        # 附近插入額外取樣點, 保證那裡的跳躍畫得出來), 所以這裡改用內插對齊到
+        # 均勻網格 x=linspace(0,L,n), 不能直接按"索引"下取樣(按索引下取樣會
+        # 因為x_fine本身疏密不均, 導致取出來的x座標也跟著疏密不均、不等於
+        # 呼叫端以為的均勻網格, 曾經因此在畫圖時對錯位置導致標籤數字離譜)。
+        x = np.linspace(0, L, n)
+        Y_local = np.interp(x, x_fine, Y_fine)
+
+    X_local = x + scale * (u1 + (u2 - u1) * (x / L))   # 軸向位移線性內插(桿件軸向本來就是線性的)
+    Y_local = scale * Y_local
 
     # 轉回全域座標 (局部->全域是 T的轉置, 再加上桿件原點座標)
     c, s = np.cos(angle), np.sin(angle)

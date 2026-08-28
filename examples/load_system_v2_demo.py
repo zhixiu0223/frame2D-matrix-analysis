@@ -6,6 +6,12 @@ Load System v2 Phase 1 + Phase 2 示範腳本
 
 會印出完整反力/桿端內力數值(方便直接抓去跟SW FEA或其他工具比對),
 並且輸出六合一圖到 examples/output_plots/。
+
+版本note: 六合一圖裡「變形圖」的Δmax標籤是精確值(對已驗證過的M(x)積分兩次
+算出來的, 不是兩端內插的近似)。如果你手上這份檔案跑出來的簡支梁點載重案例
+(L=10,P=30,a=3.5)算出的Δmax不是約0.0346(=-34.6mm), 而是0.0267(=-26.73mm)
+或印出「插入節點求精確解」這種字樣, 代表你手上的frame2d是舊版本, 請重新
+下載最新的zip替換掉整個frame2d資料夾。
 """
 import os
 import matplotlib
@@ -56,26 +62,9 @@ fig1.suptitle('Phase1 demo: simply supported beam, interior point load at a=3.5'
 fig1.tight_layout()
 fig1.savefig(f'{OUT}/phase1_point_load_demo.png', dpi=120)
 plt.close(fig1)
-
-# 注意: 上面六合一圖裡「變形圖」的 Δmax 標籤, 是用單一桿件的Hermite內插算的,
-# 桿件內部有點載重時內插撓度會低估實際值(見postprocess.py的說明)。
-# 如果要精確的撓度數值(例如要跟SW FEA這類逐點計算的工具比對), 建議直接在
-# 載重點插入一個真實節點, 把桿件拆成兩段 -- 該點的位移就是FEM節點解, 沒有
-# 內插誤差。這裡示範精確算法:
-f1_exact = Frame2D()
-f1_exact.add_node(0, 0, 0)
-f1_exact.add_node(1, a, 0)     # 直接在載重位置a放節點
-f1_exact.add_node(2, L, 0)
-f1_exact.add_section('s', E=E, I=I, A=A)
-f1_exact.add_member(0, 0, 1, 's')
-f1_exact.add_member(1, 1, 2, 's')
-f1_exact.pin(0)
-f1_exact.roller_y(2)
-f1_exact.point_load(1, fy=-P)   # 載重直接當節點載重, 不用member_point_load
-r1_exact = solve(f1_exact)
-d_exact = r1_exact.displacements[f1_exact.dofs_of(1)[1]]
-print(f"\n[精確撓度] 在載重點x={a}處插入節點求解(沒有Hermite內插誤差): {d_exact*1000:.4f} mm")
-print("  (這個數字才適合拿去跟SW FEA逐點計算的撓度值比對, 不是六合一圖裡的Δmax)")
+# 註: 六合一圖裡「變形圖」的Δmax標籤現在是精確值(對M(x)積分兩次得到,
+# 不是兩端內插的近似), 可以直接拿去跟SW FEA的撓度數字比對, 不需要
+# 另外用插入節點的方式重算。
 
 
 # ==================== Phase 2: 局部段均佈載重 ====================
