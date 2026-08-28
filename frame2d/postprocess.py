@@ -52,20 +52,59 @@ def _cumulative_M_from_W(w_start, w_end, x, L):
     return w_start * x**2 / 2 + dw * x**3 / (6 * L)
 
 
+def _partial_load_W(w_start, w_end, c, d, x):
+    """局部段[c,d]均佈/線性變化載重, 對每個x位置的累積載重貢獻W(x)
+    (x<=c時為0, c<x<=d時是部分積分, x>d時是整段積分後維持定值)。
+    c=0,d=L時應退化成 _cumulative_W() 的結果。"""
+    x = np.asarray(x, dtype=float)
+    W = np.zeros_like(x)
+    span = d - c
+    if span <= 1e-12:
+        return W
+    dw = w_end - w_start
+    mask2 = (x > c) & (x <= d)
+    u = x[mask2] - c
+    W[mask2] = w_start * u + dw * u**2 / (2 * span)
+    mask3 = x > d
+    W[mask3] = w_start * span + dw * span / 2.0
+    return W
+
+
+def _partial_load_M(w_start, w_end, c, d, x):
+    """局部段[c,d]均佈/線性變化載重, 對每個x位置的M(x)貢獻
+    (_partial_load_W的積分)。c=0,d=L時應退化成 _cumulative_M_from_W() 的結果。"""
+    x = np.asarray(x, dtype=float)
+    Mc = np.zeros_like(x)
+    span = d - c
+    if span <= 1e-12:
+        return Mc
+    dw = w_end - w_start
+    mask2 = (x > c) & (x <= d)
+    u = x[mask2] - c
+    Mc[mask2] = w_start * u**2 / 2 + dw * u**3 / (6 * span)
+    mask3 = x > d
+    M_at_d = w_start * span**2 / 2 + dw * span**2 / 6
+    W_at_d = w_start * span + dw * span / 2.0
+    Mc[mask3] = M_at_d + W_at_d * (x[mask3] - d)
+    return Mc
+
+
 def member_internal_forces(frame, result, member_id, n=21):
     """回傳局部座標系下沿桿長分佈的 (x, N, V, M) 陣列。
-    取樣點會自動包含每個member_point_load的確切位置(左右各插一個極近的點),
-    這樣繪圖時跳躍不連續處才會畫成真正的垂直線, 不會被線性內插抹平成斜線。
+    取樣點會自動包含每個member_point_load的確切位置、以及每個局部段
+    distributed_load的起訖位置(左右各插一個極近的點), 這樣繪圖時跳躍
+    不連續處才會畫成真正的垂直線, 不會被線性內插抹平成斜線。
     """
     mr = result.member_results[member_id]
     L = mr.L
     Fx1, Fy1, M1 = mr.end_forces_local[0], mr.end_forces_local[1], mr.end_forces_local[2]
 
-    w_start = w_end = 0.0
-    for dl in frame.distributed_loads:
-        if dl.member == member_id:
-            w_start += dl.w_start
-            w_end += dl.w_end
+    dls = [dl for dl in frame.distributed_loads if dl.member == member_id]
+    ranges = []
+    for dl in dls:
+        c = 0.0 if dl.x_start is None else dl.x_start
+        d = L if dl.x_end is None else dl.x_end
+        ranges.append((dl.w_start, dl.w_end, c, d))
 
     x = np.linspace(0, L, n)
     eps = L * 1e-6
@@ -73,13 +112,19 @@ def member_internal_forces(frame, result, member_id, n=21):
     for pl in frame.member_point_loads:
         if pl.member == member_id:
             extra += [max(0.0, pl.a - eps), min(L, pl.a + eps)]
+    for _, _, c, d in ranges:
+        extra += [max(0.0, c - eps), min(L, c + eps), max(0.0, d - eps), min(L, d + eps)]
     if extra:
         x = np.unique(np.concatenate([x, extra]))
 
     N = np.full(x.shape, -Fx1)   # 拉力為正的工程慣例 (Fx1本身是"壓力為正", 取負號校正)
-    W = _cumulative_W(w_start, w_end, x, L)
+    W = np.zeros_like(x)
+    Mcum = np.zeros_like(x)
+    for w_start, w_end, c, d in ranges:
+        W += _partial_load_W(w_start, w_end, c, d, x)
+        Mcum += _partial_load_M(w_start, w_end, c, d, x)
     V = Fy1 + W
-    M = -M1 + Fy1 * x + _cumulative_M_from_W(w_start, w_end, x, L)
+    M = -M1 + Fy1 * x + Mcum
 
     for pl in frame.member_point_loads:
         if pl.member != member_id:

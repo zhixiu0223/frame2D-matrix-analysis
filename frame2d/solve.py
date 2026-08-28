@@ -27,6 +27,7 @@ from .elements import (
     member_stiffness_global,
     transformation_matrix,
     fixed_end_forces_udl,
+    fixed_end_forces_partial_udl,
     fixed_end_forces_point_load,
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
@@ -111,7 +112,16 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
                 " point_load。")
         L = member_L[dl.member]
         T = member_T[dl.member]
-        f_FE_local = fixed_end_forces_udl(dl.w_start, dl.w_end, L)
+        x_start = 0.0 if dl.x_start is None else dl.x_start
+        x_end = L if dl.x_end is None else dl.x_end
+        if x_start < -1e-9 or x_end > L + 1e-9 or x_start > x_end:
+            raise ValueError(
+                f"member {dl.member} 的分佈載重範圍 [{x_start},{x_end}] 超出"
+                f"桿件長度[0,{L}]或起訖顛倒")
+        if x_start <= 1e-9 and x_end >= L - 1e-9:
+            f_FE_local = fixed_end_forces_udl(dl.w_start, dl.w_end, L)
+        else:
+            f_FE_local = fixed_end_forces_partial_udl(dl.w_start, dl.w_end, x_start, x_end, L)
         fixed_end_local[dl.member] = fixed_end_local.get(
             dl.member, np.zeros(6)) + f_FE_local
 

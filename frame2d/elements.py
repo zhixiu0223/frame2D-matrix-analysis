@@ -180,3 +180,29 @@ def fixed_end_forces_axial_point_load(P, a, L):
     F1 = P * b / L
     F2 = P * a / L
     return np.array([F1, 0.0, 0.0, F2, 0.0, 0.0])
+
+
+_GAUSS_NODES, _GAUSS_WEIGHTS = np.polynomial.legendre.leggauss(6)
+
+
+def fixed_end_forces_partial_udl(w_start, w_end, c, d, L):
+    """局部座標系下, 桿件內部局部段 [c,d] (0<=c<=d<=L, 可以不是整根桿件)
+    的均佈/線性變化載重之固定端反力。
+
+    推導方式: 不手動謄寫龐大的封閉式展開式(降低抄寫出錯風險), 改用高斯-勒讓德
+    數值積分, 對已經驗證過的 fixed_end_forces_point_load() 在 [c,d] 區間
+    積分(等於把分佈載重拆成無限多個點載重疊加)。被積函數是 s 的4次多項式
+    (point load公式本身是a的3次式, 乘上w(s)這個s的1次式), 用6點高斯積分
+    (精確積分到11次多項式)對這個被積函數是"數值精確解", 不是近似。
+    c=0, d=L 時應該退化成 fixed_end_forces_udl() 的結果(見
+    tests/test_partial_udl.py的交叉驗證)。
+    """
+    if d <= c:
+        return np.zeros(6)
+    jac = 0.5 * (d - c)
+    s_vals = jac * _GAUSS_NODES + 0.5 * (d + c)
+    f_FE = np.zeros(6)
+    for si, wi in zip(s_vals, _GAUSS_WEIGHTS):
+        w_si = w_start + (w_end - w_start) * (si - c) / (d - c)
+        f_FE += wi * jac * fixed_end_forces_point_load(w_si, si, L)
+    return f_FE

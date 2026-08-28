@@ -60,6 +60,17 @@ N/V/M圖能正確畫出跳躍不連續(剪力跳躍、彎矩斜率變化、彎�
 點載重公式沿桿長積分的推廣, 做完Phase 1後這項不難。
 驗證: 簡支梁局部段均佈載重, 解析解比對。
 
+### Phase 2: 局部段均佈載重 ✅ 已完成
+`distributed_load()` 的 `DistributedLoad` dataclass 加上了 `x_start`,
+`x_end` 兩個欄位(預設None=整根桿件, 向下相容現有呼叫方式)。實作方式是
+Phase 1點載重公式沿桿長積分的推廣: 不手動謄寫龐大的sympy封閉式展開式
+(降低抄寫出錯風險), 改用6點高斯積分對`fixed_end_forces_point_load()`
+在`[x_start,x_end]`區間積分, 對這種低次多項式被積函數是機器精度的數值
+精確解。退化情況(x_start=0,x_end=L)已驗證跟既有全長UDL公式精確一致
+(誤差~1e-14), 局部段案例(均佈+梯形兩種)用簡支梁決定性反力交叉驗證。
+`postprocess.member_internal_forces`/`plotting.plot_loads`也都更新支援
+多筆、各自範圍不同的局部段載重疊加。見`tests/test_partial_udl.py`。
+
 ### Phase 3: Support改成「指定值」而非布林值
 `Support(node, ux=True/False)` → `Support(node, ux=None/0.0/指定值)`,
 `None`=自由, `0.0`=固定在原位, 非零值=強制位移(沉陷/施工誤差分析)。

@@ -56,10 +56,14 @@ class PointLoad:
 
 @dataclass
 class DistributedLoad:
-    """垂直於桿件局部y方向的均佈載重 (正值 = 沿局部+y方向)"""
+    """垂直於桿件局部y方向的均佈載重 (正值 = 沿局部+y方向)。
+    預設整根桿件都有(x_start=None -> 0, x_end=None -> 桿件全長L);
+    可以指定x_start/x_end只加在桿件的局部一段(0<=x_start<=x_end<=L)。"""
     member: int
     w_start: float   # kN/m 或對應單位
     w_end: float = None  # None = 均佈 (w_end = w_start)
+    x_start: float = None   # None = 0 (從node_i開始)
+    x_end: float = None     # None = 桿件全長 (到node_j為止)
 
     def __post_init__(self):
         if self.w_end is None:
@@ -136,8 +140,11 @@ class Frame2D:
         self.point_loads.append(PointLoad(node, fx, fy, m))
         return self
 
-    def distributed_load(self, member: int, w: float, w_end: float = None):
-        self.distributed_loads.append(DistributedLoad(member, w, w_end))
+    def distributed_load(self, member: int, w: float, w_end: float = None,
+                          x_start: float = None, x_end: float = None):
+        """均佈/線性變化載重。預設(x_start=x_end=None)整根桿件都有;
+        指定x_start/x_end可以只加在桿件的局部一段(局部座標, 0<=x_start<=x_end<=L)。"""
+        self.distributed_loads.append(DistributedLoad(member, w, w_end, x_start, x_end))
         return self
 
     def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):

@@ -94,6 +94,17 @@ release/hinge)留到「第二階段: 加入 Truss member」時才需要,現在�
 並用簡支梁的決定性反力(純靜力學, 不依賴公式本身對不對)交叉驗證過,見
 `tests/test_member_point_load.py`。
 
+## 局部段均佈載重 (不用整根桿件都有)
+
+`distributed_load(member, w, w_end=None, x_start=None, x_end=None)`——不給
+`x_start`/`x_end`時維持原本「整根桿件都有」的行為(向下相容); 給定的話
+只在桿件局部座標`[x_start, x_end]`範圍內有載重。公式推導方式: 對已經驗證過的
+`fixed_end_forces_point_load()`在`[x_start,x_end]`區間做高斯積分(6點高斯,
+對這種低次多項式被積函數是機器精度的數值精確解, 不是近似), 不手動謄寫
+龐大的封閉式展開式(降低抄寫出錯風險)。退化情況(x_start=0, x_end=L)已驗證
+跟既有全長UDL公式精確一致, 局部段案例用簡支梁決定性反力交叉驗證, 見
+`tests/test_partial_udl.py`。
+
 ## 分佈載重方向慣例 — 重要note
 
 `distributed_load(member, w)` 的 w 是「沿桿件局部 +y 方向」為正,局部座標系
@@ -128,6 +139,8 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | 桿件中間集中力(懸臂梁撓度) | 解析解 (Pa²(3L-a)/6EI) | rel_err ~1e-16 |
 | 桿件中間集中力矩(簡支梁反力) | 純靜力學決定性反力 | rel_err ~1e-16 |
 | 桿件中間軸向點載重 | 彈簧串聯解析解 | rel_err ~1e-16 |
+| 局部段均佈/梯形載重(簡支梁反力) | 純靜力學決定性反力 | rel_err ~1e-6 |
+| 局部段公式退化(c=0,d=L) | 既有全長UDL公式 | rel_err ~1e-14 |
 
 ## 桁架(truss)元素
 

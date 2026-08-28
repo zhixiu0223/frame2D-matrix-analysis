@@ -156,13 +156,16 @@ def plot_loads(frame, ax=None):
         ni, nj = _member_endpoints(frame, dl.member)
         L, angle = member_geometry(ni, nj)
         c, s = np.cos(angle), np.sin(angle)
+        x_start = 0.0 if dl.x_start is None else dl.x_start
+        x_end = L if dl.x_end is None else dl.x_end
         n_arrows = 6
         max_w = max(abs(dl.w_start), abs(dl.w_end), 1e-9)
         arrow_len = scale * 0.08
         for k in range(n_arrows + 1):
             t = k / n_arrows
             wx = dl.w_start + (dl.w_end - dl.w_start) * t
-            px, py = ni.x + L * t * c, ni.y + L * t * s
+            xt = x_start + (x_end - x_start) * t   # 只在[x_start,x_end]範圍內畫箭頭
+            px, py = ni.x + xt * c, ni.y + xt * s
             # 箭頭方向沿局部+y (perp to 桿件), 長度依載重大小比例
             perp_x, perp_y = -s, c
             length = arrow_len * (wx / max_w) if max_w > 0 else 0
@@ -175,7 +178,8 @@ def plot_loads(frame, ax=None):
             w_label = f'w={dl.w_start:.3g}'
         else:
             w_label = f'w={dl.w_start:.3g}~{dl.w_end:.3g}'
-        mx, my = ni.x + L / 2 * c, ni.y + L / 2 * s
+        mx = ni.x + (x_start + x_end) / 2 * c
+        my = ni.y + (x_start + x_end) / 2 * s
         ax.annotate(w_label, (mx, my), color='orange', fontsize=8,
                     xytext=(0, 10), textcoords='offset points', ha='center')
 
