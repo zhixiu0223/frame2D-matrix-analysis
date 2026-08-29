@@ -102,6 +102,35 @@ for n in [0, 1]:
 print("  PASS: frame2d兩套獨立實作互相吻合(自洽), 跟SW FEA不吻合是SW FEA的問題\n")
 
 
+# ---- 案例 PIN2-3: 1樓右柱(F2)在節點3端釋放, 節點3的"另一根"桿件
+#      (跟PIN2-2用F5不同根, 沒有對應SW FEA案例, 純frame2d自己驗證) ----
+print("=== 案例 PIN2-3: 1樓右柱(F2)在節點3端釋放 ===")
+f3 = Frame2D()
+for nid, (x, y) in NODES.items():
+    f3.add_node(nid, x, y)
+f3.add_section('s', E=E, I=I, A=A)
+f3.add_member(0, 0, 2, 's')
+f3.add_member(1, 2, 3, 's')
+f3.add_member(2, 3, 1, 's', release_i=True)   # 1樓右柱I端(node3)釋放
+f3.add_member(3, 4, 2, 's')
+f3.add_member(4, 5, 4, 's')
+f3.add_member(5, 5, 3, 's')
+f3.fix(0)
+f3.fix(1)
+f3.point_load(2, fx=10.0)
+f3.point_load(4, fx=15.0)
+r3_dof = solve(f3)
+r3_cond = solve_condensation(f3)
+for n in [0, 1]:
+    ux, uy, rot = f3.dofs_of(n)
+    assert abs(r3_dof.reactions[ux] - r3_cond.reactions[ux]) < 1e-6
+    assert abs(r3_dof.reactions[uy] - r3_cond.reactions[uy]) < 1e-6
+    assert abs(r3_dof.reactions[rot] - r3_cond.reactions[rot]) < 1e-6
+m_hinge3 = r3_dof.member_results[2].end_forces_local[2]
+assert abs(m_hinge3) < 1e-9, f"鉸接端彎矩應精確為0, 得到{m_hinge3}"
+print(f"  PASS: 兩套實作交叉驗證吻合, 鉸接端(F2的I端)彎矩={m_hinge3:.2e}\n")
+
+
 # ---- 案例: 三根桿件在節點3全部釋放(chatGPT建議的PIN2-4案例) ----
 print("=== 案例 PIN2-4: 三根桿件(梁+1樓右柱+2樓右柱)在節點3全部釋放 ===")
 f4 = Frame2D()
