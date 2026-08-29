@@ -101,4 +101,88 @@ for n in [0, 1]:
           f"{r1_cond.reactions[uy]:.4f},{r1_cond.reactions[rot]:.4f})  (兩套一致)")
 print("  PASS: frame2d兩套獨立實作互相吻合(自洽), 跟SW FEA不吻合是SW FEA的問題\n")
 
-print("PASS: 兩層樓門型鋼架三種鉸接情境, 驗證完成")
+
+# ---- 案例: 三根桿件在節點3全部釋放(chatGPT建議的PIN2-4案例) ----
+print("=== 案例 PIN2-4: 三根桿件(梁+1樓右柱+2樓右柱)在節點3全部釋放 ===")
+f4 = Frame2D()
+for nid, (x, y) in NODES.items():
+    f4.add_node(nid, x, y)
+f4.add_section('s', E=E, I=I, A=A)
+f4.add_member(0, 0, 2, 's')
+f4.add_member(1, 2, 3, 's', release_j=True)   # 梁: J端(node3)釋放
+f4.add_member(2, 3, 1, 's', release_i=True)   # 1樓右柱: I端(node3)釋放
+f4.add_member(3, 4, 2, 's')
+f4.add_member(4, 5, 4, 's')
+f4.add_member(5, 5, 3, 's', release_j=True)   # 2樓右柱: J端(node3)釋放
+f4.fix(0)
+f4.fix(1)
+f4.point_load(2, fx=10.0)
+f4.point_load(4, fx=15.0)
+
+r4_dof = solve(f4)
+r4_cond = solve_condensation(f4)
+for n in [0, 1]:
+    ux, uy, rot = f4.dofs_of(n)
+    assert abs(r4_dof.reactions[ux] - r4_cond.reactions[ux]) < 1e-6
+    assert abs(r4_dof.reactions[uy] - r4_cond.reactions[uy]) < 1e-6
+    assert abs(r4_dof.reactions[rot] - r4_cond.reactions[rot]) < 1e-6
+print("  PASS: 兩套實作交叉驗證吻合")
+
+for mid, end_idx, label in [(1, 5, "梁J端"), (2, 2, "1樓右柱I端"), (5, 5, "2樓右柱J端")]:
+    m_val = r4_dof.member_results[mid].end_forces_local[end_idx]
+    assert abs(m_val) < 1e-9, f"{label}彎矩應精確為0, 得到{m_val}"
+print("  PASS: 三根桿件在節點3的彎矩全部精確為0")
+
+Rx_total = sum(r4_dof.reactions[f4.dofs_of(n)[0]] for n in [0, 1])
+Ry_total = sum(r4_dof.reactions[f4.dofs_of(n)[1]] for n in [0, 1])
+assert abs(Rx_total - (-25.0)) < 1e-6, f"Fx整體平衡不對: {Rx_total}"
+assert abs(Ry_total - 0.0) < 1e-6, f"Fy整體平衡不對: {Ry_total}"
+print(f"  PASS: 整體力平衡(Fx總和={Rx_total:.4f}, Fy總和={Ry_total:.6f})")
+print("  (結構仍然穩定, 不是機構: 節點3的平移自由度仍然共用, 只有轉角各自獨立)\n")
+
+
+# ---- 案例: 鉸接節點上同時加額外的節點外力(驗證M=0跟Fx,Fy≠0互不衝突) ----
+print("=== 案例: 鉸接端節點上同時加節點外力(fy, m), 驗證不衝突 ===")
+f5 = Frame2D()
+for nid, (x, y) in NODES.items():
+    f5.add_node(nid, x, y)
+f5.add_section('s', E=E, I=I, A=A)
+f5.add_member(0, 0, 2, 's')
+f5.add_member(1, 2, 3, 's')
+f5.add_member(2, 3, 1, 's')
+f5.add_member(3, 4, 2, 's')
+f5.add_member(4, 5, 4, 's', release_i=True)
+f5.add_member(5, 5, 3, 's')
+f5.fix(0)
+f5.fix(1)
+f5.point_load(2, fx=10.0)
+f5.point_load(4, fx=15.0)
+f5.point_load(5, fy=-8.0, m=3.0)
+r5 = solve(f5)
+m_hinge = r5.member_results[4].end_forces_local[2]
+assert abs(m_hinge) < 1e-9, f"鉸接端彎矩應該不受節點外力影響, 仍精確為0, 得到{m_hinge}"
+print(f"  PASS: 鉸接端(F4的I端)彎矩={m_hinge:.2e}, 不受節點5額外外力(fy=-8,m=3)影響\n")
+
+
+# ---- 案例: 桿件內部點載重剛好加在鉸接位置(chatGPT特別推薦的benchmark) ----
+print("=== 案例: 桿件內部點載重剛好加在鉸接端位置 ===")
+L6 = 8.0
+f6 = Frame2D()
+f6.add_node(0, 0, 0)
+f6.add_node(1, L6, 0)
+f6.add_section('s', E=E, I=I, A=A)
+f6.add_member(0, 0, 1, 's', release_j=True)
+f6.fix(0)
+f6.pin(1)
+f6.member_point_load(0, a=L6, fy=-10.0)
+r6 = solve(f6)
+m_hinge6 = r6.member_results[0].end_forces_local[5]
+assert abs(m_hinge6) < 1e-9, f"鉸接端彎矩應精確為0, 得到{m_hinge6}"
+print(f"  PASS: 主要求解器(solve())可以直接處理這個組合, 鉸接端彎矩={m_hinge6:.2e}")
+try:
+    solve_condensation(f6)
+    raise AssertionError("預期靜力凝縮版本應該報錯(release+桿件內部載重), 但沒有")
+except ValueError:
+    print("  確認: 靜力凝縮版本(參考實作)這個組合仍會報錯, 符合已知限制\n")
+
+print("PASS: 兩層樓門型鋼架, 含PIN2-4(三向釋放)+鉸接節點外力+鉸接位置點載重, 驗證完成")
