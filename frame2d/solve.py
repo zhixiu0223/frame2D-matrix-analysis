@@ -28,6 +28,8 @@ from .elements import (
     transformation_matrix,
     fixed_end_forces_udl,
     fixed_end_forces_partial_udl,
+    fixed_end_forces_udl_release_i,
+    fixed_end_forces_udl_release_j,
     fixed_end_forces_point_load,
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
@@ -103,7 +105,8 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
         if mid in slack_cables:
             continue   # 鬆弛的cable: 不貢獻勁度, 視同不存在
 
-        k_global, _, _, _ = member_stiffness_global(section, node_i, node_j, m.member_type)
+        k_global, _, _, _ = member_stiffness_global(
+            section, node_i, node_j, m.member_type, m.release_i, m.release_j)
         idx = np.array(dofs)
         K[np.ix_(idx, idx)] += k_global
 
@@ -116,6 +119,22 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
                 " 不能承受垂直分佈載重(fixed_end_forces_udl假設的是有彎曲能力的"
                 " frame元素)。如果要模擬自重, 改成在兩端節點各加一半重量的"
                 " point_load。")
+        if m.release_i or m.release_j:
+            if dl.x_start is not None or dl.x_end is not None:
+                raise ValueError(
+                    f"member {dl.member} 有端點鉸接, 目前只支援整根桿件的均佈"
+                    " 載重(不支援局部段), 且w_start必須等於w_end。")
+            if m.release_i and m.release_j:
+                raise ValueError(f"member {dl.member} 兩端都鉸接, 不支援分佈載重。")
+            if m.release_j:
+                f_FE_local = fixed_end_forces_udl_release_j(dl.w_start, dl.w_end, member_L[dl.member])
+            else:
+                f_FE_local = fixed_end_forces_udl_release_i(dl.w_start, dl.w_end, member_L[dl.member])
+            fixed_end_local[dl.member] = fixed_end_local.get(
+                dl.member, np.zeros(6)) + f_FE_local
+            f_FE_global = member_T[dl.member].T @ f_FE_local
+            F[np.array(member_dofs[dl.member])] += f_FE_global
+            continue
         L = member_L[dl.member]
         T = member_T[dl.member]
         x_start = 0.0 if dl.x_start is None else dl.x_start
@@ -143,6 +162,11 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
                 f"member {pl_m.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
                 " 不能承受橫向集中力/力矩。如果要模擬桁架/纜線中間的集中力,"
                 " 改成拆成兩段桿件、在新節點上用point_load。")
+        if m.release_i or m.release_j:
+            raise ValueError(
+                f"member {pl_m.member} 有端點鉸接(release_i/release_j), 目前沒有"
+                " 處理鉸接端的固定端反力修正公式, 暫不支援在有鉸接的桿件上加"
+                " 桿件內部集中力/力矩。")
         L = member_L[pl_m.member]
         T = member_T[pl_m.member]
         a = pl_m.a
@@ -227,7 +251,7 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
 
         section = frame.sections[m.section]
         k_local = member_local_stiffness_dispatch(
-            m.member_type, section.E, section.I, section.A, member_L[mid])
+            m.member_type, section.E, section.I, section.A, member_L[mid], m.release_i, m.release_j)
 
         f_FE = fixed_end_local.get(mid, np.zeros(6))
         end_forces_local = k_local @ u_local - f_FE

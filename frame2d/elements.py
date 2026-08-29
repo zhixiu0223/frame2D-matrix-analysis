@@ -20,8 +20,18 @@ def member_geometry(node_i, node_j):
     return L, angle
 
 
-def member_stiffness_local(E, I, A, L):
-    """局部座標系下的 6x6 勁度矩陣 (軸向 + 彎曲耦合已分離,標準組合式)"""
+def member_stiffness_local(E, I, A, L, release_i=False, release_j=False):
+    """局部座標系下的 6x6 勁度矩陣 (軸向 + 彎曲耦合已分離,標準組合式)。
+
+    release_i/release_j: 該端是否有內部鉸接(彎矩釋放, M=0)。用靜力凝縮
+    (static condensation)處理, 不改變全域DOF系統(dofs_of()完全不用動,
+    這是這個功能不需要先做DOFManager升級就能實作的原因)。公式已用sympy
+    驗證跟標準教科書「一端鉸接梁」的3EI/L係數一致(標準4EI/L,6EI/L²改成
+    3EI/L,3EI/L², 12EI/L³不變)。
+    只支援單端釋放或不釋放; 兩端同時釋放(等同truss, 但這裡沒有處理桿件
+    內部有載重時的固定端反力修正公式)不支援, 兩端都釋放時只用軸向+已經
+    是0的彎曲勁度, 不保證載重情況正確, 請改用add_truss()。
+    """
     EA_L = E * A / L
     EI = E * I
     L2 = L * L
@@ -29,19 +39,40 @@ def member_stiffness_local(E, I, A, L):
 
     k = np.zeros((6, 6))
 
-    # 軸向 (u1, u2) -> 索引 0, 3
+    # 軸向 (u1, u2) -> 索引 0, 3 (跟release無關)
     k[0, 0] = EA_L
     k[0, 3] = -EA_L
     k[3, 0] = -EA_L
     k[3, 3] = EA_L
 
     # 彎曲 (v1, theta1, v2, theta2) -> 索引 1,2,4,5
-    kb = EI * np.array([
-        [12 / L3,   6 / L2,  -12 / L3,   6 / L2],
-        [6 / L2,    4 / L,   -6 / L2,    2 / L],
-        [-12 / L3, -6 / L2,   12 / L3,  -6 / L2],
-        [6 / L2,    2 / L,   -6 / L2,    4 / L],
-    ])
+    if not release_i and not release_j:
+        kb = EI * np.array([
+            [12 / L3,   6 / L2,  -12 / L3,   6 / L2],
+            [6 / L2,    4 / L,   -6 / L2,    2 / L],
+            [-12 / L3, -6 / L2,   12 / L3,  -6 / L2],
+            [6 / L2,    2 / L,   -6 / L2,    4 / L],
+        ])
+    elif release_j and not release_i:
+        # J端(theta2)鉸接: 標準4EI/L,6EI/L²改成3EI/L,3EI/L², theta2那一列/行全為0
+        kb = EI * np.array([
+            [3 / L3,   3 / L2,  -3 / L3,   0.0],
+            [3 / L2,   3 / L,   -3 / L2,   0.0],
+            [-3 / L3, -3 / L2,   3 / L3,   0.0],
+            [0.0,      0.0,      0.0,      0.0],
+        ])
+    elif release_i and not release_j:
+        # I端(theta1)鉸接: 鏡像版本, theta1那一列/行全為0
+        kb = EI * np.array([
+            [3 / L3,   0.0,  -3 / L3,   3 / L2],
+            [0.0,      0.0,   0.0,      0.0],
+            [-3 / L3,  0.0,   3 / L3,  -3 / L2],
+            [3 / L2,   0.0,  -3 / L2,   3 / L],
+        ])
+    else:
+        # 兩端都釋放: 彎曲勁度全為0(等同truss, 但不處理內部載重的固定端反力)
+        kb = np.zeros((4, 4))
+
     bend_idx = [1, 2, 4, 5]
     for a, ia in enumerate(bend_idx):
         for b, ib in enumerate(bend_idx):
@@ -65,13 +96,14 @@ def member_stiffness_local_truss(E, A, L):
     return k
 
 
-def member_local_stiffness_dispatch(member_type, E, I, A, L):
+def member_local_stiffness_dispatch(member_type, E, I, A, L, release_i=False, release_j=False):
     """依member_type選擇對應的局部勁度矩陣公式。
     'truss'跟'cable'共用同一條軸力公式(兩端鉸接、只傳軸力), 差別在
-    solve.py會不會把受壓的cable桿件當成鬆弛移除, truss則不管拉壓都保留。"""
+    solve.py會不會把受壓的cable桿件當成鬆弛移除, truss則不管拉壓都保留。
+    'frame'則依release_i/release_j決定要不要做端點鉸接的靜力凝縮。"""
     if member_type in ('truss', 'cable'):
         return member_stiffness_local_truss(E, A, L)
-    return member_stiffness_local(E, I, A, L)
+    return member_stiffness_local(E, I, A, L, release_i, release_j)
 
 
 def transformation_matrix(angle):
@@ -88,10 +120,10 @@ def transformation_matrix(angle):
     return T
 
 
-def member_stiffness_global(section, node_i, node_j, member_type='frame'):
+def member_stiffness_global(section, node_i, node_j, member_type='frame', release_i=False, release_j=False):
     """組出全域座標系下的 6x6 勁度矩陣,回傳 (k_global, L, angle, T)"""
     L, angle = member_geometry(node_i, node_j)
-    k_local = member_local_stiffness_dispatch(member_type, section.E, section.I, section.A, L)
+    k_local = member_local_stiffness_dispatch(member_type, section.E, section.I, section.A, L, release_i, release_j)
     T = transformation_matrix(angle)
     k_global = T.T @ k_local @ T
     return k_global, L, angle, T
@@ -206,3 +238,32 @@ def fixed_end_forces_partial_udl(w_start, w_end, c, d, L):
         w_si = w_start + (w_end - w_start) * (si - c) / (d - c)
         f_FE += wi * jac * fixed_end_forces_point_load(w_si, si, L)
     return f_FE
+
+
+def fixed_end_forces_udl_release_j(w_start, w_end, L):
+    """局部座標系下, J端有鉸接釋放(M2=0)的桿件, 受整根桿件均佈載重的
+    固定端反力(標準"一端固接一端鉸接梁", propped cantilever, 公式)。
+    用EI*v''=M(x)配合天然邊界條件M(L)=0(取代一般固接情況的v'(L)=0)
+    推導, 均佈載重的標準結果是wL²/8(比固接情況的wL²/12大, 符合物理直覺:
+    少了一端的轉角拘束, 固接端要扛的彎矩更大)。只支援均佈(w_start=w_end),
+    線性變化的鉸接固定端反力公式還沒推導。
+    """
+    if abs(w_start - w_end) > 1e-9:
+        raise NotImplementedError("目前只支援均佈(w_start=w_end)的鉸接固定端反力公式")
+    w = w_start
+    V1 = 5 * w * L / 8
+    M1 = w * L**2 / 8
+    V2 = w * L - V1
+    return np.array([0.0, V1, M1, 0.0, V2, 0.0])
+
+
+def fixed_end_forces_udl_release_i(w_start, w_end, L):
+    """局部座標系下, I端有鉸接釋放(M1=0)的桿件, 受整根桿件均佈載重的
+    固定端反力(鏡像版本)。"""
+    if abs(w_start - w_end) > 1e-9:
+        raise NotImplementedError("目前只支援均佈(w_start=w_end)的鉸接固定端反力公式")
+    w = w_start
+    V2 = 5 * w * L / 8
+    M2 = -w * L**2 / 8
+    V1 = w * L - V2
+    return np.array([0.0, V1, 0.0, 0.0, V2, M2])

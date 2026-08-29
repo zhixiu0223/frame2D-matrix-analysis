@@ -38,6 +38,16 @@ def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, sho
             ax.annotate(label, (xm, ym), color='blue', fontsize=8,
                         ha='center', va='center',
                         bbox=dict(boxstyle='round,pad=0.1', fc='white', ec='none', alpha=0.7))
+        # 內部鉸接(release): 在釋放的那一端畫個空心紅圈標記(跟SW FEA app的
+        # 慣例一致), offset一點點避免蓋住節點本身的黑點
+        if getattr(m, 'release_i', False) or getattr(m, 'release_j', False):
+            L, angle = member_geometry(ni, nj)
+            c, s = np.cos(angle), np.sin(angle)
+            off = min(L * 0.06, 0.15)
+            if m.release_i:
+                ax.plot(ni.x + off * c, ni.y + off * s, 'o', mfc='none', mec='red', mew=1.3, ms=7, zorder=3)
+            if m.release_j:
+                ax.plot(nj.x - off * c, nj.y - off * s, 'o', mfc='none', mec='red', mew=1.3, ms=7, zorder=3)
     for nid, n in frame.nodes.items():
         ax.plot(n.x, n.y, 'ko', ms=5, zorder=2)
         if show_node_ids:

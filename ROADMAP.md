@@ -89,12 +89,23 @@ M_A=-3EIΔ/L²(跟使用者自己的sd_framework同一種方法)。過程中因�
 假值, 導致固定端符號被誤判——已修正成`is not None`判斷。全部既有測試
 (11個既有tests/*.py)重跑確認零回歸。見`tests/test_support_displacement.py`。
 
-### Phase 4 (較晚, 需要先做DOFManager才能開始): Internal hinge / element release
-桿件端點內鉸(例如 A──────○B, B端不傳彎矩)。這個會需要先把
-`Frame2D.dofs_of()`的DOF系統從現在的MVP版(`3*node_id`固定)升級成真正
-的DOFManager, 因為release會讓同一個節點在不同桿件眼中看到不同的自由度
-耦合關係。**先不要在還沒做release前提早做DOFManager升級**——沒有具體
-需求驅動的架構升級容易做錯方向。
+### Phase 4: Internal hinge / element release ✅ 已完成 (比原規劃簡單)
+原本規劃「需要先做DOFManager升級才能開始」, 但實際做的時候發現有更簡單的
+路線: 用靜力凝縮(static condensation)處理單一桿件的局部勁度矩陣就好
+(標準4EI/L,6EI/L²改成3EI/L,3EI/L², 釋放端那列/行全為0), **完全不用動
+`dofs_of()`的DOF系統**——這是結構分析裡處理桿端鉸接的標準經典做法,
+之前判斷「需要先升級DOFManager」是過度保守。
+
+**實作記錄**: `add_member(..., release_i=, release_j=)`。均佈載重的固定端
+反力公式一開始正負號推導錯誤(用Gerber梁純靜力學驗證時抓到, 單獨測試
+給出45/15不是預期的簡支梁30/30), 修正後兩個方向都通過獨立驗證。驗證分
+兩層: 古典Gerber梁(兩跨連續梁中間放鉸接, 從一次靜不定變成靜定, 拆解成
+獨立簡支梁純靜力學驗證)+ 對照SW FEA門型鋼架案例(3桿件x11點BM逐點比對)。
+見`tests/test_element_release.py`、`tests/test_element_release_vs_swfea.py`。
+
+**目前限制**(下一步如有需求再擴充): 均佈載重只支援整根桿件+真正均佈
+(不支援線性變化、局部段); 桿件內部集中力還不支援; 兩端同時釋放的固定端
+反力公式沒處理(等同truss但沒有內部載重公式)。
 
 ## 暫緩/刻意不做的項目
 

@@ -30,12 +30,17 @@ class Member:
     """2D 桿件元素。member_type='frame'(預設): 樑柱元素, 每端3個自由度
     (ux,uy,rot), 可傳軸力+剪力+彎矩。member_type='truss': 桁架元素, 兩端鉸接,
     只能傳軸力(彎曲/剪力勁度為0), 用同一組6自由度格式儲存(v,theta永遠是0),
-    方便共用組裝程式碼, 不用另外做一套DOF系統。"""
+    方便共用組裝程式碼, 不用另外做一套DOF系統。
+    release_i/release_j: frame元素專用, 該端是否有內部鉸接(彎矩釋放M=0)。
+    用靜力凝縮處理, 不改變DOF系統, 不用切節點就能表示"桿件端點是鉸接,
+    不是剛接"這件事。"""
     id: int
     node_i: int      # 近端節點id
     node_j: int      # 遠端節點id
     section: str      # 對應 Section.name
-    member_type: str = 'frame'   # 'frame' 或 'truss'
+    member_type: str = 'frame'   # 'frame' 或 'truss' 或 'cable'
+    release_i: bool = False
+    release_j: bool = False
 
 
 @dataclass
@@ -108,8 +113,9 @@ class Frame2D:
         self.sections[name] = Section(name, E, I, A)
         return self
 
-    def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame'):
-        self.members[id] = Member(id, node_i, node_j, section, member_type)
+    def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame',
+                   release_i: bool = False, release_j: bool = False):
+        self.members[id] = Member(id, node_i, node_j, section, member_type, release_i, release_j)
         return self
 
     def add_truss(self, id: int, node_i: int, node_j: int, section: str):

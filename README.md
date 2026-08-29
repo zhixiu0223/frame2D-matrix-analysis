@@ -7,14 +7,15 @@
 
 ## 目前範疇
 
-- 2D Euler-Bernoulli 樑柱元素 (frame),每節點3自由度 (ux, uy, rot)
+- 2D Euler-Bernoulli 樑柱元素 (frame),每節點3自由度 (ux, uy, rot),支援
+  桿件內部集中力/力矩、局部段均佈載重、端點內部鉸接(release)
 - 桁架元素 (truss):兩端鉸接、僅軸向勁度,可拉可壓
 - 纜線元素 (cable):跟truss共用軸向公式,但只受拉,受壓時自動判定鬆弛、
   移除勁度貢獻、重新求解,反覆迭代至收斂(見下方「纜線元素」章節)
-- **尚未支援**: 局部段均佈載重(distributed_load目前只能整根桿件)、支承強制位移(沉陷)、
-  內部鉸接(internal hinge)、幾何非線性(P-Delta)、材料非線性——這些等基本
-  框架穩定後再視需求加入,不要為了還沒出現的需求先付架構成本(詳細優先順序
-  見ROADMAP.md)
+- 支承除了fixed/pin/roller,也支援強制位移(沉陷/施工誤差分析)
+- **尚未支援**: 均佈載重的任意角度/局部座標以外的方向、幾何非線性(P-Delta)、
+  材料非線性——這些等基本框架穩定後再視需求加入,不要為了還沒出現的需求
+  先付架構成本(詳細優先順序見ROADMAP.md)
 
 ## 結構
 
@@ -101,6 +102,25 @@ rot=)`可以直接設定沉陷量。核心公式從`K_ff u_f = F_f`(劃掉拘束
 是假值, 導致固定端符號會被誤判成別種支承圖示。已修正成`is not None`判斷,
 並確認三種支承符號(fixed/pin/roller)視覺上都正確。
 
+## 內部鉸接 (element release / internal pin)
+
+`f.add_member(id, node_i, node_j, section, release_i=True/False, release_j=True/False)`
+——`release_i`/`release_j`表示該端是否有內部鉸接(彎矩釋放, M=0), 用靜力凝縮
+(static condensation)處理: 只修改該桿件自己的局部勁度矩陣(標準4EI/L,6EI/L²
+改成3EI/L,3EI/L², 釋放端那一列/行全為0), **不需要改動DOF系統**
+(`dofs_of()`完全不用動)——這是這個功能不需要先做完整DOFManager升級就能
+實作的原因, 比ROADMAP原本規劃的路線簡單很多。
+
+驗證分兩層: (1) 用古典Gerber梁(兩跨連續梁中間支承處放鉸接, 從一次靜不定
+變成靜定)當最小模型, 拆解成獨立簡支梁純靜力學驗證, 完全不依賴frame2d
+自己的公式對不對; (2) 對照SW FEA的門型鋼架案例(3桿件x11位置點的BM逐點
+比對)。見`tests/test_element_release.py`、`tests/test_element_release_vs_swfea.py`。
+
+**限制**: 均佈載重目前只支援整根桿件、且w_start=w_end(均佈, 不支援線性
+變化)的鉸接固定端反力公式; 桿件內部集中力(member_point_load)、局部段
+均佈載重、兩端同時釋放(等同truss但沒處理內部載重)都還不支援, 用到時
+會直接報錯提示。
+
 ## 桿件內部集中力/力矩 (不在節點上)
 
 `f.member_point_load(member, a, fx=0.0, fy=0.0, m=0.0)`——`a`是距離
@@ -162,6 +182,8 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | 靜定梁支承沉陷 | 結構學基本性質(靜定結構沉陷零內力) | abs_err ~1e-15 |
 | 一次靜不定梁支承沉陷 | 傾角變位法經典公式 (M=-3EIΔ/L²) | rel_err ~1e-16 |
 | Phase3支承強制位移(2案例x3桿件x11點) | SW FEA 第三方工具(反力+SF/BM/dX/dY) | 最大誤差 ~0.0005 |
+| Phase4內部鉸接(Gerber梁) | 純靜力學(拆解成獨立簡支梁) | 誤差=0 |
+| Phase4內部鉸接(門型鋼架, 3桿件x11點) | SW FEA 第三方工具 | 最大誤差 ~0.0005 |
 
 ## 桁架(truss)元素
 
