@@ -80,9 +80,10 @@ f.roller_y(1)
 f.member_point_load(0, a=a, m=M0)
 r = solve(f)
 
-# 純靜力學: 對節點0取矩 -> R1*L - M0 = 0 (力矩CCW正, 支承反力方向由平衡決定)
-R2_exact = M0 / L
-R1_exact = -M0 / L
+# 純靜力學: 對節點0取矩 -> R1*L + M0 = 0 (CCW力矩M0在任一點的力矩貢獻都是+M0,
+# 不因位置改變, 力矩平衡: R1*L + M0 = 0 -> R1 = -M0/L; 垂直平衡: R0 = -R1 = +M0/L)
+R2_exact = -M0 / L
+R1_exact = M0 / L
 check("R0(pin)", r.reactions[f.dofs_of(0)[1]], R1_exact)
 check("R1(roller)", r.reactions[f.dofs_of(1)[1]], R2_exact)
 print("PASS: 簡支梁內部集中力矩反力精確吻合純靜力學決定性解\n")
@@ -150,8 +151,8 @@ f2.roller_y(1)
 f2.member_point_load(0, a=a, m=M0)
 r2 = solve(f2)
 x2, N2, V2, M2 = member_internal_forces(f2, r2, 0, n=41)
-R0_2 = -M0 / L
-R1_2 = M0 / L
+R0_2 = M0 / L
+R1_2 = -M0 / L
 for xi, Mi in zip(x2, M2):
     if xi < a - 1e-9:
         M_exact = R0_2 * xi

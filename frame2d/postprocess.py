@@ -26,7 +26,8 @@
     N(x) 於 x>=a 處跳躍 -fx (fx沿局部+x, N拉力為正, 符號跟軸力慣例對齊)
     V(x) 於 x>=a 處跳躍 +fy (剛好就是fy本身, 因為V(x)本來就是"Fy1+累積量"這套邏輯)
     M(x) 於 x>=a 處額外貢獻 fy*(x-a) (V跳躍的積分, 跟連續分佈載重的累積量同一套機制)
-    M(x) 於 x>=a 處另外再跳躍 +m (集中力矩造成的彎矩不連續, 不影響V)
+    M(x) 於 x>=a 處另外再跳躍 -m (集中力矩造成的彎矩不連續, 不影響V;
+      這個負號曾經寫反過, 詳見fixed_end_forces_point_moment()的說明)
 
 變形內插用 Hermite cubic shape function (homogeneous解), 節點值精確,
 但若桿件內部有分佈載重或集中力(member_point_load)、且只用單一元素代表
@@ -138,7 +139,7 @@ def member_internal_forces(frame, result, member_id, n=21):
         N += -pl.fx * step
         V += pl.fy * step
         M += pl.fy * np.clip(x - pl.a, 0, None)
-        M += pl.m * step
+        M += -pl.m * step
 
     return x, N, V, M
 

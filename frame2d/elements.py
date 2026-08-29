@@ -190,13 +190,22 @@ def fixed_end_forces_point_load(P, a, L):
 def fixed_end_forces_point_moment(M0, a, L):
     """局部座標系下, 桿件內部任意位置(距node_i為a)的集中力矩M0
     (逆時針為正, 跟theta同號約定)之固定端反力。回傳格式同上。
-    公式來源同fixed_end_forces_point_load的說明。
+
+    **這裡曾經有一個真的正負號bug**: 原本的實作(V1,M1,V2,M2全部反號)是把
+    fixed_end_forces_point_load()「sympy原始推導結果要整體取負號才對」這個
+    規律, 直接套用到力矩案例上, 但兩種案例的sympy推導約定不是同一回事,
+    不能照搬。用「懸臂梁自由端直接加外力矩」(固定端反力矩應該=-M0, 梁彎矩
+    應為常數+M0, 這兩個都是最基本、不依賴這條公式本身的物理事實)、以及
+    「節點分割法」(在a處插入真實節點, 改用經過獨立驗證的point_load的m參數,
+    比較兩者是否給出相同答案)這兩種方法互相佐證, 抓到並修正: 這裡不需要
+    對sympy原始推導結果取負號, 直接用sympy的原始輸出即可(跟point_load的
+    情況相反)。見 tests/test_member_moment_sign_consistency.py。
     """
     b = L - a
-    V1 = 6.0 * M0 * a * b / L**3
-    M1 = M0 * b * (2 * a - b) / L**2
-    V2 = -6.0 * M0 * a * b / L**3
-    M2 = M0 * a * (2 * b - a) / L**2
+    V1 = -6.0 * M0 * a * b / L**3
+    M1 = -M0 * b * (2 * a - b) / L**2
+    V2 = 6.0 * M0 * a * b / L**3
+    M2 = -M0 * a * (2 * b - a) / L**2
     return np.array([0.0, V1, M1, 0.0, V2, M2])
 
 
