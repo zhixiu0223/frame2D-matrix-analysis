@@ -105,27 +105,32 @@ rot=)`可以直接設定沉陷量。核心公式從`K_ff u_f = F_f`(劃掉拘束
 ## 內部鉸接 (element release / internal pin)
 
 `f.add_member(id, node_i, node_j, section, release_i=True/False, release_j=True/False)`
-——`release_i`/`release_j`表示該端是否有內部鉸接(彎矩釋放, M=0), 用靜力凝縮
-(static condensation)處理: 只修改該桿件自己的局部勁度矩陣(標準4EI/L,6EI/L²
-改成3EI/L,3EI/L², 釋放端那一列/行全為0), **不需要改動DOF系統**
-(`dofs_of()`完全不用動)——這是這個功能不需要先做完整DOFManager升級就能
-實作的原因, 比ROADMAP原本規劃的路線簡單很多。
+——`release_i`/`release_j`表示該端是否有內部鉸接(彎矩釋放, M=0)。**主要
+求解器(`solve()`, DOFManager版本)給每個release端分配專屬、不共用的轉角
+自由度**, 桿件用標準勁度矩陣+標準固定端反力公式即可, 不需要為每種載重
+類型推導release專屬公式, 也因此沒有下面提到的那些限制。
 
-驗證分兩層: (1) 用古典Gerber梁(兩跨連續梁中間支承處放鉸接, 從一次靜不定
-變成靜定)當最小模型, 拆解成獨立簡支梁純靜力學驗證, 完全不依賴frame2d
-自己的公式對不對; (2) 對照SW FEA的門型鋼架案例(3桿件x11位置點的BM逐點
-比對)。見`tests/test_element_release.py`、`tests/test_element_release_vs_swfea.py`。
+驗證分三層: (1) 用古典Gerber梁(兩跨連續梁中間支承處放鉸接, 從一次靜不定
+變成靜定)當最小模型, 拆解成獨立簡支梁純靜力學驗證; (2) 對照SW FEA的
+門型鋼架案例(3桿件x11位置點的BM逐點比對); (3) 跟`solve_condensation()`
+(靜力凝縮版本, 見下方) 交叉驗證, 兩者數學上等價, 答案精確一致(誤差
+~1e-13~1e-15, 浮點精度等級)。見`tests/test_element_release.py`、
+`tests/test_element_release_vs_swfea.py`、`tests/test_dofmanager_vs_condensation.py`。
 
-**限制**: 均佈載重目前只支援整根桿件、且w_start=w_end(均佈, 不支援線性
+## 兩套求解器: solve() 跟 solve_condensation()
+
+`solve()`(= `solve_dofmanager()`, 主要求解器): 給每個release端專屬DOF,
+所有載重組合都直接支援, 不需要release專屬公式。
+
+`solve_condensation()`(靜力凝縮版本, 參考/回歸測試用): 修改桿件局部
+勁度矩陣(標準4EI/L,6EI/L²改成3EI/L,3EI/L², 釋放端那列/行全為0)。
+**限制**: 均佈載重只支援整根桿件、且w_start=w_end(均佈, 不支援線性
 變化)的鉸接固定端反力公式; 桿件內部集中力(member_point_load)、局部段
-均佈載重、兩端同時釋放(等同truss但沒處理內部載重)都還不支援, 用到時
-會直接報錯提示。**這些限制只在「靜力凝縮」這套主要求解器上**——
-`frame2d/dofmanager.py` 是另一套完全獨立實作的求解路徑(給每個release端
-分配專屬、不共用的轉角自由度, 不用靜力凝縮), 數學上跟靜力凝縮等價
-(兩者答案精確一致, 見`tests/test_dofmanager_vs_condensation.py`), 而且
-因為不需要為每種載重類型推導release專屬公式, 可以直接處理靜力凝縮版本
-還不支援的組合(例如release桿件上的桿件內部集中力)。目前`dofmanager.py`
-是驗證/交叉比對用途, 還沒整合成主要求解器的預設路徑。
+均佈載重、兩端同時釋放都還不支援release桿件上使用, 用到時會直接報錯。
+
+兩套實作完全獨立寫成(不是互相呼叫), 兩者答案在Gerber梁跟門型鋼架案例上
+精確一致, 這個交叉驗證本身就是一種額外的正確性佐證(見
+`tests/test_dofmanager_vs_condensation.py`)。
 
 ## 桿件內部集中力/力矩 (不在節點上)
 

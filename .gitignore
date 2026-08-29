@@ -17,4 +17,10 @@ venv/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-__pycache__/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+
+# Generated plots
+examples/output_plots/

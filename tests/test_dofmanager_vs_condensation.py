@@ -17,7 +17,7 @@ test_element_release_vs_swfea.py同一組模型), 用兩套實作分別求解比
 凝縮版本也能算, 兩邊再對一次)。
 """
 import numpy as np
-from frame2d import Frame2D, solve
+from frame2d import Frame2D, solve_condensation
 from frame2d.dofmanager import solve_dofmanager
 
 E, I, A = 200e6, 8e-5, 0.01
@@ -44,13 +44,13 @@ fA.roller_y(1)
 fA.roller_y(2)
 fA.distributed_load(0, w=w)
 
-rA_static = solve(fA)
+rA_static = solve_condensation(fA)
 rA_dof = solve_dofmanager(fA)
 for n in [0, 1, 2]:
     ux, uy, rot = fA.dofs_of(n)
     check(f"node{n} Ry", rA_static.reactions[uy], rA_dof.reactions[uy])
 for mid in [0, 1]:
-    diff = np.max(np.abs(rA_static.member_results[mid].end_forces_local - rA_dof.member_end_forces[mid]))
+    diff = np.max(np.abs(rA_static.member_results[mid].end_forces_local - rA_dof.member_results[mid].end_forces_local))
     print(f"  member{mid} 端力最大差: {diff:.2e}")
     assert diff < 1e-6
 print("PASS\n")
@@ -71,7 +71,7 @@ fB.fix(0)
 fB.fix(1)
 fB.point_load(2, fx=10.0)
 
-rB_static = solve(fB)
+rB_static = solve_condensation(fB)
 rB_dof = solve_dofmanager(fB)
 for n in [0, 1]:
     ux, uy, rot = fB.dofs_of(n)
@@ -79,7 +79,7 @@ for n in [0, 1]:
     check(f"node{n} Ry", rB_static.reactions[uy], rB_dof.reactions[uy])
     check(f"node{n} M", rB_static.reactions[rot], rB_dof.reactions[rot])
 max_diff = max(
-    np.max(np.abs(rB_static.member_results[mid].end_forces_local - rB_dof.member_end_forces[mid]))
+    np.max(np.abs(rB_static.member_results[mid].end_forces_local - rB_dof.member_results[mid].end_forces_local))
     for mid in [0, 1, 2]
 )
 print(f"  三桿件端力最大差: {max_diff:.2e}")
@@ -101,12 +101,12 @@ fC.fix(0)
 fC.pin(1)
 fC.member_point_load(0, a=a, fy=-P)
 
-# 確認靜力凝縮版本(主要求解器)這個組合確實會報錯(還沒支援)
+# 確認靜力凝縮版本(參考實作)這個組合確實會報錯(還沒支援)
 try:
-    solve(fC)
+    solve_condensation(fC)
     raise AssertionError("預期應該報錯(靜力凝縮版本還不支援這個組合), 但沒有報錯")
 except ValueError:
-    print("  確認: 靜力凝縮版本(主要求解器)這個組合會報錯(還沒支援), 符合預期")
+    print("  確認: 靜力凝縮版本(參考實作)這個組合會報錯(還沒支援), 符合預期")
 
 rC_dof = solve_dofmanager(fC)
 
@@ -122,7 +122,7 @@ fC_split.add_member(1, 1, 2, 's', release_j=True)
 fC_split.fix(0)
 fC_split.pin(2)
 fC_split.point_load(1, fy=-P)
-rC_split = solve(fC_split)
+rC_split = solve_condensation(fC_split)
 
 ux0, uy0, rot0 = fC.dofs_of(0)
 check("node0 Ry (release桿件內部點載重 vs 節點分割獨立驗證)",
@@ -130,4 +130,34 @@ check("node0 Ry (release桿件內部點載重 vs 節點分割獨立驗證)",
 check("node0 M", rC_dof.reactions[rot0], rC_split.reactions[fC_split.dofs_of(0)[2]])
 print("PASS: DOFManager能處理靜力凝縮版本目前還不支援的組合, 且答案通過獨立驗證\n")
 
+# 額外確認: 現在的主要求解器 frame2d.solve (= solve_dofmanager) 也能直接算這個組合
+from frame2d import solve as solve_production
+rC_production = solve_production(fC)
+check("node0 Ry (主要求解器solve() vs 節點分割獨立驗證)",
+      rC_production.reactions[uy0], rC_split.reactions[fC_split.dofs_of(0)[1]])
+print("PASS: 主要求解器frame2d.solve()現在直接支援這個組合, 不用另外呼叫solve_dofmanager\n")
+
 print("PASS: DOFManager vs 靜力凝縮, 交叉驗證+額外能力展示, 全數完成")
+
+
+# ---- 案例D: 不連續/不從0開始的node_id, 確認dofs_of()真的解耦了 ----
+print()
+print("=== 案例D: 不連續node_id(100,250,999), 兩套實作依然一致 ===")
+fD = Frame2D()
+fD.add_node(100, 0, 0)
+fD.add_node(250, L1, 0)
+fD.add_node(999, L1 + L2, 0)
+fD.add_section('s', E=E, I=I, A=A)
+fD.add_member(0, 100, 250, 's', release_j=True)
+fD.add_member(1, 250, 999, 's')
+fD.pin(100)
+fD.roller_y(250)
+fD.roller_y(999)
+fD.distributed_load(0, w=w)
+rD_static = solve_condensation(fD)
+rD_dof = solve_dofmanager(fD)
+assert fD.n_dof() == 9, f"3個節點應該只佔用9個DOF, 得到{fD.n_dof()}"
+for nid in [100, 250, 999]:
+    ux, uy, rot = fD.dofs_of(nid)
+    check(f"node{nid} Ry(不連續id)", rD_static.reactions[uy], rD_dof.reactions[uy])
+print("PASS: 不連續node_id下, DOF數量正確(9個, 不是300個), 兩套實作依然一致")

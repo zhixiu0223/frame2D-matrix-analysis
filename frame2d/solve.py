@@ -1,6 +1,17 @@
 """
 組裝 K, F -> 處理邊界條件 -> 解 Ku=F -> 回代桿端內力
 
+**這是「靜力凝縮」版本, 現在是參考/回歸測試用的實作**(2026-08-29後,
+主要求解器`solve()`改指向`dofmanager.py`的DOFManager版本, 詳見
+frame2d/__init__.py跟ROADMAP.md)。這支檔案的公開函式改名叫
+`solve_condensation()`, 保留給:
+  1. 回歸測試: 兩套完全獨立寫的實作互相交叉驗證(見
+     tests/test_dofmanager_vs_condensation.py)
+  2. 內部鉸接(release)桿件透過靜力凝縮處理(修改局部勁度矩陣), 這條路徑
+     對某些載重組合(release桿件+局部段均佈載重/桿件內部集中力)還沒推導
+     專屬公式, 會直接報錯——DOFManager版本因為不需要這類專屬公式, 沒有
+     這個限制。
+
 均佈載重的等效節點載重規則(採 work-equivalent consistent load 定義,
 用 f_FE = fixed_end_forces_udl() 算出的向量與局部y方向載重w同號):
   1. f_FE 是「work-equivalent 等效節點載重」本身(不是反力), 直接疊加進全域 F (不取負號)
@@ -10,16 +21,16 @@
 
 纜線(cable)只能受拉、不能受壓的迭代處理:
   cable桿件只能受拉力, 如果一次線性求解算出某條cable是壓力, 物理上代表這條纜線
-  在這個載重下會鬆弛(slack)、退出作用, 不是真的能傳遞壓力。solve()因此採用
-  「移除受壓cable的勁度貢獻 -> 重新求解 -> 檢查還有沒有cable受壓 -> 重複」的
-  迭代流程(經典的tension-only member處理方式), 直到沒有cable受壓為止,
+  在這個載重下會鬆弛(slack)、退出作用, 不是真的能傳遞壓力。solve_condensation()
+  因此採用「移除受壓cable的勁度貢獻 -> 重新求解 -> 檢查還有沒有cable受壓 -> 重複」
+  的迭代流程(經典的tension-only member處理方式), 直到沒有cable受壓為止,
   或超過max_iterations(此時代表模型有問題, 例如全部cable都可能鬆弛導致機構,
   拋出RuntimeError)。純truss桿件不受此限制, 可以同時傳拉力或壓力。
 """
-from dataclasses import dataclass
 import numpy as np
 
 from .model import Frame2D
+from .result import MemberResult, SolveResult
 from .elements import (
     member_geometry,
     member_stiffness_local,
@@ -34,25 +45,6 @@ from .elements import (
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
 )
-
-
-@dataclass
-class MemberResult:
-    member_id: int
-    L: float
-    angle: float
-    # 局部座標系桿端內力: [Fx1, Fy1, M1, Fx2, Fy2, M2]
-    # Fx = 軸力(正=拉力), Fy = 剪力, M = 彎矩
-    end_forces_local: np.ndarray
-    slack: bool = False   # True = 這是一條cable, 且這次求解判定為鬆弛(不受力)
-
-
-@dataclass
-class SolveResult:
-    displacements: np.ndarray          # 全域自由度位移向量, 長度 3*n_nodes
-    reactions: np.ndarray              # 全域自由度反力向量 (僅支承自由度有意義)
-    member_results: dict               # member_id -> MemberResult
-    slack_cables: set = None           # 最終解裡判定為鬆弛的cable member_id集合
 
 
 def _support_dof_values(frame: Frame2D):
@@ -264,9 +256,10 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
                         slack_cables=set(slack_cables))
 
 
-def solve(frame: Frame2D, max_iterations: int = 20) -> SolveResult:
-    """求解frame。如果模型裡有cable元素, 會自動反覆偵測+移除受壓的cable
-    (鬆弛退出作用)並重新求解, 直到收斂(沒有cable受壓)或達到max_iterations。"""
+def solve_condensation(frame: Frame2D, max_iterations: int = 20) -> SolveResult:
+    """求解frame(靜力凝縮版本, 參考/回歸測試實作, 見本檔案開頭說明)。
+    如果模型裡有cable元素, 會自動反覆偵測+移除受壓的cable(鬆弛退出作用)
+    並重新求解, 直到收斂(沒有cable受壓)或達到max_iterations。"""
     has_cable = any(m.member_type == 'cable' for m in frame.members.values())
     if not has_cable:
         return _solve_once(frame, slack_cables=set())

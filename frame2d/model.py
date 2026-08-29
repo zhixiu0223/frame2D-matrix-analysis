@@ -103,10 +103,12 @@ class Frame2D:
         self.point_loads: list[PointLoad] = []
         self.distributed_loads: list[DistributedLoad] = []
         self.member_point_loads: list[MemberPointLoad] = []
+        self._node_index_cache: dict[int, int] = None   # node_id -> 緊湊的0-based索引, 延遲建立
 
     # ---- 建模 API ----
     def add_node(self, id: int, x: float, y: float):
         self.nodes[id] = Node(id, x, y)
+        self._node_index_cache = None   # 節點集合變了, 快取失效
         return self
 
     def add_section(self, name: str, E: float, I: float, A: float = 1e8):
@@ -174,8 +176,17 @@ class Frame2D:
     def n_dof(self) -> int:
         return 3 * len(self.nodes)
 
+    def node_index(self, node_id: int) -> int:
+        """node_id -> 緊湊的0-based索引(照節點加入順序編號, 不要求node_id本身
+        連續或從0開始)。這是dofs_of()底層真正的id->index對照表, 延遲建立+
+        快取(加新節點時失效重建)。"""
+        if self._node_index_cache is None:
+            self._node_index_cache = {nid: i for i, nid in enumerate(self.nodes.keys())}
+        return self._node_index_cache[node_id]
+
     def dofs_of(self, node_id: int) -> tuple[int, int, int]:
-        """節點node_id的三個全域自由度編號: (ux, uy, rot)
-        MVP: 假設節點 id 從 0 開始連續編號。若非連續,先在這裡建 id->index 對照表。
-        """
-        return (3 * node_id, 3 * node_id + 1, 3 * node_id + 2)
+        """節點node_id的三個全域自由度編號: (ux, uy, rot)。
+        node_id不需要連續或從0開始(內部透過node_index()對照到緊湊索引),
+        例如節點id用10,25,99也只會佔用9個DOF, 不會浪費空間到300個。"""
+        i = self.node_index(node_id)
+        return (3 * i, 3 * i + 1, 3 * i + 2)

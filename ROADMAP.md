@@ -108,7 +108,7 @@ M_A=-3EIΔ/L²(跟使用者自己的sd_framework同一種方法)。過程中因�
 反力公式沒處理(等同truss但沒有內部載重公式)。**這些限制只在主要求解器
 (靜力凝縮版本)上。**
 
-### Phase 4b: DOFManager版本 ✅ 已完成(交叉驗證用途)
+### Phase 4b: DOFManager版本 ✅ 已完成, 並已升格為主要求解器
 在`frame2d/dofmanager.py`實作了完全獨立的第二套求解路徑(不呼叫solve.py
 任何邏輯): 讓每個release端擁有自己專屬、不共用的轉角自由度, 而不是靠
 靜力凝縮修剪局部勁度矩陣。這樣就可以直接用「標準」(未修改過的)局部
@@ -120,16 +120,29 @@ M_A=-3EIΔ/L²(跟使用者自己的sd_framework同一種方法)。過程中因�
 交叉驗證抓的是「兩邊各自實作有沒有bug」, 不是驗證哪個物理模型才對。
 
 **額外好處**: 因為不需要「release專屬固定端反力公式」, DOFManager版本
-可以直接支援靜力凝縮版本目前還不支援的組合(桿件內部集中力加在release
-桿件上), 已用節點分割法獨立驗證過正確性。見
-`tests/test_dofmanager_vs_condensation.py`。
+可以直接支援靜力凝縮版本不支援的組合(桿件內部集中力加在release桿件上),
+已用節點分割法獨立驗證過正確性。見`tests/test_dofmanager_vs_condensation.py`。
 
-**目前狀態**: `dofmanager.py`是驗證/交叉比對用途的獨立模組, 還沒整合成
-主要求解器(`solve()`)的預設路徑——如果之後要擴充release桿件的載重支援
-(局部段/線性變化/桿件內部力), 有兩個選擇: (a)比照均佈載重的做法, 為每種
-組合個別推導release專屬固定端反力公式, 或(b)乾脆把DOFManager版本升級成
-主要求解器, 一次解決所有組合(不用再逐一推導公式)。哪個方向比較好,
-等真的有需求時再決定。
+**升格記錄**(2026-08-29): `frame2d/__init__.py`的`solve`這個公開名字
+現在指向`solve_dofmanager`(補上cable鬆弛迭代+跟`solve_condensation()`
+統一輸出格式`SolveResult`/`MemberResult`後才升格, 這兩件事之前是缺的,
+不是單純改名)。原本的靜力凝縮實作改名`solve_condensation()`, 保留當
+參考/回歸測試實作。**升格後全部27個既有測試(含所有SW FEA逐點比對案例)
+重跑一次確認零回歸**, 這等於是拿DOFManager重新過一次專案裡最嚴格的
+驗證關卡。
+
+同一批改動也順手把`dofs_of()`底層從`3*node_id`直接硬編碼, 改成
+`node_id -> 緊湊索引`的對照表(`Frame2D.node_index()`), 這樣node_id
+不用連續、不用從0開始(例如10,25,99這種id, 3個節點只佔用9個DOF, 不是
+300個)——因為`dofs_of()`本來就是設計成呼叫端不用管底層怎麼編號的抽象
+邊界(見model.py開頭的原始設計註解), 這次換掉底層實作完全不用改任何
+呼叫端。
+
+順便發現並修正一個真的問題: 17份測試檔案裡有16份是寫成「直接執行的
+腳本」風格(print+assert), 不是pytest的`def test_*()`函式, 導致單純
+執行`pytest`(不加參數)只會收集到11個測試, 漏掉16個檔案的驗證。已加
+`tests/test_zz_all_script_style_tests.py`當wrapper(用subprocess跑每支
+腳本、檢查exit code), 讓`pytest`能收集並執行全部27個測試。
 
 ## 暫緩/刻意不做的項目
 
