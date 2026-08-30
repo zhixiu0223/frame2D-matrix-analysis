@@ -18,6 +18,25 @@ def _member_endpoints(frame, member_id):
     return ni, nj
 
 
+def _draw_moment_arc(ax, x, y, m_value, radius, color):
+    """在(x,y)畫一個帶箭頭的弧形, 標示集中力矩的旋轉方向:
+    m>0(逆時針, CCW)畫↺, m<0(順時針, CW)畫↻。用matplotlib的FancyArrowPatch
+    畫270度弧線+箭頭, 弧線方向依m的正負決定。"""
+    from matplotlib.patches import FancyArrowPatch
+    from matplotlib.path import Path
+    theta1, theta2 = (-60, 210) if m_value > 0 else (210, -60)
+    n_pts = 30
+    thetas = np.linspace(np.radians(theta1), np.radians(theta2), n_pts)
+    arc_x = x + radius * np.cos(thetas)
+    arc_y = y + radius * np.sin(thetas)
+    ax.plot(arc_x, arc_y, color=color, lw=1.5, zorder=3)
+    # 箭頭畫在弧線末端, 方向沿著弧線切線
+    tip_x, tip_y = arc_x[-1], arc_y[-1]
+    prev_x, prev_y = arc_x[-2], arc_y[-2]
+    ax.annotate('', xy=(tip_x, tip_y), xytext=(prev_x, prev_y),
+                arrowprops=dict(arrowstyle='-|>', color=color, lw=1.5, mutation_scale=10), zorder=3)
+
+
 def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, show_dimensions=True):
     """① 結構尺寸圖 (可標註每根桿件長度 + 結構總寬/總高)"""
     if ax is None:
@@ -162,8 +181,10 @@ def plot_loads(frame, ax=None):
             extra_pts_x += [tail_x]
             extra_pts_y += [tail_y]
         if abs(pl.m) > 1e-9:
+            arc_r = scale * 0.06
+            _draw_moment_arc(ax, n.x, n.y, pl.m, arc_r, 'purple')
             ax.annotate(f'M={pl.m:.3g}', (n.x, n.y), color='purple', fontsize=8,
-                        xytext=(8, -12), textcoords='offset points')
+                        xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     for dl in frame.distributed_loads:
         ni, nj = _member_endpoints(frame, dl.member)
@@ -221,9 +242,11 @@ def plot_loads(frame, ax=None):
             extra_pts_x += [tail_x]
             extra_pts_y += [tail_y]
         if abs(pl.m) > 1e-9:
-            ax.annotate(f'm={pl.m:.3g}', (px, py), color='darkmagenta', fontsize=8,
-                        xytext=(8, -12), textcoords='offset points')
+            arc_r = scale * 0.06
             ax.plot(px, py, 'D', color='darkmagenta', ms=5, zorder=2)
+            _draw_moment_arc(ax, px, py, pl.m, arc_r, 'darkmagenta')
+            ax.annotate(f'm={pl.m:.3g}', (px, py), color='darkmagenta', fontsize=8,
+                        xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     # 直接手動計算範圍再 set_xlim/ylim, 比依賴 relim/autoscale 對 annotate 更可靠
     if extra_pts_x:
