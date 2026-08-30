@@ -13,6 +13,20 @@ offset, 看看能不能重現之前的殘差」。
   pin2_1: F6在start_dist=1(精確邊界, offset=0, 沒有offset)
   pin2_2: F5在start_dist=0.999975 -> offset=0.0001m
   pin2_3: F2在start_dist=2.5e-05  -> offset=0.0001m
+
+**重要澄清(事後補充, 對照test_a_over_L_1e1_to_1e4_vs_swfea.py時發現)**:
+這裡的offset是SW FEA檔案裡記錄的**固定絕對長度**0.0001m, 不是固定的a/L
+**比例**——直接套用到不同長度的桿件上, 換算出來的a/L是不一樣的:
+  F5(桿長4m): a/L = 0.0001/4 = 2.5e-5
+  F2(桿長4m): a/L = 0.0001/4 = 2.5e-5
+  F6(桿長6m): a/L = 0.0001/6 = 1.67e-5
+對照test_a_over_L_sweep_boundary.py精確定位的懸崖邊界(a/L=5e-5安全,
+a/L=4e-5開始惡化), **這裡全部三個a/L(2.5e-5, 2.5e-5, 1.67e-5)都已經
+落在懸崖裡面**(比4e-5還小), 所以這份測試量到的誤差(0.04~1.13)明顯比
+test_a_over_L_1e1_to_1e4_vs_swfea.py(用a/L=1e-4這個比例本身, 對F2換算
+offset=0.0004m, 比這裡的0.0001m大4倍, a/L=1e-4>4e-5, 落在懸崖外的安全
+區)量到的誤差(0.0002~0.0058)大上一個數量級以上。兩份測試結果並不
+矛盾, 是精確對應到a/L懸崖圖上不同的兩個位置, 互相佐證。
   pin2_4: F2+F6+F5三個同時, 都是offset=0.0001m
 
 用test_meaningful_length_split_vs_swfea.py裡驗證過完全正確的同一套
@@ -165,3 +179,20 @@ print("  frame2d的release_i/release_j(乾淨、不用offset)不受這個問題�
 print("  應該持續作為標準做法。\n")
 
 print("PASS: pin2_1~pin2_4用已驗證雙桿件方法+原始offset重新驗證完成")
+
+
+# ---- 補充驗證: 確認這裡用的offset=0.0001m, 換算成a/L後確實落在懸崖裡面 ----
+print()
+print("=== 補充: 這份測試用的offset(0.0001m)換算成a/L, 對照懸崖邊界 ===")
+member_lengths = {"F5": 4.0, "F2": 4.0, "F6": 6.0}
+cliff_lo, cliff_hi = 5e-5, 4e-5   # test_a_over_L_sweep_boundary.py精確定位的懸崖範圍
+for name, mlen in member_lengths.items():
+    a_over_L = OFF / mlen
+    inside_cliff = a_over_L < cliff_hi
+    print(f"  {name}(桿長{mlen}m): a/L={a_over_L:.2e}  "
+          f"{'落在懸崖裡面(<4e-5)' if inside_cliff else '在安全區'}")
+    assert inside_cliff, f"{name}的a/L應該落在懸崖裡面, 這正是本測試誤差偏大的原因"
+print("確認: 三根桿件用SW FEA記錄的固定絕對offset(0.0001m)換算出來的a/L")
+print("全部落在懸崖裡面, 這正是本測試誤差(0.04~1.13)比test_a_over_L_1e1_")
+print("to_1e4_vs_swfea.py(a/L=1e-4比例本身, 落在安全區)明顯偏大的原因。")
+print("兩份測試結果一致、互相佐證, 不是矛盾。")
