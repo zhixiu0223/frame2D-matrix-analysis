@@ -195,13 +195,18 @@ def plot_loads(frame, ax=None):
         n_arrows = 6
         max_w = max(abs(dl.w_start), abs(dl.w_end), 1e-9)
         arrow_len = scale * 0.08
+        # 箭頭方向: direction='local'(預設)畫在垂直於桿件的方向(局部+y);
+        # direction='global_y'畫成真正的全域垂直方向(向下), 不管桿件本身
+        # 斜不斜, 才不會誤導成"垂直於斜屋頂表面"
+        if dl.direction == 'global_y':
+            perp_x, perp_y = 0.0, -1.0   # 全域垂直向下, 固定方向不隨桿件角度變
+        else:
+            perp_x, perp_y = -s, c       # 局部+y方向(垂直於桿件)
         for k in range(n_arrows + 1):
             t = k / n_arrows
             wx = dl.w_start + (dl.w_end - dl.w_start) * t
             xt = x_start + (x_end - x_start) * t   # 只在[x_start,x_end]範圍內畫箭頭
             px, py = ni.x + xt * c, ni.y + xt * s
-            # 箭頭方向沿局部+y (perp to 桿件), 長度依載重大小比例
-            perp_x, perp_y = -s, c
             length = arrow_len * (wx / max_w) if max_w > 0 else 0
             tail_x, tail_y = px - perp_x * length, py - perp_y * length
             ax.annotate('', xy=(px, py), xytext=(tail_x, tail_y),
