@@ -20,8 +20,6 @@ slop-roof-snow.pdf報告顯示的支承反力(3.544/19.092/-6.243)對不起來;
 import os
 import matplotlib
 matplotlib.use('Agg')
-matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'DejaVu Sans']
-matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 import numpy as np
 from frame2d import Frame2D, solve
@@ -65,7 +63,9 @@ print(" 方向已用另一個獨立案例驗證過是對的, 這個落差目前�
 print(" 匯出時是舊快取, 需要重新在app裡觸發計算確認)")
 
 fig = plot_all(f, r, figsize=(15, 9))
-fig.suptitle("Part2: 不均勻雪載重屋頂 (屋脊0.2L沒有雪, 全域垂直方向已驗證)", fontsize=11)
+fig.suptitle("Part 2: Unbalanced Snow Load on Gable Roof "
+             "(top 0.2L near ridge unloaded, global-vertical direction validated)",
+             fontsize=11)
 fig.tight_layout()
 fig.savefig(f'{OUT}/snow_load_unbalanced.png', dpi=130)
 plt.close(fig)

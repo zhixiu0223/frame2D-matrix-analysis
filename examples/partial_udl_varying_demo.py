@@ -12,8 +12,6 @@ Part 1: 簡單模型驗證 -- 簡支梁中間段受"不均勻(線性變化/梯�
 import os
 import matplotlib
 matplotlib.use('Agg')
-matplotlib.rcParams['font.sans-serif'] = ['Noto Sans CJK JP', 'DejaVu Sans']
-matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 from frame2d import Frame2D, solve
 from frame2d.plotting import plot_all
@@ -58,7 +56,8 @@ print(f"  node0(pin):    Ry={r.reactions[uy0]:.4f}  (純靜力學解析解={R0_e
 print(f"  node1(roller): Ry={r.reactions[uy1]:.4f}  (純靜力學解析解={R1_exact:.4f})")
 
 fig = plot_all(f, r, figsize=(15, 9))
-fig.suptitle("Part1: 簡支梁中間段不均勻(梯形)分布力 -10→-30 kN/m", fontsize=11)
+fig.suptitle("Part 1: Simply-Supported Beam, Non-Uniform (Trapezoidal) "
+             "Midspan Load -10 to -30 kN/m", fontsize=11)
 fig.tight_layout()
 fig.savefig(f'{OUT}/partial_udl_varying.png', dpi=130)
 plt.close(fig)
