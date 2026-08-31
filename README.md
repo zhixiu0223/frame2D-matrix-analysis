@@ -269,6 +269,45 @@ Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭�
 | a/L比例掃描(雙桿件模擬鉸接的數值邊界) | 乾淨release_j(理論極限值) | 安全區(a/L>=5e-5)誤差<0.001, 懸崖(a/L<4e-5)誤差放大66倍以上 |
 | 全域垂直均佈載重(斜屋頂, direction='global_y', 4桿件x11點N/V/M) | SW FEA 第三方工具 | 誤差<0.0005(報告小數位精度範圍) |
 
+### SW FEA 作為驗證基準的適用範圍
+
+SW FEA 2D Frame Analysis(手機app)在這個專案裡被大量拿來當第三方驗證
+工具, 但它本身不是萬用的oracle——經過一系列調查(完整過程見對話紀錄,
+這裡只記結論), 它的可靠範圍是有邊界的:
+
+| 功能 | 判斷 | 證據 |
+|---|---|---|
+| 整根桿件均佈載重 | ✅ 可靠 | frame2d + SW FEA 精確吻合 |
+| 整根桿件梯形(線性變化)載重 | ✅ 可靠 | 多案例吻合, 含真實app截圖+`.frame`資料庫匯出比對 |
+| 局部段(partial-length)載重 + 非0/±90度角度 | ⚠️ 不可靠 | 最小案例(單一斜桿)即可重現偏差; 對稱結構+對稱載重時給出違反鏡射對稱定理的結果, 見`tests/validation/test_swfea_symmetry.py` |
+| 局部段載重 → 插入真實節點繞開 | ✅ 可靠 | SW FEA(插入節點後) + frame2d + anastruct + PyNiteFEA 四方吻合, 見`tests/validation/test_swfea_partial_load_split.py` |
+| 內部鉸接, frame2d原生release_i/release_j | ✅ 可靠 | SW FEA吻合, 見`test_element_release_vs_swfea.py` |
+| 內部鉸接, SW FEA用短桿件模擬pin | ⚠️ 有數值病態風險 | a/L比例掃描發現懸崖區間(a/L<4e-5時誤差反轉暴增66倍以上), SW FEA實際使用的offset剛好落在懸崖裡, 見`test_a_over_L_sweep_boundary.py` |
+
+重點不是「SW FEA是不是好軟體」, 而是「SW FEA哪些功能可以拿來當
+verification oracle, 哪些不能」——這比單純説某個工具有bug更有工程
+價值, 也是為什麼局部段載重的調查最後停在「已知道可靠的建模邊界與
+workaround」, 而不是聲稱已經抓到SW FEA內部演算法哪一行出錯。
+
+*English summary: SW FEA 2D Frame Analysis was used as an external
+reference for selected cases. Full-member distributed loads (uniform
+or trapezoidal) showed agreement with frame2d to 4 decimal places.
+For partial-member distributed loads combined with a non-trivial load
+angle, direct SW FEA results were inconsistent with three independent
+FEM solvers (frame2d, anastruct, PyNiteFEA) and violated the
+mirror-symmetry theorem for a symmetric structure under symmetric
+load. Equivalent split-node models (inserting real nodes at the
+partial-load boundary, converting it into a full-member load on a
+sub-member) restored agreement across all four tools. Therefore,
+partial-member load input in SW FEA is not used as a primary
+validation reference — the split-node workaround is used instead
+when SW FEA cross-validation is needed for such cases.*
+
+驗證矩陣的完整測試檔案在 `tests/validation/`, 每個檔案對應上表一個
+判斷分類(full_member_load / partial_load_split / internal_pin /
+symmetry), 用來當這個專案「哪個功能維度被什麼獨立方法驗證過」的
+索引入口, 不是重新推導一次過程(過程在各自原始的`tests/`測試檔案裡)。
+
 ## 桁架(truss)元素
 
 `f.add_truss(id, node_i, node_j, section)` 建立兩端鉸接、只傳軸力的桁架元素
