@@ -196,10 +196,13 @@ def plot_loads(frame, ax=None):
         max_w = max(abs(dl.w_start), abs(dl.w_end), 1e-9)
         arrow_len = scale * 0.08
         # 箭頭方向: direction='local'(預設)畫在垂直於桿件的方向(局部+y);
-        # direction='global_y'畫成真正的全域垂直方向(向下), 不管桿件本身
+        # direction='global_y'或'global'畫成真正的全域方向, 不管桿件本身
         # 斜不斜, 才不會誤導成"垂直於斜屋頂表面"
         if dl.direction == 'global_y':
             perp_x, perp_y = 0.0, -1.0   # 全域垂直向下, 固定方向不隨桿件角度變
+        elif dl.direction == 'global':
+            ang = np.radians(dl.angle_deg)
+            perp_x, perp_y = np.cos(ang), np.sin(ang)   # 全域任意角度, 固定方向不隨桿件角度變
         else:
             perp_x, perp_y = -s, c       # 局部+y方向(垂直於桿件)
         for k in range(n_arrows + 1):
