@@ -36,7 +36,9 @@ from .elements import (
     transformation_matrix,
     fixed_end_forces_udl,
     fixed_end_forces_axial_udl,
+    fixed_end_forces_axial_udl_varying,
     fixed_end_forces_partial_udl,
+    fixed_end_forces_axial_partial_udl,
     fixed_end_forces_point_load,
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
@@ -108,19 +110,44 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
         m = frame.members[dl.member]
         L = member_L[dl.member]
         if dl.direction == 'global_y':
-            # 全域垂直方向均佈載重(大小以沿桿件長度量測, 例如屋頂重力/
-            # 雪載重的標準表示方式): 依桿件角度分解成局部x(軸向)+局部y
-            # (橫向)兩個分量的固定端反力, 直接相加。推導見elements.py的
-            # fixed_end_forces_axial_udl()說明, 已用slop-roof案例對照
+            # 全域垂直方向均佈/線性變化載重(大小以沿桿件長度量測, 例如
+            # 屋頂重力/雪載重的標準表示方式): 依桿件角度分解成局部x(軸向)
+            # +局部y(橫向)兩個分量的固定端反力, 直接相加。推導見elements.py
+            # 的fixed_end_forces_axial_udl()說明, 已用slop-roof案例對照
             # SW FEA驗證過, 見tests/test_sloped_roof_global_udl.py。
             # 全域載重向量(0,-w)旋轉到局部座標: 直接用該桿件的T矩陣左上角
             # 2x2(平移自由度的旋轉部分)做向量旋轉, 不用另外手動算cos/sin。
-            w = dl.w_start
+            # w_start/w_end可以不同(非均勻/線性變化, 例如不均勻雪載重):
+            # 桿件是直的, 角度沿桿長不變, 所以兩端各自投影到局部座標後,
+            # 局部x、局部y分量沿桿長仍然各自是線性函數, 分開分解、分開
+            # 代入線性變化公式即可(見model.py的DistributedLoad說明)。
             T_mat = member_T[dl.member]
-            local_vec = T_mat[0:2, 0:2] @ np.array([0.0, -w])
-            w_local_x, w_local_y = local_vec[0], local_vec[1]
-            f_FE_local = (fixed_end_forces_udl(w_local_y, w_local_y, L)
-                          + fixed_end_forces_axial_udl(w_local_x, L))
+            R = T_mat[0:2, 0:2]
+            local_start = R @ np.array([0.0, -dl.w_start])
+            local_end = R @ np.array([0.0, -dl.w_end])
+            wx_start, wy_start = local_start[0], local_start[1]
+            wx_end, wy_end = local_end[0], local_end[1]
+            f_FE_local = (fixed_end_forces_udl(wy_start, wy_end, L)
+                          + fixed_end_forces_axial_udl_varying(wx_start, wx_end, L))
+        elif dl.direction == 'global':
+            # 全域"任意角度"均佈載重(global_y的推廣版, 見model.py的
+            # DistributedLoad說明): 用angle_deg指定角度(標準數學慣例),
+            # 支援局部段(x_start/x_end)+線性變化的任意組合, 用跟
+            # fixed_end_forces_partial_udl()同一套高斯積分手法分開處理
+            # 局部x(fixed_end_forces_axial_partial_udl)、局部y(既有
+            # fixed_end_forces_partial_udl)。
+            x_start = 0.0 if dl.x_start is None else dl.x_start
+            x_end = L if dl.x_end is None else dl.x_end
+            ang = np.radians(dl.angle_deg)
+            u_global = np.array([np.cos(ang), np.sin(ang)])
+            T_mat = member_T[dl.member]
+            R = T_mat[0:2, 0:2]
+            local_start = R @ (u_global * dl.w_start)
+            local_end = R @ (u_global * dl.w_end)
+            wx_start, wy_start = local_start[0], local_start[1]
+            wx_end, wy_end = local_end[0], local_end[1]
+            f_FE_local = (fixed_end_forces_partial_udl(wy_start, wy_end, x_start, x_end, L)
+                          + fixed_end_forces_axial_partial_udl(wx_start, wx_end, x_start, x_end, L))
         else:
             x_start = 0.0 if dl.x_start is None else dl.x_start
             x_end = L if dl.x_end is None else dl.x_end

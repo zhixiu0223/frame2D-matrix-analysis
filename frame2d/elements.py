@@ -143,6 +143,31 @@ def fixed_end_forces_axial_udl(w, L):
     return np.array([Fx, 0.0, 0.0, Fx, 0.0, 0.0])
 
 
+def fixed_end_forces_axial_udl_varying(w_start, w_end, L):
+    """局部座標系下, 沿桿件局部+x方向(軸向)的"線性變化"分布載重固定端反力。
+    是fixed_end_forces_axial_udl()的推廣版(w_start=w_end時退化為它)。
+
+    推導: 桿件軸向自由度用標準2節點線性形狀函數 N1=1-x/L, N2=x/L
+    (跟fixed_end_forces_udl()橫向部分的三次Hermite形狀函數不同, 軸向本來
+    就只需要線性形狀函數, 這是桁架/桿件軸向自由度的標準做法), 對線性變化
+    載重w(x)=w_start+(w_end-w_start)*x/L做work-equivalent consistent load
+    積分: Fi = ∫ w(x) Ni(x) dx。積分結果(標準FEM教科書公式):
+      Fx1 = L/6 * (2*w_start + w_end)
+      Fx2 = L/6 * (w_start + 2*w_end)
+    退化檢查: w_start=w_end=w時, Fx1=Fx2=L/6*3w=wL/2, 精確等於
+    fixed_end_forces_axial_udl()的結果。
+
+    用途: distributed_load(direction='global_y')支援w_start!=w_end(非均勻
+    屋頂/雪載重)時, 全域垂直方向的線性變化載重拆成局部x(軸向,線性變化)+
+    局部y(橫向,線性變化, 套用既有fixed_end_forces_udl)兩個分量, 這條公式
+    負責軸向那一半。獨立驗證見tests/test_global_y_varying_snow_load.py
+    (細網格分段模型收斂交叉驗證, 不是自己驗自己)。
+    """
+    Fx1 = L / 6.0 * (2.0 * w_start + w_end)
+    Fx2 = L / 6.0 * (w_start + 2.0 * w_end)
+    return np.array([Fx1, 0.0, 0.0, Fx2, 0.0, 0.0])
+
+
 def fixed_end_forces_udl(w_start, w_end, L):
     """局部座標系下,垂直均佈/線性變化載重的固定端反力(彎矩+剪力)。
     符號慣例: w 沿局部 +y 方向為正。
@@ -260,6 +285,23 @@ def fixed_end_forces_partial_udl(w_start, w_end, c, d, L):
     for si, wi in zip(s_vals, _GAUSS_WEIGHTS):
         w_si = w_start + (w_end - w_start) * (si - c) / (d - c)
         f_FE += wi * jac * fixed_end_forces_point_load(w_si, si, L)
+    return f_FE
+
+
+def fixed_end_forces_axial_partial_udl(w_start, w_end, c, d, L):
+    """局部座標系下, 桿件內部局部段[c,d]的"線性變化軸向"分布載重固定端反力。
+    是fixed_end_forces_axial_udl_varying()的局部段推廣版(c=0,d=L時應退化
+    成它), 手法跟fixed_end_forces_partial_udl()完全一致: 用高斯積分對
+    fixed_end_forces_axial_point_load()在[c,d]積分, 不是近似。
+    """
+    if d <= c:
+        return np.zeros(6)
+    jac = 0.5 * (d - c)
+    s_vals = jac * _GAUSS_NODES + 0.5 * (d + c)
+    f_FE = np.zeros(6)
+    for si, wi in zip(s_vals, _GAUSS_WEIGHTS):
+        w_si = w_start + (w_end - w_start) * (si - c) / (d - c)
+        f_FE += wi * jac * fixed_end_forces_axial_point_load(w_si, si, L)
     return f_FE
 
 
