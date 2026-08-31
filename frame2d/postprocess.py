@@ -129,6 +129,20 @@ def member_internal_forces(frame, result, member_id, n=21):
             w_local_y = c_ang * (-dl.w_start)
             ranges.append((w_local_y, w_local_y, c, d))
             axial_ranges.append((w_local_x, w_local_x, c, d))
+        elif dl.direction == 'global':
+            # 全域任意角度載重(global_y的推廣版, 支援局部段+線性變化,
+            # 見model.py的DistributedLoad說明), 跟dofmanager.py組裝時
+            # 同一套分解邏輯: 兩端分開投影到局部x/y座標。
+            ni, nj = frame.nodes[m_obj.node_i], frame.nodes[m_obj.node_j]
+            _, angle = member_geometry(ni, nj)
+            c_ang, s_ang = np.cos(angle), np.sin(angle)
+            ang = np.radians(dl.angle_deg)
+            u_global = np.array([np.cos(ang), np.sin(ang)])
+            R = np.array([[c_ang, s_ang], [-s_ang, c_ang]])
+            local_start = R @ (u_global * dl.w_start)
+            local_end = R @ (u_global * dl.w_end)
+            ranges.append((local_start[1], local_end[1], c, d))
+            axial_ranges.append((local_start[0], local_end[0], c, d))
         else:
             ranges.append((dl.w_start, dl.w_end, c, d))
 
