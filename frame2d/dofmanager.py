@@ -198,6 +198,7 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
         reactions=R[:n_node_dof],
         member_results=member_results,
         slack_cables=set(slack_cables),
+        frame=frame,
     )
 
 

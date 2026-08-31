@@ -253,7 +253,7 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
             end_forces_local=end_forces_local, slack=False)
 
     return SolveResult(displacements=u, reactions=R, member_results=member_results,
-                        slack_cables=set(slack_cables))
+                        slack_cables=set(slack_cables), frame=frame)
 
 
 def solve_condensation(frame: Frame2D, max_iterations: int = 20) -> SolveResult:

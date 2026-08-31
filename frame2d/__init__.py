@@ -1,11 +1,13 @@
 from .model import Frame2D, Node, Section, Member, Support, PointLoad, DistributedLoad
 from .result import SolveResult, MemberResult
+from .query import ExtremeValue, MemberQuery
 from .solve import solve_condensation
 from .dofmanager import solve_dofmanager as solve   # 順序很重要: 見下方note
 
 __all__ = [
     "Frame2D", "Node", "Section", "Member", "Support", "PointLoad", "DistributedLoad",
     "solve", "solve_condensation", "SolveResult", "MemberResult",
+    "ExtremeValue", "MemberQuery",
 ]
 
 # note: `from .solve import ...` 這一行本身有個Python import機制的副作用

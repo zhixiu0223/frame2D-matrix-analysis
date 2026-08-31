@@ -117,6 +117,30 @@ rot=)`可以直接設定沉陷量。核心公式從`K_ff u_f = F_f`(劃掉拘束
 ~1e-13~1e-15, 浮點精度等級)。見`tests/test_element_release.py`、
 `tests/test_element_release_vs_swfea.py`、`tests/test_dofmanager_vs_condensation.py`。
 
+## Result API — 便利查詢介面
+
+`solve()`/`solve_condensation()` 回傳的 `SolveResult` 帶有 `frame` 欄位,
+可以直接用便利方法查詢, 不用自己呼叫 `member_internal_forces` + 手動
+`np.interp`:
+
+```python
+r = solve(frame)
+r.max_moment()                    # 全結構|M|最大值, 回傳ExtremeValue(value, member_id, x)
+r.max_shear()                     # 全結構|V|最大值
+r.max_axial()                     # 全結構|N|最大值
+r.max_displacement()              # 全結構最大變形量(沿桿件全長找, 不是只看節點,
+                                   # 跟plot_all()畫的Δmax標籤定義一致)
+r.member(5).moment_at(2.3)        # 5號桿件在局部座標x=2.3m處的彎矩
+r.member(5).shear_at(2.3)
+r.member(5).axial_at(2.3)
+r.member(5).deflection_at(2.3)    # 偏離原始直線的距離
+r.member(5).max_moment()          # 只看這根桿件自己的最大值(不是全結構)
+```
+
+這是純粹的介面整理, 底層還是同一套已驗證公式(member_internal_forces/
+member_deformed_shape), 見`tests/test_result_api.py`(對照解析解+跟
+底層函式手動查詢逐一比對+多桿件全域最大值掃描+鬆弛cable自動跳過)。
+
 ## 兩套求解器: solve() 跟 solve_condensation()
 
 ### 內部鉸接的建模方式選擇 (使用邊界)
