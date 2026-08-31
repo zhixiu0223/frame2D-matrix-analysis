@@ -35,6 +35,7 @@ from .elements import (
     member_stiffness_local_truss,
     transformation_matrix,
     fixed_end_forces_udl,
+    fixed_end_forces_axial_udl,
     fixed_end_forces_partial_udl,
     fixed_end_forces_point_load,
     fixed_end_forces_point_moment,
@@ -106,12 +107,27 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
     for dl in frame.distributed_loads:
         m = frame.members[dl.member]
         L = member_L[dl.member]
-        x_start = 0.0 if dl.x_start is None else dl.x_start
-        x_end = L if dl.x_end is None else dl.x_end
-        if x_start <= 1e-9 and x_end >= L - 1e-9:
-            f_FE_local = fixed_end_forces_udl(dl.w_start, dl.w_end, L)
+        if dl.direction == 'global_y':
+            # 全域垂直方向均佈載重(大小以沿桿件長度量測, 例如屋頂重力/
+            # 雪載重的標準表示方式): 依桿件角度分解成局部x(軸向)+局部y
+            # (橫向)兩個分量的固定端反力, 直接相加。推導見elements.py的
+            # fixed_end_forces_axial_udl()說明, 已用slop-roof案例對照
+            # SW FEA驗證過, 見tests/test_sloped_roof_global_udl.py。
+            # 全域載重向量(0,-w)旋轉到局部座標: 直接用該桿件的T矩陣左上角
+            # 2x2(平移自由度的旋轉部分)做向量旋轉, 不用另外手動算cos/sin。
+            w = dl.w_start
+            T_mat = member_T[dl.member]
+            local_vec = T_mat[0:2, 0:2] @ np.array([0.0, -w])
+            w_local_x, w_local_y = local_vec[0], local_vec[1]
+            f_FE_local = (fixed_end_forces_udl(w_local_y, w_local_y, L)
+                          + fixed_end_forces_axial_udl(w_local_x, L))
         else:
-            f_FE_local = fixed_end_forces_partial_udl(dl.w_start, dl.w_end, x_start, x_end, L)
+            x_start = 0.0 if dl.x_start is None else dl.x_start
+            x_end = L if dl.x_end is None else dl.x_end
+            if x_start <= 1e-9 and x_end >= L - 1e-9:
+                f_FE_local = fixed_end_forces_udl(dl.w_start, dl.w_end, L)
+            else:
+                f_FE_local = fixed_end_forces_partial_udl(dl.w_start, dl.w_end, x_start, x_end, L)
         fixed_end_local[dl.member] = fixed_end_local.get(dl.member, np.zeros(6)) + f_FE_local
         F[np.array(member_dofs[dl.member])] += member_T[dl.member].T @ f_FE_local
 

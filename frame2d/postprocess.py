@@ -41,6 +41,8 @@
 """
 import numpy as np
 
+from .elements import member_geometry
+
 
 def _w_at(w_start, w_end, x, L):
     return w_start + (w_end - w_start) * x / L
@@ -106,11 +108,29 @@ def member_internal_forces(frame, result, member_id, n=21):
     Fx1, Fy1, M1 = mr.end_forces_local[0], mr.end_forces_local[1], mr.end_forces_local[2]
 
     dls = [dl for dl in frame.distributed_loads if dl.member == member_id]
-    ranges = []
+    ranges = []       # 局部y方向(橫向)的均佈載重範圍, 影響V(x)/M(x)
+    axial_ranges = []  # 局部x方向(軸向)的均佈載重範圍, 影響N(x)
+    m_obj = frame.members[member_id]
     for dl in dls:
         c = 0.0 if dl.x_start is None else dl.x_start
         d = L if dl.x_end is None else dl.x_end
-        ranges.append((dl.w_start, dl.w_end, c, d))
+        if dl.direction == 'global_y':
+            # 全域垂直方向載重, 依桿件角度分解成局部x(軸向)+局部y(橫向)
+            # 兩個分量(跟dofmanager.py組裝時用的同一套分解邏輯, 用T矩陣
+            # 對(0,-w)向量做旋轉)。direction='global_y'目前只支援均佈+
+            # 整根桿件(model.py的DistributedLoad.__post_init__已經擋掉
+            # 其他組合), 所以這裡c,d必然是0,L, w_start=w_end。
+            ni, nj = frame.nodes[m_obj.node_i], frame.nodes[m_obj.node_j]
+            _, angle = member_geometry(ni, nj)
+            c_ang, s_ang = np.cos(angle), np.sin(angle)
+            # 局部 = R(-angle) @ 全域, R(-angle)= [[cosθ, sinθ],[-sinθ, cosθ]];
+            # 全域載重向量固定是(0, -w)(垂直向下, 大小w)
+            w_local_x = s_ang * (-dl.w_start)
+            w_local_y = c_ang * (-dl.w_start)
+            ranges.append((w_local_y, w_local_y, c, d))
+            axial_ranges.append((w_local_x, w_local_x, c, d))
+        else:
+            ranges.append((dl.w_start, dl.w_end, c, d))
 
     x = np.linspace(0, L, n)
     eps = L * 1e-6
@@ -124,6 +144,12 @@ def member_internal_forces(frame, result, member_id, n=21):
         x = np.unique(np.concatenate([x, extra]))
 
     N = np.full(x.shape, -Fx1)   # 拉力為正的工程慣例 (Fx1本身是"壓力為正", 取負號校正)
+    for w_start, w_end, c, d in axial_ranges:
+        # 軸向均佈載重造成N(x)線性變化: N(x) = -Fx1 - (累加軸向載重)
+        # (減號: Fx1本身已經是壓力為正的節點力慣例, 這裡的累加項要跟它同一套
+        # 慣例, 才能先加總再一起取負號校正成拉力為正; 已用slop-roof案例
+        # 對照SW FEA的N(x)逐點資料驗證過, 見tests/test_sloped_roof_global_udl.py)
+        N -= _partial_load_W(w_start, w_end, c, d, x)
     W = np.zeros_like(x)
     Mcum = np.zeros_like(x)
     for w_start, w_end, c, d in ranges:

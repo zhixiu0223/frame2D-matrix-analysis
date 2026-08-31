@@ -66,16 +66,32 @@ class PointLoad:
 class DistributedLoad:
     """垂直於桿件局部y方向的均佈載重 (正值 = 沿局部+y方向)。
     預設整根桿件都有(x_start=None -> 0, x_end=None -> 桿件全長L);
-    可以指定x_start/x_end只加在桿件的局部一段(0<=x_start<=x_end<=L)。"""
+    可以指定x_start/x_end只加在桿件的局部一段(0<=x_start<=x_end<=L)。
+
+    direction='local'(預設, 既有行為): w就是局部+y方向的分量, 跟桿件
+    本身的角度無關。
+    direction='global_y': w代表"沿全域垂直方向, 大小以沿桿件長度量測"
+    的均佈載重(例如屋頂重力/雪載重的標準表示方式: 不管桿件本身斜不斜,
+    每公尺桿長多重, 方向永遠垂直向下)。桿件是斜的時候, 這種載重會同時
+    產生局部x(軸向)+局部y(橫向)分量, 由solve.py/dofmanager.py在組裝
+    時依桿件角度自動分解(見fixed_end_forces_axial_udl的說明)。
+    目前direction='global_y'只支援均佈(w_start=w_end)+整根桿件, 不支援
+    局部段/線性變化, 需要時再擴充。"""
     member: int
     w_start: float   # kN/m 或對應單位
     w_end: float = None  # None = 均佈 (w_end = w_start)
     x_start: float = None   # None = 0 (從node_i開始)
     x_end: float = None     # None = 桿件全長 (到node_j為止)
+    direction: str = 'local'   # 'local' 或 'global_y'
 
     def __post_init__(self):
         if self.w_end is None:
             self.w_end = self.w_start
+        if self.direction == 'global_y' and (self.w_start != self.w_end or
+                                              self.x_start is not None or self.x_end is not None):
+            raise ValueError(
+                "direction='global_y' 目前只支援均佈(w_start=w_end)+整根桿件, "
+                "不支援局部段或線性變化(需要時再擴充)")
 
 
 @dataclass
@@ -159,10 +175,15 @@ class Frame2D:
         return self
 
     def distributed_load(self, member: int, w: float, w_end: float = None,
-                          x_start: float = None, x_end: float = None):
+                          x_start: float = None, x_end: float = None,
+                          direction: str = 'local'):
         """均佈/線性變化載重。預設(x_start=x_end=None)整根桿件都有;
-        指定x_start/x_end可以只加在桿件的局部一段(局部座標, 0<=x_start<=x_end<=L)。"""
-        self.distributed_loads.append(DistributedLoad(member, w, w_end, x_start, x_end))
+        指定x_start/x_end可以只加在桿件的局部一段(局部座標, 0<=x_start<=x_end<=L)。
+        direction='local'(預設): w是局部+y方向分量。
+        direction='global_y': w代表沿全域垂直方向、大小以沿桿件長度量測的
+        載重(屋頂重力/雪載重的標準表示方式), 只支援均佈+整根桿件。"""
+        self.distributed_loads.append(
+            DistributedLoad(member, w, w_end, x_start, x_end, direction))
         return self
 
     def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):

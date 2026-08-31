@@ -105,6 +105,11 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
     # ---- 2. 分佈載重 -> 固定端反力 -> 等效節點載重疊加進F ----
     for dl in frame.distributed_loads:
         m = frame.members[dl.member]
+        if dl.direction == 'global_y':
+            raise ValueError(
+                f"member {dl.member} 的分佈載重用了direction='global_y', 靜力凝縮"
+                " 版本(參考實作)目前還沒實作這個組合, 只有主要求解器solve()支援。"
+                " 請改用solve()。")
         if m.member_type in ('truss', 'cable'):
             raise ValueError(
                 f"member {dl.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"

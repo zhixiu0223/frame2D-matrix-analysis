@@ -129,6 +129,20 @@ def member_stiffness_global(section, node_i, node_j, member_type='frame', releas
     return k_global, L, angle, T
 
 
+def fixed_end_forces_axial_udl(w, L):
+    """局部座標系下, 沿桿件局部+x方向(軸向)的均佈載重固定端反力。
+    符號慣例跟fixed_end_forces_udl(局部+y方向)一致: w沿局部+x方向為正,
+    直接照wL/2對稱分配到兩端(對稱結構受對稱載重, 反力必然對半分, 這是
+    基本靜力學, 不需要額外的sympy推導或符號校正)。
+    這是給"任意角度均佈載重"(distributed_load的direction='global')功能
+    用的: 桿件是斜的時候, 全域垂直方向的載重要拆成局部x(軸向)+局部y
+    (橫向)兩個分量, 局部y分量套用既有的fixed_end_forces_udl, 局部x分量
+    套用這條新公式, 兩者的固定端反力向量直接相加。
+    """
+    Fx = w * L / 2.0
+    return np.array([Fx, 0.0, 0.0, Fx, 0.0, 0.0])
+
+
 def fixed_end_forces_udl(w_start, w_end, L):
     """局部座標系下,垂直均佈/線性變化載重的固定端反力(彎矩+剪力)。
     符號慣例: w 沿局部 +y 方向為正。
