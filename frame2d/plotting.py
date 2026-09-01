@@ -230,22 +230,32 @@ def plot_loads(frame, ax=None):
         L, angle = member_geometry(ni, nj)
         c, s = np.cos(angle), np.sin(angle)
         px, py = ni.x + pl.a * c, ni.y + pl.a * s   # 桿件內部位置(局部座標a換算成全域座標)
-        mag = np.hypot(pl.fx, pl.fy)
-        if mag > 1e-9:
+        if pl.direction == 'global':
+            # direction='global': F+angle_deg直接就是全域方向, 不用像
+            # local模式那樣把局部fx/fy轉回全域(這裡沒有局部分量可轉,
+            # pl.fx/pl.fy在這個模式下固定是0)
+            mag = pl.F
+            ang = np.radians(pl.angle_deg)
+            gdx, gdy = np.cos(ang) * mag, np.sin(ang) * mag
+            label = f'F={pl.F:.3g}@{pl.angle_deg:.0f}°'
+        else:
+            mag = np.hypot(pl.fx, pl.fy)
             # fx,fy是局部座標分量, 換算成全域方向畫箭頭
             gdx = pl.fx * c - pl.fy * s
             gdy = pl.fx * s + pl.fy * c
-            Larrow = scale * 0.15
-            dx, dy = gdx / mag * Larrow, gdy / mag * Larrow
-            tail_x, tail_y = px - dx, py - dy
-            ax.annotate('', xy=(px, py), xytext=(tail_x, tail_y),
-                        arrowprops=dict(arrowstyle='->', color='crimson', lw=2))
             parts = []
             if abs(pl.fx) > 1e-9:
                 parts.append(f'fx={pl.fx:.3g}')
             if abs(pl.fy) > 1e-9:
                 parts.append(f'fy={pl.fy:.3g}')
-            ax.annotate(', '.join(parts), (tail_x, tail_y), color='crimson', fontsize=8,
+            label = ', '.join(parts)
+        if mag > 1e-9:
+            Larrow = scale * 0.15
+            dx, dy = gdx / mag * Larrow, gdy / mag * Larrow
+            tail_x, tail_y = px - dx, py - dy
+            ax.annotate('', xy=(px, py), xytext=(tail_x, tail_y),
+                        arrowprops=dict(arrowstyle='->', color='crimson', lw=2))
+            ax.annotate(label, (tail_x, tail_y), color='crimson', fontsize=8,
                         ha='center', xytext=(0, -10 if dy >= 0 else 10), textcoords='offset points')
             extra_pts_x += [tail_x]
             extra_pts_y += [tail_y]
