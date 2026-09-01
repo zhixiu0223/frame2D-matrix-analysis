@@ -163,10 +163,21 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
         L = member_L[pl_m.member]
         a = min(max(pl_m.a, 0.0), L)
         f_FE_local = np.zeros(6)
-        if abs(pl_m.fx) > 0:
-            f_FE_local += fixed_end_forces_axial_point_load(pl_m.fx, a, L)
-        if abs(pl_m.fy) > 0:
-            f_FE_local += fixed_end_forces_point_load(pl_m.fy, a, L)
+        if pl_m.direction == 'global':
+            # 全域任意角度集中力(跟distributed_load的direction='global'
+            # 同一套分解邏輯): 用該桿件的T矩陣把全域方向向量旋轉成局部分量
+            ang = np.radians(pl_m.angle_deg)
+            u_global = np.array([np.cos(ang), np.sin(ang)])
+            T_mat = member_T[pl_m.member]
+            R = T_mat[0:2, 0:2]
+            local_vec = R @ (u_global * pl_m.F)
+            fx_local, fy_local = local_vec[0], local_vec[1]
+        else:
+            fx_local, fy_local = pl_m.fx, pl_m.fy
+        if abs(fx_local) > 0:
+            f_FE_local += fixed_end_forces_axial_point_load(fx_local, a, L)
+        if abs(fy_local) > 0:
+            f_FE_local += fixed_end_forces_point_load(fy_local, a, L)
         if abs(pl_m.m) > 0:
             f_FE_local += fixed_end_forces_point_moment(pl_m.m, a, L)
         fixed_end_local[pl_m.member] = fixed_end_local.get(pl_m.member, np.zeros(6)) + f_FE_local

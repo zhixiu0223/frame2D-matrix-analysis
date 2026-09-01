@@ -175,10 +175,21 @@ def member_internal_forces(frame, result, member_id, n=21):
     for pl in frame.member_point_loads:
         if pl.member != member_id:
             continue
+        if pl.direction == 'global':
+            # 全域任意角度集中力: 依桿件角度分解成局部fx/fy(跟前面
+            # distributed_load(direction='global_y')的分解邏輯一致,
+            # 用mr.angle算cos/sin, 不用另外查member_T)
+            c_ang, s_ang = np.cos(mr.angle), np.sin(mr.angle)
+            ang = np.radians(pl.angle_deg)
+            ux_g, uy_g = np.cos(ang), np.sin(ang)
+            fx_local = c_ang * ux_g * pl.F + s_ang * uy_g * pl.F
+            fy_local = -s_ang * ux_g * pl.F + c_ang * uy_g * pl.F
+        else:
+            fx_local, fy_local = pl.fx, pl.fy
         step = (x >= pl.a - 1e-12).astype(float)
-        N += -pl.fx * step
-        V += pl.fy * step
-        M += pl.fy * np.clip(x - pl.a, 0, None)
+        N += -fx_local * step
+        V += fy_local * step
+        M += fy_local * np.clip(x - pl.a, 0, None)
         M += -pl.m * step
 
     return x, N, V, M

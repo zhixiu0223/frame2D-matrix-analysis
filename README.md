@@ -246,6 +246,21 @@ member, w, direction='global', angle_deg=...)` 用`angle_deg`指定全域角度
   分量,見`test_case08_vs_swfea.py`)——P1/P2 水平點載重沿全域 +x(向右),
   均佈載重沿全域 -y(向下),反力 Rx/Ry/M 三個分量、節點位移 dX/dY 全部直接對上。
 
+## 集中力的角度便利介面
+
+`point_load`/`member_point_load` 也補上跟`distributed_load(direction=
+'global')`同一套模式的角度便利介面, 不用自己手動分解fx/fy:
+
+- `point_load(node, F=10.0, angle_deg=-90.0)`: fx/fy本來就是全域座標,
+  這只是「大小+角度」的便利寫法, 算出fx,fy後跟原本手動填的fx/fy直接相加。
+- `member_point_load(member, a, direction='global', F=10.0, angle_deg=-90.0)`:
+  fx/fy是該桿件自己的局部座標, `direction='global'`時改用F+angle_deg
+  指定全域方向, 依桿件角度自動分解(跟`distributed_load(direction=
+  'global')`同一套旋轉邏輯)。這個模式下fx/fy不能同時使用。只有主要
+  求解器`solve()`支援, `solve_condensation()`遇到會直接報錯。
+  已驗證跟手動分解局部fx/fy的結果精確一致(浮點誤差等級), 見
+  `tests/test_point_load_angle.py`。
+
 開發過程中一度誤判過 SW FEA 的方向慣例(見git歷史), 原因是: (1) 一開始用
 app 對話框裡轉盤圖示的視覺猜測角度方向, 沒有實際根據; (2) PDF反力數字抄錄時
 Ry/M 的正負號打反。後來直接照 app 畫面上實際畫出來的箭頭方向重建、並且用

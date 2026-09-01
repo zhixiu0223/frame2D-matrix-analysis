@@ -7,6 +7,7 @@
   未來要換成真正的 DOFManager(支援 truss/不連續id/release)時,呼叫端不用改
 """
 from dataclasses import dataclass, field
+import math
 
 
 @dataclass
@@ -115,12 +116,30 @@ class MemberPointLoad:
     跟distributed_load的w同一套正負號慣例; m: 逆時針為正的集中力矩。
     不會新增節點、不切割桿件——用等效節點載重(work-equivalent)處理,
     跟distributed_load同一套機制(見solve.py)。
+
+    direction='local'(預設, 既有行為): fx/fy就是局部座標分量。
+    direction='global': 用F(大小)+angle_deg(全域角度, 標準數學慣例,
+    0度=+x, 逆時針為正)指定一個全域方向的集中力, 依桿件角度自動分解
+    成局部fx/fy(跟distributed_load(direction='global')同一套邏輯,
+    只是這裡是點載重不是分佈載重)。這個模式下fx/fy欄位不使用(必須
+    是預設值0, 由F/angle_deg決定), m仍然照常填(力矩沒有方向性問題)。
+    只有主要求解器solve()支援, solve_condensation()遇到會直接報錯。
     """
     member: int
     a: float
     fx: float = 0.0
     fy: float = 0.0
     m: float = 0.0
+    direction: str = 'local'   # 'local' 或 'global'
+    F: float = None            # 只有direction='global'時使用: 力的大小
+    angle_deg: float = None    # 只有direction='global'時使用: 全域角度(度)
+
+    def __post_init__(self):
+        if self.direction == 'global':
+            if self.F is None or self.angle_deg is None:
+                raise ValueError("direction='global' 必須指定F(力的大小)跟angle_deg(全域角度, 度)")
+            if self.fx != 0.0 or self.fy != 0.0:
+                raise ValueError("direction='global' 時fx/fy不使用, 請改用F+angle_deg指定")
 
 
 class Frame2D:
@@ -183,7 +202,18 @@ class Frame2D:
         self.supports.append(Support(node, ux=ux, uy=uy, rot=rot))
         return self
 
-    def point_load(self, node: int, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):
+    def point_load(self, node: int, fx: float = 0.0, fy: float = 0.0, m: float = 0.0,
+                   F: float = None, angle_deg: float = None):
+        """節點集中力/力矩。fx/fy本來就是全域座標分量, 沒有local/global
+        的區別問題; 如果比較習慣用「大小+角度」描述, 可以改用F+angle_deg
+        (標準數學慣例, 0度=+x, 逆時針為正), 兩者算出的fx/fy會直接相加
+        (通常只用其中一種, 不用同時混用)。"""
+        if angle_deg is not None:
+            if F is None:
+                raise ValueError("指定angle_deg時必須同時指定F(力的大小)")
+            ang = math.radians(angle_deg)
+            fx = fx + F * math.cos(ang)
+            fy = fy + F * math.sin(ang)
         self.point_loads.append(PointLoad(node, fx, fy, m))
         return self
 
@@ -202,11 +232,18 @@ class Frame2D:
             DistributedLoad(member, w, w_end, x_start, x_end, direction, angle_deg))
         return self
 
-    def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0, m: float = 0.0):
+    def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0,
+                           m: float = 0.0, direction: str = 'local',
+                           F: float = None, angle_deg: float = None):
         """桿件內部任意位置(距node_i為a)加集中力/集中力矩, 不新增節點。
         跟point_load(node,...)的差別: 這裡a是桿件"局部"座標(沿桿軸距離node_i
-        多遠), 不是節點id。"""
-        self.member_point_loads.append(MemberPointLoad(member, a, fx, fy, m))
+        多遠), 不是節點id; 而且direction='local'(預設)時fx/fy是該桿件
+        自己的局部座標分量, 不是全域座標。
+        direction='global': 改用F(大小)+angle_deg(全域角度, 標準數學慣例)
+        指定, 依桿件角度自動分解成局部分量(跟distributed_load的
+        direction='global'同一套邏輯), 這個模式下fx/fy不能用。"""
+        self.member_point_loads.append(
+            MemberPointLoad(member, a, fx, fy, m, direction, F, angle_deg))
         return self
 
     # ---- DOF 查詢 (唯一允許碰自由度編號的地方) ----

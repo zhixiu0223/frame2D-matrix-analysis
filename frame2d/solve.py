@@ -154,6 +154,11 @@ def _solve_once(frame: Frame2D, slack_cables: set) -> SolveResult:
     # ---- 2b. 桿件內部集中力/力矩 -> 固定端反力 -> 等效節點載重疊加進F ----
     for pl_m in frame.member_point_loads:
         m = frame.members[pl_m.member]
+        if pl_m.direction == 'global':
+            raise ValueError(
+                f"member {pl_m.member} 的桿件內部集中力用了direction='global',"
+                " 靜力凝縮版本(參考實作)目前還沒實作這個組合, 只有主要求解器"
+                " solve()支援。請改用solve()。")
         if m.member_type in ('truss', 'cable'):
             raise ValueError(
                 f"member {pl_m.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
