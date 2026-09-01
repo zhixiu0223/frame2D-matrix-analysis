@@ -18,6 +18,8 @@ from pathlib import Path
 from frame2d import Frame2D, solve
 from frame2d.postprocess import member_internal_forces
 
+from .diagrams import build_diagrams_and_deformed
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -79,7 +81,15 @@ def _solve_payload(payload: dict) -> dict:
             "slack": bool(mr.slack),
         })
 
-    return {"nodes": node_out, "members": member_out}
+    diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
+
+    return {
+        "nodes": node_out,
+        "members": member_out,
+        "diagrams": diagrams,
+        "deformed": deformed,
+        "deform_scale": deform_scale,
+    }
 
 
 class Handler(BaseHTTPRequestHandler):

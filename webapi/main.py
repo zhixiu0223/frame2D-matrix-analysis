@@ -13,9 +13,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from frame2d import Frame2D, solve
-from frame2d.postprocess import member_internal_forces
+from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
+from .diagrams import build_diagrams_and_deformed
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
 
@@ -55,8 +56,8 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     return f
 
 
-@app.post("/solve", response_model=SolveOut)
-def solve_frame(payload: FrameIn) -> SolveOut:
+@app.post("/solve")
+def solve_frame(payload: FrameIn):
     f = _build_frame(payload)
     result = solve(f)
 
@@ -87,4 +88,12 @@ def solve_frame(payload: FrameIn) -> SolveOut:
             slack=bool(mr.slack),
         ))
 
-    return SolveOut(nodes=node_out, members=member_out)
+    diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
+
+    solve_out = SolveOut(nodes=node_out, members=member_out)
+    return {
+        **solve_out.model_dump(),
+        "diagrams": diagrams,
+        "deformed": deformed,
+        "deform_scale": deform_scale,
+    }

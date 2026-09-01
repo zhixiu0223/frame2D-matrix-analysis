@@ -2,43 +2,88 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<title>frame2d API 測試頁</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frame2d 互動編輯器</title>
 <style>
-  body { font-family: -apple-system, "Noto Sans TC", sans-serif; margin: 1.2rem; max-width: 900px; }
-  textarea { width: 100%; height: 260px; font-family: monospace; font-size: 0.85rem; box-sizing: border-box; }
-  button { padding: 0.5rem 1.2rem; font-size: 1rem; margin: 0.6rem 0; cursor: pointer; }
-  table { border-collapse: collapse; width: 100%; margin-top: 0.6rem; font-size: 0.85rem; }
-  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: right; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Noto Sans TC", sans-serif; margin: 0; display: flex; flex-wrap: wrap; }
+  #left { flex: 1 1 640px; min-width: 320px; padding: 0.8rem; }
+  #right { flex: 0 0 300px; padding: 0.8rem; border-left: 1px solid #ddd; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.4rem; }
+  .hint { font-size: 0.8rem; color: #666; margin-bottom: 0.6rem; }
+  #toolbar { margin-bottom: 0.4rem; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  #toolbar button, #right button { padding: 0.4rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
+  #toolbar button.active { background: #2563eb; color: white; border-color: #2563eb; }
+  #canvasWrap { border: 1px solid #ccc; background: #fafafa; }
+  svg { width: 100%; height: auto; display: block; touch-action: none; }
+  .node-circle { fill: #fff; stroke: #1f2937; stroke-width: 2; cursor: grab; }
+  .node-circle.selected { fill: #2563eb; stroke: #2563eb; }
+  .node-label { font-size: 11px; fill: #1f2937; pointer-events: none; }
+  .member-line { stroke: #1f2937; stroke-width: 3; cursor: pointer; }
+  .member-line.selected { stroke: #2563eb; }
+  .member-line.faint { stroke: #ccc; stroke-width: 1.5; }
+  .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
+  .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
+  .diagram-fill { fill: rgba(37, 99, 235, 0.25); stroke: #2563eb; stroke-width: 1; }
+  .load-arrow { stroke: #dc2626; stroke-width: 2; }
+  .support-symbol { fill: #374151; }
+  .scale-label { font-size: 11px; fill: #ea580c; }
+  #status { font-size: 0.85rem; margin: 0.4rem 0; min-height: 1.2em; }
+  fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
+  legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
+  label { display: block; font-size: 0.8rem; margin: 0.3rem 0 0.1rem; }
+  input, select { width: 100%; padding: 0.3rem; font-size: 0.85rem; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.3rem; }
+  #propPanel button { width: 100%; margin-top: 0.5rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.4rem; font-size: 0.78rem; }
+  th, td { border: 1px solid #ddd; padding: 3px 5px; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
-  .ok { color: #1a7f37; }
-  .bad { color: #cf222e; font-weight: bold; }
-  h2 { margin-top: 1.6rem; }
-  #status { margin-top: 0.6rem; }
+  details summary { cursor: pointer; font-size: 0.85rem; margin: 0.6rem 0 0.2rem; }
 </style>
 </head>
 <body>
-<h1>frame2d /solve API 測試頁</h1>
-<p>這是最陽春的版本:貼結構的 JSON 描述,按 Solve,看回傳的節點反力/位移與桿件內力。
-預設已經填好 Case-08(兩層兩跨側移鋼架,九節點/十桿件,純點載重版本)的模型,
-可以直接按 Solve 看跟 SW FEA 是否吻合。</p>
 
-<textarea id="payload"></textarea><br>
-<button id="solveBtn">Solve</button>
-<span id="status"></span>
+<div id="left">
+  <h1>frame2d 互動編輯器</h1>
+  <p class="hint">拖曳節點改變位置。點一下節點/桿件開啟右側屬性面板。「新增節點」模式下點空白處新增節點;「新增桿件」模式下依序點兩個節點連線。改完按 Solve 才會重新計算。</p>
 
-<h2>節點結果</h2>
-<table id="nodeTable"><thead>
-  <tr><th>node</th><th>ux</th><th>uy</th><th>rot</th><th>Rx (kN)</th><th>Ry (kN)</th><th>M (kN·m)</th><th>對照 SW FEA</th></tr>
-</thead><tbody></tbody></table>
+  <div id="toolbar">
+    <button id="btnAddNode">➕ 新增節點</button>
+    <button id="btnAddMember">➕ 新增桿件</button>
+    <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
+    <span style="flex-basis:100%;height:0;"></span>
+    <button data-view="structure" class="viewBtn active">結構/荷載</button>
+    <button data-view="deformed" class="viewBtn">變形</button>
+    <button data-view="N" class="viewBtn">N 圖(軸力)</button>
+    <button data-view="V" class="viewBtn">V 圖(剪力)</button>
+    <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
+  </div>
+  <div id="status"></div>
 
-<h2>桿件端內力</h2>
-<table id="memberTable"><thead>
-  <tr><th>member</th><th>L</th><th>角度(度)</th><th>N1</th><th>V1</th><th>M1</th><th>N2</th><th>V2</th><th>M2</th></tr>
-</thead><tbody></tbody></table>
+  <div id="canvasWrap">
+    <svg id="svg" viewBox="0 0 800 500"></svg>
+  </div>
+
+  <details>
+    <summary>詳細數值(節點反力/位移、桿件端內力)</summary>
+    <h3 style="font-size:0.9rem;">節點結果</h3>
+    <table id="nodeTable"><thead>
+      <tr><th>node</th><th>ux</th><th>uy</th><th>rot</th><th>Rx(kN)</th><th>Ry(kN)</th><th>M(kN·m)</th></tr>
+    </thead><tbody></tbody></table>
+    <h3 style="font-size:0.9rem;">桿件端內力</h3>
+    <table id="memberTable"><thead>
+      <tr><th>member</th><th>L</th><th>角度</th><th>N1</th><th>V1</th><th>M1</th><th>N2</th><th>V2</th><th>M2</th></tr>
+    </thead><tbody></tbody></table>
+  </details>
+</div>
+
+<div id="right">
+  <div id="propPanel"><p class="hint">點節點或桿件看屬性。</p></div>
+</div>
 
 <script>
-// Case-08 純點載重版本 (見 tests/test_case08_vs_swfea.py)
-const CASE08 = {
+// ---------- 初始模型: Case-08 純點載重版本 ----------
+let model = {
   nodes: [
     {id:0,x:0,y:0}, {id:1,x:5,y:0}, {id:2,x:12,y:0},
     {id:3,x:0,y:4}, {id:4,x:5,y:4}, {id:5,x:12,y:4},
@@ -46,96 +91,421 @@ const CASE08 = {
   ],
   sections: [{name:"sec", E:150e9, I:1e-6, A:0.05}],
   members: [
-    {id:0,node_i:0,node_j:3,section:"sec"}, {id:1,node_i:1,node_j:4,section:"sec"},
-    {id:2,node_i:5,node_j:2,section:"sec"}, {id:3,node_i:3,node_j:4,section:"sec"},
-    {id:4,node_i:4,node_j:5,section:"sec"}, {id:5,node_i:6,node_j:3,section:"sec"},
-    {id:6,node_i:7,node_j:4,section:"sec"}, {id:7,node_i:8,node_j:5,section:"sec"},
-    {id:8,node_i:6,node_j:7,section:"sec"}, {id:9,node_i:7,node_j:8,section:"sec"}
+    {id:0,node_i:0,node_j:3,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:1,node_i:1,node_j:4,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:2,node_i:5,node_j:2,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:3,node_i:3,node_j:4,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:4,node_i:4,node_j:5,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:5,node_i:6,node_j:3,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:6,node_i:7,node_j:4,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:7,node_i:8,node_j:5,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:8,node_i:6,node_j:7,section:"sec",member_type:"frame",release_i:false,release_j:false},
+    {id:9,node_i:7,node_j:8,section:"sec",member_type:"frame",release_i:false,release_j:false}
   ],
   supports: [
     {node:0, ux:0.0, uy:0.0, rot:0.0},
     {node:1, ux:0.0, uy:0.0, rot:0.0},
     {node:2, ux:0.0, uy:0.0, rot:0.0}
   ],
-  point_loads: [
-    {node:6, fx:10000}, {node:3, fx:15000}
-  ],
+  point_loads: [ {node:6, fx:10000, fy:0, m:0}, {node:3, fx:15000, fy:0, m:0} ],
   distributed_loads: [],
   member_point_loads: []
 };
 
-// SW FEA 對照值 (kN, kN·m),來自 tests/test_case08_vs_swfea.py 的 sw_no_udl
-const SW_REF = {
-  0: {Rx:-8.058, Ry:-8.538, M:19.621},
-  1: {Rx:-9.437, Ry:3.917, M:21.460},
-  2: {Rx:-7.505, Ry:4.621, M:18.885}
-};
+let lastResult = null;      // 最近一次 /solve 的回傳
+let selected = null;        // {type:'node'|'member', id}
+let viewMode = 'structure';
+let addMode = null;         // null | 'node' | 'member'
+let memberFirstNode = null; // 新增桿件模式下先點的第一個節點
+let dragNodeId = null;
+let dragMoved = false;
 
-document.getElementById('payload').value = JSON.stringify(CASE08, null, 2);
+const svg = document.getElementById('svg');
+const VB_W = 800, VB_H = 500;
 
-document.getElementById('solveBtn').onclick = async () => {
-  const statusEl = document.getElementById('status');
-  statusEl.textContent = '求解中...';
-  let payload;
-  try {
-    payload = JSON.parse(document.getElementById('payload').value);
-  } catch (e) {
-    statusEl.textContent = 'JSON 格式錯誤: ' + e.message;
-    return;
-  }
-  try {
-    const res = await fetch('/solve', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-      const err = await res.text();
-      statusEl.textContent = 'API 錯誤 (' + res.status + '): ' + err;
-      return;
-    }
-    const data = await res.json();
-    statusEl.textContent = '完成';
-    renderNodes(data.nodes);
-    renderMembers(data.members);
-  } catch (e) {
-    statusEl.textContent = '連線失敗: ' + e.message;
-  }
-};
+// ---------- 座標轉換 ----------
+function computeTransform() {
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = (maxX - minX) || 1, h = (maxY - minY) || 1;
+  const pad = 0.18;
+  const availW = VB_W * (1 - 2 * pad), availH = VB_H * (1 - 2 * pad);
+  const scale = Math.min(availW / w, availH / h);
+  return {
+    scale,
+    cx: (minX + maxX) / 2, cy: (minY + maxY) / 2,
+    sx: VB_W / 2, sy: VB_H / 2,
+  };
+}
+function toScreen(x, y, t) {
+  return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
+}
+function clientToWorld(evt, t) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return [(p.x - t.sx) / t.scale + t.cx, -(p.y - t.sy) / t.scale + t.cy];
+}
 
-function renderNodes(nodes) {
-  const tbody = document.querySelector('#nodeTable tbody');
-  tbody.innerHTML = '';
-  for (const n of nodes) {
-    const Rx = n.Rx / 1000, Ry = n.Ry / 1000, M = n.M / 1000;
-    const ref = SW_REF[n.node];
-    let cmp = '-';
-    if (ref) {
-      const okRx = Math.abs(Rx - ref.Rx) < 0.02;
-      const okRy = Math.abs(Ry - ref.Ry) < 0.02;
-      const okM = Math.abs(M - ref.M) < 0.02;
-      const ok = okRx && okRy && okM;
-      cmp = `<span class="${ok ? 'ok' : 'bad'}">${ok ? 'PASS' : 'FAIL'} (SW: Rx=${ref.Rx}, Ry=${ref.Ry}, M=${ref.M})</span>`;
-    }
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${n.node}</td><td>${n.ux.toExponential(3)}</td><td>${n.uy.toExponential(3)}</td>
-      <td>${n.rot.toExponential(3)}</td><td>${Rx.toFixed(3)}</td><td>${Ry.toFixed(3)}</td>
-      <td>${M.toFixed(3)}</td><td>${cmp}</td>`;
-    tbody.appendChild(tr);
+function nodeById(id) { return model.nodes.find(n => n.id === id); }
+function el(tag, attrs) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// ---------- 畫圖 ----------
+function render() {
+  svg.innerHTML = '';
+  svg.setAttribute('viewBox', `0 0 ${VB_W} ${VB_H}`);
+  const t = computeTransform();
+
+  if (viewMode === 'structure') {
+    drawMembers(t, false);
+    drawSupports(t);
+    drawLoads(t);
+    drawNodes(t);
+  } else if (viewMode === 'deformed') {
+    drawMembers(t, true);
+    if (lastResult) drawDeformed(t); else drawNeedSolveMsg();
+  } else {
+    drawMembers(t, true);
+    if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
   }
 }
 
-function renderMembers(members) {
-  const tbody = document.querySelector('#memberTable tbody');
-  tbody.innerHTML = '';
-  for (const m of members) {
+function drawNeedSolveMsg() {
+  const msg = el('text', {x: 10, y: 20, 'font-size': 13, fill: '#dc2626'});
+  msg.textContent = '請先按 Solve 才有結果可畫';
+  svg.appendChild(msg);
+}
+
+function drawMembers(t, faint) {
+  for (const m of model.members) {
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const [x1, y1] = toScreen(ni.x, ni.y, t);
+    const [x2, y2] = toScreen(nj.x, nj.y, t);
+    const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : ''));
+    const line = el('line', {x1, y1, x2, y2, class: cls});
+    if (!faint) line.addEventListener('click', (e) => { e.stopPropagation(); selectMember(m.id); });
+    svg.appendChild(line);
+    if (!faint) {
+      const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 - 4, class: 'member-label'});
+      lbl.textContent = 'M' + m.id;
+      svg.appendChild(lbl);
+    }
+  }
+}
+
+function drawNodes(t) {
+  for (const n of model.nodes) {
+    const [x, y] = toScreen(n.x, n.y, t);
+    const sel = selected && selected.type === 'node' && selected.id === n.id;
+    const c = el('circle', {cx: x, cy: y, r: 7, class: 'node-circle' + (sel ? ' selected' : '')});
+    c.addEventListener('pointerdown', (e) => { e.stopPropagation(); dragNodeId = n.id; dragMoved = false; svg.setPointerCapture(e.pointerId); });
+    svg.appendChild(c);
+    const lbl = el('text', {x: x + 9, y: y - 9, class: 'node-label'});
+    lbl.textContent = 'N' + n.id;
+    svg.appendChild(lbl);
+  }
+}
+
+function drawSupports(t) {
+  for (const s of model.supports) {
+    const n = nodeById(s.node);
+    if (!n) continue;
+    const [x, y] = toScreen(n.x, n.y, t);
+    const fixed = s.rot !== null && s.rot !== undefined;
+    if (fixed) {
+      svg.appendChild(el('polygon', {points: `${x-8},${y+16} ${x+8},${y+16} ${x},${y+2}`, class: 'support-symbol'}));
+      for (let i = -8; i <= 8; i += 4) {
+        svg.appendChild(el('line', {x1: x+i, y1: y+16, x2: x+i-4, y2: y+22, stroke: '#374151', 'stroke-width': 1.2}));
+      }
+    } else {
+      svg.appendChild(el('polygon', {points: `${x-8},${y+14} ${x+8},${y+14} ${x},${y+2}`, fill: 'none', stroke: '#374151', 'stroke-width': 2}));
+    }
+  }
+}
+
+function drawLoads(t) {
+  const defs = el('defs', {});
+  const marker = el('marker', {id: 'arrowhead', markerWidth: 8, markerHeight: 8, refX: 6, refY: 3, orient: 'auto'});
+  marker.appendChild(el('path', {d: 'M0,0 L6,3 L0,6 Z', fill: '#dc2626'}));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  for (const p of model.point_loads) {
+    const n = nodeById(p.node);
+    if (!n) continue;
+    const mag = Math.hypot(p.fx || 0, p.fy || 0);
+    if (mag < 1e-9) continue;
+    const [x, y] = toScreen(n.x, n.y, t);
+    const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
+    const len = 42;
+    const x1 = x - ux * len, y1 = y - uy * len;
+    svg.appendChild(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+    const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
+    lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
+    svg.appendChild(lbl);
+  }
+}
+
+function drawDeformed(t) {
+  const lbl = el('text', {x: 10, y: 20, class: 'scale-label'});
+  lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
+  svg.appendChild(lbl);
+  for (const mid in lastResult.deformed) {
+    const d = lastResult.deformed[mid];
+    let pts = '';
+    for (let i = 0; i < d.X.length; i++) {
+      const [x, y] = toScreen(d.X[i], d.Y[i], t);
+      pts += `${x},${y} `;
+    }
+    svg.appendChild(el('polyline', {points: pts.trim(), class: 'deformed-line'}));
+  }
+}
+
+function drawDiagram(t, kind) {
+  let maxAbs = 1e-9;
+  for (const mid in lastResult.diagrams) {
+    for (const v of lastResult.diagrams[mid][kind]) maxAbs = Math.max(maxAbs, Math.abs(v));
+  }
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  const valueToWorld = (worldDiag * 0.15) / maxAbs;
+
+  const lbl = el('text', {x: 10, y: 20, class: 'scale-label', fill: '#2563eb'});
+  lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${kind==='M' ? 'kN·m' : 'kN'})`;
+  svg.appendChild(lbl);
+
+  for (const m of model.members) {
+    const d = lastResult.diagrams[m.id];
+    if (!d) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
+    const perp = [-Math.sin(angle), Math.cos(angle)];
+    let basePts = [], diagPts = [];
+    for (let i = 0; i < d.x.length; i++) {
+      const bx = ni.x + d.x[i] * Math.cos(angle);
+      const by = ni.y + d.x[i] * Math.sin(angle);
+      const val = d[kind][i] * valueToWorld;
+      const ox = bx + perp[0] * val, oy = by + perp[1] * val;
+      basePts.push(toScreen(bx, by, t));
+      diagPts.push(toScreen(ox, oy, t));
+    }
+    const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + diagPts.slice().reverse().map(p => p.join(',')).join(' ');
+    svg.appendChild(el('polygon', {points: poly, class: 'diagram-fill'}));
+  }
+}
+
+// ---------- 選取與屬性面板 ----------
+function selectNode(id) {
+  if (addMode === 'member') { handleMemberAddClick(id); return; }
+  selected = {type: 'node', id};
+  renderPropPanel();
+}
+function selectMember(id) { selected = {type: 'member', id}; renderPropPanel(); render(); }
+
+function handleMemberAddClick(id) {
+  if (memberFirstNode === null) {
+    memberFirstNode = id;
+    setStatus('已選第一個節點 N' + id + ',再點第二個節點');
+  } else if (memberFirstNode !== id) {
+    const newId = Math.max(-1, ...model.members.map(m => m.id)) + 1;
+    model.members.push({id: newId, node_i: memberFirstNode, node_j: id, section: model.sections[0].name, member_type: 'frame', release_i: false, release_j: false});
+    memberFirstNode = null;
+    setStatus('新增桿件 M' + newId);
+    render();
+  }
+}
+
+function renderPropPanel() {
+  const panel = document.getElementById('propPanel');
+  if (!selected) { panel.innerHTML = '<p class="hint">點節點或桿件看屬性。</p>'; return; }
+
+  if (selected.type === 'node') {
+    const n = nodeById(selected.id);
+    const sup = model.supports.find(s => s.node === n.id);
+    const pl = model.point_loads.find(p => p.node === n.id);
+    const supType = !sup ? 'free' : (sup.rot !== null && sup.rot !== undefined ? 'fixed' : 'pin');
+    panel.innerHTML = `
+      <fieldset><legend>節點 N${n.id}</legend>
+        <div class="row3">
+          <div><label>x</label><input id="p_x" type="number" step="any" value="${n.x}"></div>
+          <div><label>y</label><input id="p_y" type="number" step="any" value="${n.y}"></div>
+          <div></div>
+        </div>
+        <label>支承</label>
+        <select id="p_sup">
+          <option value="free" ${supType==='free'?'selected':''}>自由(無支承)</option>
+          <option value="pin" ${supType==='pin'?'selected':''}>鉸支承(ux=uy=0)</option>
+          <option value="fixed" ${supType==='fixed'?'selected':''}>固定支承(ux=uy=rot=0)</option>
+        </select>
+        <label>集中力 fx / fy (N) / m (N·m)</label>
+        <div class="row3">
+          <input id="p_fx" type="number" step="any" value="${pl ? pl.fx : 0}">
+          <input id="p_fy" type="number" step="any" value="${pl ? pl.fy : 0}">
+          <input id="p_fm" type="number" step="any" value="${pl ? pl.m : 0}">
+        </div>
+        <button id="p_apply">套用</button>
+        <button id="p_delete" style="background:#dc2626;color:white;">刪除節點</button>
+      </fieldset>`;
+    document.getElementById('p_apply').onclick = () => {
+      n.x = parseFloat(document.getElementById('p_x').value);
+      n.y = parseFloat(document.getElementById('p_y').value);
+      const supVal = document.getElementById('p_sup').value;
+      model.supports = model.supports.filter(s => s.node !== n.id);
+      if (supVal === 'pin') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: null});
+      if (supVal === 'fixed') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: 0.0});
+      const fx = parseFloat(document.getElementById('p_fx').value) || 0;
+      const fy = parseFloat(document.getElementById('p_fy').value) || 0;
+      const fm = parseFloat(document.getElementById('p_fm').value) || 0;
+      model.point_loads = model.point_loads.filter(p => p.node !== n.id);
+      if (fx !== 0 || fy !== 0 || fm !== 0) model.point_loads.push({node: n.id, fx, fy, m: fm});
+      render();
+    };
+    document.getElementById('p_delete').onclick = () => {
+      model.nodes = model.nodes.filter(x => x.id !== n.id);
+      model.members = model.members.filter(m => m.node_i !== n.id && m.node_j !== n.id);
+      model.supports = model.supports.filter(s => s.node !== n.id);
+      model.point_loads = model.point_loads.filter(p => p.node !== n.id);
+      selected = null;
+      renderPropPanel(); render();
+    };
+  } else {
+    const m = model.members.find(x => x.id === selected.id);
+    const sec = model.sections.find(s => s.name === m.section);
+    panel.innerHTML = `
+      <fieldset><legend>桿件 M${m.id}(N${m.node_i}→N${m.node_j})</legend>
+        <label>元素類型</label>
+        <select id="p_type">
+          <option value="frame" ${m.member_type==='frame'?'selected':''}>frame(樑柱)</option>
+          <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架)</option>
+          <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線)</option>
+        </select>
+        <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放</label>
+        <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放</label>
+        <label>斷面 "${sec.name}"(改這裡會影響所有共用此斷面的桿件)</label>
+        <div class="row3">
+          <div><label>E (Pa)</label><input id="p_E" type="number" step="any" value="${sec.E}"></div>
+          <div><label>I (m⁴)</label><input id="p_I" type="number" step="any" value="${sec.I}"></div>
+          <div><label>A (m²)</label><input id="p_A" type="number" step="any" value="${sec.A}"></div>
+        </div>
+        <button id="p_apply">套用</button>
+        <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
+      </fieldset>`;
+    document.getElementById('p_apply').onclick = () => {
+      m.member_type = document.getElementById('p_type').value;
+      m.release_i = document.getElementById('p_ri').checked;
+      m.release_j = document.getElementById('p_rj').checked;
+      sec.E = parseFloat(document.getElementById('p_E').value);
+      sec.I = parseFloat(document.getElementById('p_I').value);
+      sec.A = parseFloat(document.getElementById('p_A').value);
+      render();
+    };
+    document.getElementById('p_delete').onclick = () => {
+      model.members = model.members.filter(x => x.id !== m.id);
+      selected = null;
+      renderPropPanel(); render();
+    };
+  }
+}
+
+// ---------- 事件 ----------
+svg.addEventListener('pointerdown', (e) => {
+  if (dragNodeId !== null) return;
+  const t = computeTransform();
+  const [wx, wy] = clientToWorld(e, t);
+  if (addMode === 'node') {
+    const newId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
+    model.nodes.push({id: newId, x: Math.round(wx * 100) / 100, y: Math.round(wy * 100) / 100});
+    setStatus('新增節點 N' + newId);
+    render();
+  } else if (addMode !== 'member') {
+    selected = null; renderPropPanel(); render();
+  }
+});
+
+svg.addEventListener('pointermove', (e) => {
+  if (dragNodeId === null) return;
+  dragMoved = true;
+  const t = computeTransform();
+  const [wx, wy] = clientToWorld(e, t);
+  const n = nodeById(dragNodeId);
+  n.x = Math.round(wx * 100) / 100; n.y = Math.round(wy * 100) / 100;
+  render();
+});
+
+svg.addEventListener('pointerup', () => {
+  if (dragNodeId !== null) {
+    const id = dragNodeId;
+    dragNodeId = null;
+    if (!dragMoved) { selectNode(id); render(); }
+    else { selected = {type: 'node', id}; renderPropPanel(); render(); }
+  }
+});
+
+document.querySelectorAll('.viewBtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    viewMode = btn.dataset.view;
+    render();
+  });
+});
+
+document.getElementById('btnAddNode').addEventListener('click', (e) => {
+  addMode = addMode === 'node' ? null : 'node';
+  memberFirstNode = null;
+  e.target.classList.toggle('active', addMode === 'node');
+  document.getElementById('btnAddMember').classList.remove('active');
+  setStatus(addMode === 'node' ? '新增節點模式:點畫布空白處' : '');
+});
+document.getElementById('btnAddMember').addEventListener('click', (e) => {
+  addMode = addMode === 'member' ? null : 'member';
+  memberFirstNode = null;
+  e.target.classList.toggle('active', addMode === 'member');
+  document.getElementById('btnAddNode').classList.remove('active');
+  setStatus(addMode === 'member' ? '新增桿件模式:依序點兩個節點' : '');
+});
+
+document.getElementById('btnSolve').addEventListener('click', async () => {
+  setStatus('求解中...');
+  try {
+    const res = await fetch('/solve', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(model)
+    });
+    if (!res.ok) { setStatus('API 錯誤: ' + await res.text()); return; }
+    lastResult = await res.json();
+    setStatus('完成');
+    renderTables();
+    render();
+  } catch (e) { setStatus('連線失敗: ' + e.message); }
+});
+
+function setStatus(s) { document.getElementById('status').textContent = s; }
+
+function renderTables() {
+  const nb = document.querySelector('#nodeTable tbody'); nb.innerHTML = '';
+  for (const n of lastResult.nodes) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${n.node}</td><td>${n.ux.toExponential(3)}</td><td>${n.uy.toExponential(3)}</td>
+      <td>${n.rot.toExponential(3)}</td><td>${(n.Rx/1000).toFixed(3)}</td><td>${(n.Ry/1000).toFixed(3)}</td><td>${(n.M/1000).toFixed(3)}</td>`;
+    nb.appendChild(tr);
+  }
+  const mb = document.querySelector('#memberTable tbody'); mb.innerHTML = '';
+  for (const m of lastResult.members) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${m.member_id}</td><td>${m.L.toFixed(3)}</td><td>${m.angle_deg.toFixed(1)}</td>
       <td>${(m.N1/1000).toFixed(3)}</td><td>${(m.V1/1000).toFixed(3)}</td><td>${(m.M1/1000).toFixed(3)}</td>
       <td>${(m.N2/1000).toFixed(3)}</td><td>${(m.V2/1000).toFixed(3)}</td><td>${(m.M2/1000).toFixed(3)}</td>`;
-    tbody.appendChild(tr);
+    mb.appendChild(tr);
   }
 }
+
+render();
 </script>
 </body>
 </html>
