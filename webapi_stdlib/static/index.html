@@ -71,6 +71,7 @@
 
   <div id="toolbar" style="margin-top:0.4rem;">
     <input id="modelName" type="text" placeholder="專案名稱" style="width:9rem;padding:0.35rem;">
+    <button id="btnNew">🆕 新建</button>
     <button id="btnSave">💾 儲存</button>
     <button id="btnSaveAs">💾 另存新檔</button>
     <select id="modelSelect" style="width:9rem;"></select>
@@ -156,6 +157,9 @@ let camera = {x: 0, y: 0, k: 1};
 
 // ---------- 世界座標 <-> 畫布座標(computeTransform) ----------
 function computeTransform() {
+  if (model.nodes.length === 0) {
+    return { scale: 40, cx: 0, cy: 0, sx: VB_W / 2, sy: VB_H / 2 };
+  }
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
@@ -289,7 +293,8 @@ function niceStep(rough) {
 }
 
 function drawGrid(t) {
-  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const xs = model.nodes.length ? model.nodes.map(n => n.x) : [-5, 5];
+  const ys = model.nodes.length ? model.nodes.map(n => n.y) : [-5, 5];
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const w = (maxX - minX) || 1, h = (maxY - minY) || 1;
@@ -640,6 +645,17 @@ function renderPropPanel() {
           <button id="p_cancel">取消</button>
         </div>
         <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
+      </fieldset>
+      <fieldset><legend>內部鉸接(桿件中間)</legend>
+        <p class="hint">力學上跟你自己拆桿件+兩端 release 完全等價(彎矩在該點不連續,剪力/軸力照樣傳遞),這裡是自動幫你拆——按下去會把 M${m.id} 從輸入的位置切成兩根桿件,並在切點互相釋放彎矩,等同 SW FEA 的 Add Internal Pin/Hinge。<br><b>注意</b>:如果切開後某一段沒有其他支承或桿件幫忙抗轉(例如懸臂的自由端),那一段會變成可以繞鉸接自由轉動的機構,Solve 會回報「勁度矩陣奇異」——這是真實的力學不穩定,不是這個功能的 bug,跟你截圖那種兩端都還接著柱子的梁不會有這個問題。</p>
+        <label>位置量測方式</label>
+        <select id="p_pin_mode">
+          <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
+          <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
+        </select>
+        <label>數值</label>
+        <input id="p_pin_value" type="number" step="any" value="0.5">
+        <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
       </fieldset>`;
     document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
@@ -655,7 +671,47 @@ function renderPropPanel() {
       model.members = model.members.filter(x => x.id !== m.id);
       clearSelection();
     };
+    document.getElementById('p_pin_add').onclick = () => {
+      const mode = document.getElementById('p_pin_mode').value;
+      const val = parseFloat(document.getElementById('p_pin_value').value);
+      splitMemberAtInternalPin(m, mode, val);
+    };
   }
+}
+
+// 在桿件中間某個位置加「內部鉸接」: 力學上跟端點 release 是同一件事,
+// 所以直接在該位置插入一個新節點, 把原桿件拆成兩根, 在新節點兩側
+// 互相釋放彎矩(release_j / release_i) —— 不用改 solver, 純粹是
+// 建模層的自動化, 等同使用者自己手動拆桿件 + 設定 release。
+function splitMemberAtInternalPin(m, mode, value) {
+  const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+  const dx = nj.x - ni.x, dy = nj.y - ni.y;
+  const L = Math.hypot(dx, dy);
+  const a = mode === 'relative' ? value * L : value;
+  if (!(a > 1e-6 && a < L - 1e-6)) {
+    setStatus('內部鉸接位置必須嚴格在桿件內部(不能是兩端點),請確認數值');
+    return;
+  }
+  const hasExtraLoads = model.distributed_loads.some(d => d.member === m.id) ||
+                        model.member_point_loads.some(p => p.member === m.id);
+  if (hasExtraLoads) {
+    setStatus('注意: M' + m.id + ' 上有分佈載重/桿件中點載重, 分割後需要手動改 JSON 把它們對應到正確的新桿件, 這裡不會自動搬移');
+  }
+  const t = a / L;
+  const px = ni.x + dx * t, py = ni.y + dy * t;
+  const newNodeId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
+  model.nodes.push({id: newNodeId, x: Math.round(px * 100) / 100, y: Math.round(py * 100) / 100});
+  const idA = Math.max(-1, ...model.members.map(mm => mm.id)) + 1;
+  const idB = idA + 1;
+  model.members.push({id: idA, node_i: m.node_i, node_j: newNodeId, section: m.section,
+                       member_type: m.member_type, release_i: m.release_i, release_j: true});
+  model.members.push({id: idB, node_i: newNodeId, node_j: m.node_j, section: m.section,
+                       member_type: m.member_type, release_i: true, release_j: m.release_j});
+  model.members = model.members.filter(x => x.id !== m.id);
+  if (!hasExtraLoads) setStatus('已在 N' + newNodeId + ' 新增內部鉸接, M' + m.id + ' 分割成 M' + idA + '/M' + idB);
+  selected = {type: 'member', id: idA};
+  renderPropPanel();
+  render();
 }
 
 // ---------- 畫布事件(節點拖曳 / 新增 / 平移) ----------
@@ -798,6 +854,20 @@ async function saveModelAs(name) {
   } catch (e) { setStatus('儲存失敗: ' + e.message); }
 }
 
+document.getElementById('btnNew').addEventListener('click', () => {
+  if (!confirm('新建會清空目前畫布內容(未儲存的修改會遺失),確定繼續?')) return;
+  model = {
+    nodes: [], sections: [{name: 'sec', E: 200e9, I: 1e-4, A: 0.01}],
+    members: [], supports: [], point_loads: [], distributed_loads: [], member_point_loads: []
+  };
+  lastResult = null;
+  currentName = null;
+  document.getElementById('modelName').value = '';
+  camera = {x: 0, y: 0, k: 1};
+  applyCameraTransform();
+  clearSelection();
+  setStatus('已新建空白專案');
+});
 document.getElementById('btnSave').addEventListener('click', () => {
   const name = currentName || document.getElementById('modelName').value.trim();
   saveModelAs(name);
