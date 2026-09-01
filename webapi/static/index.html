@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>frame2d API 測試頁</title>
+<style>
+  body { font-family: -apple-system, "Noto Sans TC", sans-serif; margin: 1.2rem; max-width: 900px; }
+  textarea { width: 100%; height: 260px; font-family: monospace; font-size: 0.85rem; box-sizing: border-box; }
+  button { padding: 0.5rem 1.2rem; font-size: 1rem; margin: 0.6rem 0; cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin-top: 0.6rem; font-size: 0.85rem; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .ok { color: #1a7f37; }
+  .bad { color: #cf222e; font-weight: bold; }
+  h2 { margin-top: 1.6rem; }
+  #status { margin-top: 0.6rem; }
+</style>
+</head>
+<body>
+<h1>frame2d /solve API 測試頁</h1>
+<p>這是最陽春的版本:貼結構的 JSON 描述,按 Solve,看回傳的節點反力/位移與桿件內力。
+預設已經填好 Case-08(兩層兩跨側移鋼架,九節點/十桿件,純點載重版本)的模型,
+可以直接按 Solve 看跟 SW FEA 是否吻合。</p>
+
+<textarea id="payload"></textarea><br>
+<button id="solveBtn">Solve</button>
+<span id="status"></span>
+
+<h2>節點結果</h2>
+<table id="nodeTable"><thead>
+  <tr><th>node</th><th>ux</th><th>uy</th><th>rot</th><th>Rx (kN)</th><th>Ry (kN)</th><th>M (kN·m)</th><th>對照 SW FEA</th></tr>
+</thead><tbody></tbody></table>
+
+<h2>桿件端內力</h2>
+<table id="memberTable"><thead>
+  <tr><th>member</th><th>L</th><th>角度(度)</th><th>N1</th><th>V1</th><th>M1</th><th>N2</th><th>V2</th><th>M2</th></tr>
+</thead><tbody></tbody></table>
+
+<script>
+// Case-08 純點載重版本 (見 tests/test_case08_vs_swfea.py)
+const CASE08 = {
+  nodes: [
+    {id:0,x:0,y:0}, {id:1,x:5,y:0}, {id:2,x:12,y:0},
+    {id:3,x:0,y:4}, {id:4,x:5,y:4}, {id:5,x:12,y:4},
+    {id:6,x:0,y:7.5}, {id:7,x:5,y:7.5}, {id:8,x:12,y:7.5}
+  ],
+  sections: [{name:"sec", E:150e9, I:1e-6, A:0.05}],
+  members: [
+    {id:0,node_i:0,node_j:3,section:"sec"}, {id:1,node_i:1,node_j:4,section:"sec"},
+    {id:2,node_i:5,node_j:2,section:"sec"}, {id:3,node_i:3,node_j:4,section:"sec"},
+    {id:4,node_i:4,node_j:5,section:"sec"}, {id:5,node_i:6,node_j:3,section:"sec"},
+    {id:6,node_i:7,node_j:4,section:"sec"}, {id:7,node_i:8,node_j:5,section:"sec"},
+    {id:8,node_i:6,node_j:7,section:"sec"}, {id:9,node_i:7,node_j:8,section:"sec"}
+  ],
+  supports: [
+    {node:0, ux:0.0, uy:0.0, rot:0.0},
+    {node:1, ux:0.0, uy:0.0, rot:0.0},
+    {node:2, ux:0.0, uy:0.0, rot:0.0}
+  ],
+  point_loads: [
+    {node:6, fx:10000}, {node:3, fx:15000}
+  ],
+  distributed_loads: [],
+  member_point_loads: []
+};
+
+// SW FEA 對照值 (kN, kN·m),來自 tests/test_case08_vs_swfea.py 的 sw_no_udl
+const SW_REF = {
+  0: {Rx:-8.058, Ry:-8.538, M:19.621},
+  1: {Rx:-9.437, Ry:3.917, M:21.460},
+  2: {Rx:-7.505, Ry:4.621, M:18.885}
+};
+
+document.getElementById('payload').value = JSON.stringify(CASE08, null, 2);
+
+document.getElementById('solveBtn').onclick = async () => {
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = '求解中...';
+  let payload;
+  try {
+    payload = JSON.parse(document.getElementById('payload').value);
+  } catch (e) {
+    statusEl.textContent = 'JSON 格式錯誤: ' + e.message;
+    return;
+  }
+  try {
+    const res = await fetch('/solve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      statusEl.textContent = 'API 錯誤 (' + res.status + '): ' + err;
+      return;
+    }
+    const data = await res.json();
+    statusEl.textContent = '完成';
+    renderNodes(data.nodes);
+    renderMembers(data.members);
+  } catch (e) {
+    statusEl.textContent = '連線失敗: ' + e.message;
+  }
+};
+
+function renderNodes(nodes) {
+  const tbody = document.querySelector('#nodeTable tbody');
+  tbody.innerHTML = '';
+  for (const n of nodes) {
+    const Rx = n.Rx / 1000, Ry = n.Ry / 1000, M = n.M / 1000;
+    const ref = SW_REF[n.node];
+    let cmp = '-';
+    if (ref) {
+      const okRx = Math.abs(Rx - ref.Rx) < 0.02;
+      const okRy = Math.abs(Ry - ref.Ry) < 0.02;
+      const okM = Math.abs(M - ref.M) < 0.02;
+      const ok = okRx && okRy && okM;
+      cmp = `<span class="${ok ? 'ok' : 'bad'}">${ok ? 'PASS' : 'FAIL'} (SW: Rx=${ref.Rx}, Ry=${ref.Ry}, M=${ref.M})</span>`;
+    }
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${n.node}</td><td>${n.ux.toExponential(3)}</td><td>${n.uy.toExponential(3)}</td>
+      <td>${n.rot.toExponential(3)}</td><td>${Rx.toFixed(3)}</td><td>${Ry.toFixed(3)}</td>
+      <td>${M.toFixed(3)}</td><td>${cmp}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderMembers(members) {
+  const tbody = document.querySelector('#memberTable tbody');
+  tbody.innerHTML = '';
+  for (const m of members) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${m.member_id}</td><td>${m.L.toFixed(3)}</td><td>${m.angle_deg.toFixed(1)}</td>
+      <td>${(m.N1/1000).toFixed(3)}</td><td>${(m.V1/1000).toFixed(3)}</td><td>${(m.M1/1000).toFixed(3)}</td>
+      <td>${(m.N2/1000).toFixed(3)}</td><td>${(m.V2/1000).toFixed(3)}</td><td>${(m.M2/1000).toFixed(3)}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+</script>
+</body>
+</html>
