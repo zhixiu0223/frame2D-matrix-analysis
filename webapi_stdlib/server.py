@@ -12,6 +12,7 @@ pip 抓得到現成 wheel,不會有這個問題)。
 """
 import json
 import math
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -19,8 +20,13 @@ from frame2d import Frame2D, solve
 from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed
+from .storage import LocalFileStorage, InvalidNameError, NotFoundError
+from .pdf_export import build_pdf_report
 
 STATIC_DIR = Path(__file__).parent / "static"
+# saved_models/ 放在 repo 根目錄, 跟 webapi/(FastAPI版)共用同一份存檔,
+# 不管在 Termux 上啟動哪一個後端, 存檔清單都是同一份。
+storage = LocalFileStorage(Path(__file__).parent.parent / "saved_models")
 
 
 def _build_frame(payload: dict) -> Frame2D:
@@ -101,29 +107,80 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, data: bytes, content_type: str, status=200, extra_headers=None):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length)
+        return json.loads(raw)
+
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
             html = (STATIC_DIR / "index.html").read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(html)))
-            self.end_headers()
-            self.wfile.write(html)
-        else:
-            self.send_error(404)
+            self._send_bytes(html, "text/html; charset=utf-8")
+            return
+        if self.path == "/models":
+            self._send_json({"names": storage.list()})
+            return
+        if self.path.startswith("/models/"):
+            name = urllib.parse.unquote(self.path[len("/models/"):])
+            try:
+                self._send_json(storage.load(name))
+            except InvalidNameError as e:
+                self._send_json({"error": str(e)}, status=400)
+            except NotFoundError as e:
+                self._send_json({"error": str(e)}, status=404)
+            return
+        self.send_error(404)
 
     def do_POST(self):
-        if self.path != "/solve":
-            self.send_error(404)
+        if self.path == "/solve":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_solve_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
             return
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length)
-        try:
-            payload = json.loads(raw)
-            result = _solve_payload(payload)
-            self._send_json(result)
-        except Exception as e:
-            self._send_json({"error": str(e)}, status=400)
+        if self.path == "/export/pdf":
+            try:
+                payload = self._read_json_body()
+                f = _build_frame(payload)
+                pdf_bytes = build_pdf_report(f)
+                self._send_bytes(pdf_bytes, "application/pdf",
+                                  extra_headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path.startswith("/models/"):
+            name = urllib.parse.unquote(self.path[len("/models/"):])
+            try:
+                payload = self._read_json_body()
+                storage.save(name, payload)
+                self._send_json({"saved": name})
+            except InvalidNameError as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        self.send_error(404)
+
+    def do_DELETE(self):
+        if self.path.startswith("/models/"):
+            name = urllib.parse.unquote(self.path[len("/models/"):])
+            try:
+                storage.delete(name)
+                self._send_json({"deleted": name})
+            except InvalidNameError as e:
+                self._send_json({"error": str(e)}, status=400)
+            except NotFoundError as e:
+                self._send_json({"error": str(e)}, status=404)
+            return
+        self.send_error(404)
 
     def log_message(self, fmt, *args):
         # 精簡一點, 只印方法+路徑+狀態碼

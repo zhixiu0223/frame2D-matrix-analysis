@@ -8,7 +8,7 @@ frame2d 的最小 Web API 層。
 import math
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -17,11 +17,17 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed
+from .storage import LocalFileStorage, InvalidNameError, NotFoundError
+from .pdf_export import build_pdf_report
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# saved_models/ 放在 repo 根目錄(跟 webapi/ webapi_stdlib/ 平行),
+# 兩個後端指向同一個路徑,存檔清單不會因為換後端而分裂成兩份。
+storage = LocalFileStorage(Path(__file__).parent.parent / "saved_models")
 
 
 @app.get("/")
@@ -97,3 +103,53 @@ def solve_frame(payload: FrameIn):
         "deformed": deformed,
         "deform_scale": deform_scale,
     }
+
+
+# ---------------- 存檔 / 讀檔(Save / Save As / Load / 刪除) ----------------
+
+@app.get("/models")
+def list_models():
+    return {"names": storage.list()}
+
+
+@app.get("/models/{name}")
+def load_model(name: str):
+    try:
+        return storage.load(name)
+    except InvalidNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/models/{name}")
+def save_model(name: str, payload: FrameIn):
+    try:
+        storage.save(name, payload.model_dump())
+    except InvalidNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"saved": name}
+
+
+@app.delete("/models/{name}")
+def delete_model(name: str):
+    try:
+        storage.delete(name)
+    except InvalidNameError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"deleted": name}
+
+
+# ---------------- PDF 匯出(重用 plotting.py 的 plot_all) ----------------
+
+@app.post("/export/pdf")
+def export_pdf(payload: FrameIn):
+    f = _build_frame(payload)
+    pdf_bytes = build_pdf_report(f)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'},
+    )

@@ -68,6 +68,22 @@
     <button data-view="V" class="viewBtn">V 圖(剪力)</button>
     <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
   </div>
+
+  <div id="toolbar" style="margin-top:0.4rem;">
+    <input id="modelName" type="text" placeholder="專案名稱" style="width:9rem;padding:0.35rem;">
+    <button id="btnSave">💾 儲存</button>
+    <button id="btnSaveAs">💾 另存新檔</button>
+    <select id="modelSelect" style="width:9rem;"></select>
+    <button id="btnLoad">📂 載入</button>
+    <button id="btnDeleteModel" style="color:#dc2626;">🗑 刪除</button>
+    <span class="sep"></span>
+    <button id="btnExportJson">⬇ 匯出JSON</button>
+    <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;">
+      ⬆ 匯入JSON<input id="importJsonFile" type="file" accept="application/json" style="display:none;">
+    </label>
+    <button id="btnExportMd">⬇ 匯出Markdown</button>
+    <button id="btnExportPdf">⬇ 匯出PDF</button>
+  </div>
   <div id="status"></div>
 
   <div id="canvasWrap">
@@ -751,6 +767,135 @@ function renderTables() {
   }
 }
 
+// ---------- 存檔 / 讀檔(伺服器端具名存檔) ----------
+let currentName = null;
+
+async function refreshModelList(selectName) {
+  try {
+    const res = await fetch('/models');
+    const data = await res.json();
+    const sel = document.getElementById('modelSelect');
+    sel.innerHTML = '';
+    for (const name of data.names) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (selectName) sel.value = selectName;
+  } catch (e) { setStatus('讀取存檔清單失敗: ' + e.message); }
+}
+
+async function saveModelAs(name) {
+  if (!name) { setStatus('請先在「專案名稱」輸入名字'); return; }
+  try {
+    const res = await fetch('/models/' + encodeURIComponent(name), {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(model)
+    });
+    if (!res.ok) { setStatus('儲存失敗: ' + await res.text()); return; }
+    currentName = name;
+    setStatus('已儲存為 "' + name + '"');
+    refreshModelList(name);
+  } catch (e) { setStatus('儲存失敗: ' + e.message); }
+}
+
+document.getElementById('btnSave').addEventListener('click', () => {
+  const name = currentName || document.getElementById('modelName').value.trim();
+  saveModelAs(name);
+});
+document.getElementById('btnSaveAs').addEventListener('click', () => {
+  const name = document.getElementById('modelName').value.trim();
+  saveModelAs(name);
+});
+document.getElementById('btnLoad').addEventListener('click', async () => {
+  const name = document.getElementById('modelSelect').value;
+  if (!name) { setStatus('沒有可載入的存檔'); return; }
+  try {
+    const res = await fetch('/models/' + encodeURIComponent(name));
+    if (!res.ok) { setStatus('載入失敗: ' + await res.text()); return; }
+    model = await res.json();
+    currentName = name;
+    document.getElementById('modelName').value = name;
+    lastResult = null;
+    clearSelection();
+    setStatus('已載入 "' + name + '"(記得重新按 Solve)');
+  } catch (e) { setStatus('載入失敗: ' + e.message); }
+});
+document.getElementById('btnDeleteModel').addEventListener('click', async () => {
+  const name = document.getElementById('modelSelect').value;
+  if (!name) return;
+  try {
+    const res = await fetch('/models/' + encodeURIComponent(name), {method: 'DELETE'});
+    if (!res.ok) { setStatus('刪除失敗: ' + await res.text()); return; }
+    if (currentName === name) currentName = null;
+    setStatus('已刪除 "' + name + '"');
+    refreshModelList();
+  } catch (e) { setStatus('刪除失敗: ' + e.message); }
+});
+
+// ---------- Export / Import(純瀏覽器端,不經伺服器) ----------
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('btnExportJson').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(model, null, 2)], {type: 'application/json'});
+  downloadBlob(blob, (currentName || 'frame2d_model') + '.json');
+});
+
+document.getElementById('importJsonFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      model = JSON.parse(reader.result);
+      lastResult = null;
+      currentName = null;
+      clearSelection();
+      setStatus('已匯入 ' + file.name + '(記得重新按 Solve)');
+    } catch (err) { setStatus('匯入失敗,JSON 格式錯誤: ' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+document.getElementById('btnExportMd').addEventListener('click', () => {
+  if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
+  let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += `## 節點結果\n\n`;
+  md += `| node | ux (m) | uy (m) | rot (rad) | Rx (kN) | Ry (kN) | M (kN·m) |\n`;
+  md += `|---|---|---|---|---|---|---|\n`;
+  for (const n of lastResult.nodes) {
+    md += `| ${n.node} | ${n.ux.toExponential(3)} | ${n.uy.toExponential(3)} | ${n.rot.toExponential(3)} | ${(n.Rx/1000).toFixed(3)} | ${(n.Ry/1000).toFixed(3)} | ${(n.M/1000).toFixed(3)} |\n`;
+  }
+  md += `\n## 桿件端內力\n\n`;
+  md += `| member | L (m) | 角度(度) | N1 (kN) | V1 (kN) | M1 (kN·m) | N2 (kN) | V2 (kN) | M2 (kN·m) |\n`;
+  md += `|---|---|---|---|---|---|---|---|---|\n`;
+  for (const m of lastResult.members) {
+    md += `| ${m.member_id} | ${m.L.toFixed(3)} | ${m.angle_deg.toFixed(1)} | ${(m.N1/1000).toFixed(3)} | ${(m.V1/1000).toFixed(3)} | ${(m.M1/1000).toFixed(3)} | ${(m.N2/1000).toFixed(3)} | ${(m.V2/1000).toFixed(3)} | ${(m.M2/1000).toFixed(3)} |\n`;
+  }
+  const blob = new Blob([md], {type: 'text/markdown'});
+  downloadBlob(blob, (currentName || 'frame2d_result') + '.md');
+});
+
+document.getElementById('btnExportPdf').addEventListener('click', async () => {
+  setStatus('產生 PDF 中...');
+  try {
+    const res = await fetch('/export/pdf', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(model)
+    });
+    if (!res.ok) { setStatus('PDF 產生失敗: ' + await res.text()); return; }
+    const blob = await res.blob();
+    downloadBlob(blob, (currentName || 'frame2d_report') + '.pdf');
+    setStatus('PDF 已下載');
+  } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
+});
+
+refreshModelList();
 render();
 </script>
 </body>
