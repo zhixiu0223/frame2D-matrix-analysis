@@ -10,31 +10,38 @@
   #left { flex: 1 1 640px; min-width: 320px; padding: 0.8rem; }
   #right { flex: 0 0 300px; padding: 0.8rem; border-left: 1px solid #ddd; }
   h1 { font-size: 1.1rem; margin: 0 0 0.4rem; }
-  .hint { font-size: 0.8rem; color: #666; margin-bottom: 0.6rem; }
-  #toolbar { margin-bottom: 0.4rem; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  .hint { font-size: 0.78rem; color: #666; margin-bottom: 0.6rem; }
+  #toolbar { margin-bottom: 0.3rem; display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
   #toolbar button, #right button { padding: 0.4rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
   #toolbar button.active { background: #2563eb; color: white; border-color: #2563eb; }
-  #canvasWrap { border: 1px solid #ccc; background: #fafafa; }
+  #toolbar .sep { flex-basis: 100%; height: 0; }
+  #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; }
   svg { width: 100%; height: auto; display: block; touch-action: none; }
-  .node-circle { fill: #fff; stroke: #1f2937; stroke-width: 2; cursor: grab; }
+  .node-circle { fill: #1f2937; stroke: #1f2937; stroke-width: 2; cursor: grab; }
   .node-circle.selected { fill: #2563eb; stroke: #2563eb; }
+  .pin-marker { fill: #fff; stroke: #1f2937; stroke-width: 1.5; }
   .node-label { font-size: 11px; fill: #1f2937; pointer-events: none; }
   .member-line { stroke: #1f2937; stroke-width: 3; cursor: pointer; }
   .member-line.selected { stroke: #2563eb; }
-  .member-line.faint { stroke: #ccc; stroke-width: 1.5; }
+  .member-line.faint { stroke: #cbd5e1; stroke-width: 1.5; }
   .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
-  .diagram-fill { fill: rgba(37, 99, 235, 0.25); stroke: #2563eb; stroke-width: 1; }
+  .diagram-fill { fill: rgba(37, 99, 235, 0.22); stroke: #2563eb; stroke-width: 1; }
+  .diagram-fill.M { fill: rgba(220, 38, 38, 0.20); stroke: #dc2626; }
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
-  .support-symbol { fill: #374151; }
-  .scale-label { font-size: 11px; fill: #ea580c; }
-  #status { font-size: 0.85rem; margin: 0.4rem 0; min-height: 1.2em; }
+  .support-symbol { fill: #374151; stroke: #374151; }
+  .support-hatch { stroke: #374151; stroke-width: 1.2; }
+  .scale-label { font-size: 12px; fill: #ea580c; font-weight: bold; }
+  .value-label { font-size: 9px; }
+  .grid-line { stroke: #e5e7eb; stroke-width: 1; }
+  .grid-label { font-size: 9px; fill: #9ca3af; }
+  #status { font-size: 0.85rem; margin: 0.3rem 0; min-height: 1.2em; }
   fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
   legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
   label { display: block; font-size: 0.8rem; margin: 0.3rem 0 0.1rem; }
   input, select { width: 100%; padding: 0.3rem; font-size: 0.85rem; }
   .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.3rem; }
-  #propPanel button { width: 100%; margin-top: 0.5rem; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; margin-top: 0.5rem; }
   table { border-collapse: collapse; width: 100%; margin-top: 0.4rem; font-size: 0.78rem; }
   th, td { border: 1px solid #ddd; padding: 3px 5px; text-align: right; }
   th:first-child, td:first-child { text-align: left; }
@@ -45,13 +52,16 @@
 
 <div id="left">
   <h1>frame2d 互動編輯器</h1>
-  <p class="hint">拖曳節點改變位置。點一下節點/桿件開啟右側屬性面板。「新增節點」模式下點空白處新增節點;「新增桿件」模式下依序點兩個節點連線。改完按 Solve 才會重新計算。</p>
+  <p class="hint">拖曳節點改位置。點節點/桿件開右側屬性面板。雙指縮放/平移,或用下方 🔍 按鈕。「新增節點/桿件」模式見下。改完按 Solve 才會重新計算。</p>
 
   <div id="toolbar">
-    <button id="btnAddNode">➕ 新增節點</button>
-    <button id="btnAddMember">➕ 新增桿件</button>
+    <button id="btnAddNode">➕ 節點</button>
+    <button id="btnAddMember">➕ 桿件</button>
     <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
-    <span style="flex-basis:100%;height:0;"></span>
+    <button id="btnZoomIn">🔍+</button>
+    <button id="btnZoomOut">🔍-</button>
+    <button id="btnZoomReset">⟲ 原大小</button>
+    <span class="sep"></span>
     <button data-view="structure" class="viewBtn active">結構/荷載</button>
     <button data-view="deformed" class="viewBtn">變形</button>
     <button data-view="N" class="viewBtn">N 圖(軸力)</button>
@@ -61,7 +71,9 @@
   <div id="status"></div>
 
   <div id="canvasWrap">
-    <svg id="svg" viewBox="0 0 800 500"></svg>
+    <svg id="svg" viewBox="0 0 800 500">
+      <g id="camera"><g id="content"></g></g>
+    </svg>
   </div>
 
   <details>
@@ -112,18 +124,21 @@ let model = {
   member_point_loads: []
 };
 
-let lastResult = null;      // 最近一次 /solve 的回傳
+let lastResult = null;
 let selected = null;        // {type:'node'|'member', id}
 let viewMode = 'structure';
 let addMode = null;         // null | 'node' | 'member'
-let memberFirstNode = null; // 新增桿件模式下先點的第一個節點
+let memberFirstNode = null;
 let dragNodeId = null;
 let dragMoved = false;
 
 const svg = document.getElementById('svg');
+const cameraG = document.getElementById('camera');
+let contentG = document.getElementById('content');
 const VB_W = 800, VB_H = 500;
+let camera = {x: 0, y: 0, k: 1};
 
-// ---------- 座標轉換 ----------
+// ---------- 世界座標 <-> 畫布座標(computeTransform) ----------
 function computeTransform() {
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -132,20 +147,23 @@ function computeTransform() {
   const pad = 0.18;
   const availW = VB_W * (1 - 2 * pad), availH = VB_H * (1 - 2 * pad);
   const scale = Math.min(availW / w, availH / h);
-  return {
-    scale,
-    cx: (minX + maxX) / 2, cy: (minY + maxY) / 2,
-    sx: VB_W / 2, sy: VB_H / 2,
-  };
+  return { scale, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, sx: VB_W / 2, sy: VB_H / 2 };
 }
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
+// client(像素) -> world: 透過 content 群組的 CTM 一次還原「viewBox縮放 + camera平移縮放」
 function clientToWorld(evt, t) {
   const pt = svg.createSVGPoint();
   pt.x = evt.clientX; pt.y = evt.clientY;
-  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  const p = pt.matrixTransform(contentG.getScreenCTM().inverse());
   return [(p.x - t.sx) / t.scale + t.cx, -(p.y - t.sy) / t.scale + t.cy];
+}
+// client(像素) -> camera-space(svg viewBox座標系, camera變換操作的空間)
+function clientToCameraSpace(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
 }
 
 function nodeById(id) { return model.nodes.find(n => n.id === id); }
@@ -154,15 +172,81 @@ function el(tag, attrs) {
   for (const k in attrs) e.setAttribute(k, attrs[k]);
   return e;
 }
+function put(e) { contentG.appendChild(e); return e; }
+
+// ---------- 縮放/平移 ----------
+function clampK(k) { return Math.min(15, Math.max(0.3, k)); }
+function applyCameraTransform() {
+  cameraG.setAttribute('transform', `translate(${camera.x},${camera.y}) scale(${camera.k})`);
+}
+function zoomAt(p, factor) {
+  const newK = clampK(camera.k * factor);
+  const canonicalAtP = { x: (p.x - camera.x) / camera.k, y: (p.y - camera.y) / camera.k };
+  camera.k = newK;
+  camera.x = p.x - canonicalAtP.x * newK;
+  camera.y = p.y - canonicalAtP.y * newK;
+  applyCameraTransform();
+}
+document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1.3));
+document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1/1.3));
+document.getElementById('btnZoomReset').addEventListener('click', () => { camera = {x:0,y:0,k:1}; applyCameraTransform(); });
+svg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomAt(clientToCameraSpace(e), e.deltaY < 0 ? 1.15 : 1/1.15);
+}, {passive: false});
+
+// 雙指縮放/平移(capture phase,不受節點 stopPropagation 影響)
+const activePointers = new Map();
+let pinchState = null;
+svg.addEventListener('pointerdown', (e) => {
+  activePointers.set(e.pointerId, clientToCameraSpace(e));
+  if (activePointers.size === 2) {
+    dragNodeId = null; panState = null;
+    const pts = [...activePointers.values()];
+    pinchState = {
+      startDist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1,
+      startCam: {...camera},
+      startMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
+    };
+  }
+}, {capture: true});
+svg.addEventListener('pointermove', (e) => {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, clientToCameraSpace(e));
+  if (activePointers.size === 2 && pinchState) {
+    const pts = [...activePointers.values()];
+    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+    const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
+    const newK = clampK(pinchState.startCam.k * (dist / pinchState.startDist));
+    const canonicalAtStart = {
+      x: (pinchState.startMid.x - pinchState.startCam.x) / pinchState.startCam.k,
+      y: (pinchState.startMid.y - pinchState.startCam.y) / pinchState.startCam.k,
+    };
+    camera.k = newK;
+    camera.x = mid.x - canonicalAtStart.x * newK;
+    camera.y = mid.y - canonicalAtStart.y * newK;
+    applyCameraTransform();
+  }
+}, {capture: true});
+function releasePointer(e) {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size < 2) pinchState = null;
+}
+svg.addEventListener('pointerup', releasePointer, {capture: true});
+svg.addEventListener('pointercancel', releasePointer, {capture: true});
+
+// 單指拖曳空白處 = 平移
+let panState = null;
 
 // ---------- 畫圖 ----------
 function render() {
-  svg.innerHTML = '';
-  svg.setAttribute('viewBox', `0 0 ${VB_W} ${VB_H}`);
+  contentG.innerHTML = '';
   const t = computeTransform();
+  drawGrid(t);
 
   if (viewMode === 'structure') {
     drawMembers(t, false);
+    drawPinMarkers(t);
     drawSupports(t);
     drawLoads(t);
     drawNodes(t);
@@ -176,9 +260,50 @@ function render() {
 }
 
 function drawNeedSolveMsg() {
-  const msg = el('text', {x: 10, y: 20, 'font-size': 13, fill: '#dc2626'});
-  msg.textContent = '請先按 Solve 才有結果可畫';
-  svg.appendChild(msg);
+  const m = el('text', {x: 10, y: 22, 'font-size': 13, fill: '#dc2626'});
+  m.textContent = '請先按 Solve 才有結果可畫';
+  put(m);
+}
+
+function niceStep(rough) {
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const step = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  return step * mag;
+}
+
+function drawGrid(t) {
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = (maxX - minX) || 1, h = (maxY - minY) || 1;
+  const step = niceStep(Math.max(w, h) / 8);
+  const padX = w * 0.35 + step, padY = h * 0.35 + step;
+  const gx0 = Math.floor((minX - padX) / step) * step, gx1 = Math.ceil((maxX + padX) / step) * step;
+  const gy0 = Math.floor((minY - padY) / step) * step, gy1 = Math.ceil((maxY + padY) / step) * step;
+  let n = 0;
+  for (let gx = gx0; gx <= gx1 + 1e-9; gx += step, n++) {
+    const [x1, y1] = toScreen(gx, gy0, t), [x2, y2] = toScreen(gx, gy1, t);
+    put(el('line', {x1, y1, x2, y2, class: 'grid-line'}));
+    if (n % 2 === 0) {
+      const lbl = el('text', {x: x1, y: y2 + 12, class: 'grid-label', 'text-anchor': 'middle'});
+      lbl.textContent = gx.toFixed(step < 1 ? 1 : 0);
+      put(lbl);
+    }
+  }
+  n = 0;
+  for (let gy = gy0; gy <= gy1 + 1e-9; gy += step, n++) {
+    const [x1, y1] = toScreen(gx0, gy, t), [x2, y2] = toScreen(gx1, gy, t);
+    put(el('line', {x1, y1, x2, y2, class: 'grid-line'}));
+    if (n % 2 === 0) {
+      const lbl = el('text', {x: x1 - 4, y: y1 + 3, class: 'grid-label', 'text-anchor': 'end'});
+      lbl.textContent = gy.toFixed(step < 1 ? 1 : 0);
+      put(lbl);
+    }
+  }
+  const lbl = el('text', {x: VB_W - 8, y: VB_H - 8, class: 'grid-label', 'text-anchor': 'end'});
+  lbl.textContent = `格線間距 ${step} m`;
+  put(lbl);
 }
 
 function drawMembers(t, faint) {
@@ -190,11 +315,33 @@ function drawMembers(t, faint) {
     const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : ''));
     const line = el('line', {x1, y1, x2, y2, class: cls});
     if (!faint) line.addEventListener('click', (e) => { e.stopPropagation(); selectMember(m.id); });
-    svg.appendChild(line);
+    put(line);
     if (!faint) {
       const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 - 4, class: 'member-label'});
       lbl.textContent = 'M' + m.id;
-      svg.appendChild(lbl);
+      put(lbl);
+    }
+  }
+}
+
+// 節點本體一律畫實心圓(剛接/連續節點的標準畫法);
+// 桿件端點若有release,在靠近該端點處另外畫一個空心小圓(內部鉸接的標準畫法),
+// 不是整個節點空心 —— 同一節點上其他沒release的桿件仍然是剛接。
+function drawPinMarkers(t) {
+  for (const m of model.members) {
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const dx = nj.x - ni.x, dy = nj.y - ni.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const ux = dx / L, uy = dy / L;
+    const offset = Math.min(0.35, L * 0.12);
+    if (m.release_i) {
+      const [x, y] = toScreen(ni.x + ux * offset, ni.y + uy * offset, t);
+      put(el('circle', {cx: x, cy: y, r: 4.5, class: 'pin-marker'}));
+    }
+    if (m.release_j) {
+      const [x, y] = toScreen(nj.x - ux * offset, nj.y - uy * offset, t);
+      put(el('circle', {cx: x, cy: y, r: 4.5, class: 'pin-marker'}));
     }
   }
 }
@@ -203,28 +350,63 @@ function drawNodes(t) {
   for (const n of model.nodes) {
     const [x, y] = toScreen(n.x, n.y, t);
     const sel = selected && selected.type === 'node' && selected.id === n.id;
-    const c = el('circle', {cx: x, cy: y, r: 7, class: 'node-circle' + (sel ? ' selected' : '')});
+    const c = el('circle', {cx: x, cy: y, r: 6, class: 'node-circle' + (sel ? ' selected' : '')});
     c.addEventListener('pointerdown', (e) => { e.stopPropagation(); dragNodeId = n.id; dragMoved = false; svg.setPointerCapture(e.pointerId); });
-    svg.appendChild(c);
+    put(c);
     const lbl = el('text', {x: x + 9, y: y - 9, class: 'node-label'});
     lbl.textContent = 'N' + n.id;
-    svg.appendChild(lbl);
+    put(lbl);
   }
 }
 
+// ---------- 支承符號: 依 SW FEA 慣用的三種標準符號畫 ----------
+function supportKind(s) {
+  const hasUx = s.ux !== null && s.ux !== undefined;
+  const hasUy = s.uy !== null && s.uy !== undefined;
+  const hasRot = s.rot !== null && s.rot !== undefined;
+  if (hasUx && hasUy && hasRot) return 'fixed';
+  if (hasUx && hasUy && !hasRot) return 'pin';
+  if (hasUy && !hasUx && !hasRot) return 'roller_y';
+  if (hasUx && !hasUy && !hasRot) return 'roller_x';
+  return 'custom';
+}
+function hatch(x0, y0, dx, dy, n, len) {
+  // 沿(dx,dy)方向每隔一小段畫一條斜線 hatch, 從(x0,y0)開始排列n條
+  const group = [];
+  for (let i = -Math.floor(n/2); i <= Math.floor(n/2); i++) {
+    const bx = x0 + dx * i, by = y0 + dy * i;
+    group.push(el('line', {x1: bx, y1: by, x2: bx - len*0.6, y2: by + len, class: 'support-hatch'}));
+  }
+  return group;
+}
 function drawSupports(t) {
   for (const s of model.supports) {
     const n = nodeById(s.node);
     if (!n) continue;
     const [x, y] = toScreen(n.x, n.y, t);
-    const fixed = s.rot !== null && s.rot !== undefined;
-    if (fixed) {
-      svg.appendChild(el('polygon', {points: `${x-8},${y+16} ${x+8},${y+16} ${x},${y+2}`, class: 'support-symbol'}));
-      for (let i = -8; i <= 8; i += 4) {
-        svg.appendChild(el('line', {x1: x+i, y1: y+16, x2: x+i-4, y2: y+22, stroke: '#374151', 'stroke-width': 1.2}));
-      }
+    const kind = supportKind(s);
+    if (kind === 'fixed') {
+      put(el('line', {x1: x-11, y1: y, x2: x+11, y2: y, class: 'support-symbol', 'stroke-width': 2.5}));
+      hatch(x-8, y, 5.3, 0, 3, 9).forEach(put);
+    } else if (kind === 'pin') {
+      put(el('polygon', {points: `${x-9},${y+16} ${x+9},${y+16} ${x},${y+2}`, class: 'support-symbol'}));
+      put(el('line', {x1: x-11, y1: y+16, x2: x+11, y2: y+16, class: 'support-symbol', 'stroke-width': 2}));
+      hatch(x-8, y+16, 5.3, 0, 3, 9).forEach(put);
+    } else if (kind === 'roller_y') {
+      put(el('polygon', {points: `${x-9},${y+13} ${x+9},${y+13} ${x},${y+2}`, fill: 'none', stroke: '#374151', 'stroke-width': 2}));
+      [-6, 6].forEach(dx2 => put(el('circle', {cx: x+dx2, cy: y+16, r: 3.5, fill: 'none', stroke: '#374151', 'stroke-width': 1.5})));
+      put(el('line', {x1: x-11, y1: y+20, x2: x+11, y2: y+20, class: 'support-symbol', 'stroke-width': 2}));
+      hatch(x-8, y+20, 5.3, 0, 3, 8).forEach(put);
+    } else if (kind === 'roller_x') {
+      put(el('polygon', {points: `${x+13},${y-9} ${x+13},${y+9} ${x+2},${y}`, fill: 'none', stroke: '#374151', 'stroke-width': 2}));
+      [-6, 6].forEach(dy2 => put(el('circle', {cx: x+16, cy: y+dy2, r: 3.5, fill: 'none', stroke: '#374151', 'stroke-width': 1.5})));
+      put(el('line', {x1: x+20, y1: y-11, x2: x+20, y2: y+11, class: 'support-symbol', 'stroke-width': 2}));
+      hatch(x+20, y-8, 0, 5.3, 3, 8).forEach(put);
     } else {
-      svg.appendChild(el('polygon', {points: `${x-8},${y+14} ${x+8},${y+14} ${x},${y+2}`, fill: 'none', stroke: '#374151', 'stroke-width': 2}));
+      put(el('rect', {x: x-6, y: y+4, width: 12, height: 12, fill: 'none', stroke: '#9333ea', 'stroke-width': 2, transform: `rotate(45 ${x} ${y+10})`}));
+      const lbl = el('text', {x: x+12, y: y+18, 'font-size': 9, fill: '#9333ea'});
+      lbl.textContent = '自訂支承';
+      put(lbl);
     }
   }
 }
@@ -234,7 +416,7 @@ function drawLoads(t) {
   const marker = el('marker', {id: 'arrowhead', markerWidth: 8, markerHeight: 8, refX: 6, refY: 3, orient: 'auto'});
   marker.appendChild(el('path', {d: 'M0,0 L6,3 L0,6 Z', fill: '#dc2626'}));
   defs.appendChild(marker);
-  svg.appendChild(defs);
+  put(defs);
 
   for (const p of model.point_loads) {
     const n = nodeById(p.node);
@@ -245,17 +427,19 @@ function drawLoads(t) {
     const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
     const len = 42;
     const x1 = x - ux * len, y1 = y - uy * len;
-    svg.appendChild(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+    put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
     lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
-    svg.appendChild(lbl);
+    put(lbl);
   }
 }
+
+function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
 
 function drawDeformed(t) {
   const lbl = el('text', {x: 10, y: 20, class: 'scale-label'});
   lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
-  svg.appendChild(lbl);
+  put(lbl);
   for (const mid in lastResult.deformed) {
     const d = lastResult.deformed[mid];
     let pts = '';
@@ -263,8 +447,28 @@ function drawDeformed(t) {
       const [x, y] = toScreen(d.X[i], d.Y[i], t);
       pts += `${x},${y} `;
     }
-    svg.appendChild(el('polyline', {points: pts.trim(), class: 'deformed-line'}));
+    put(el('polyline', {points: pts.trim(), class: 'deformed-line'}));
   }
+  // 在每個節點標實際位移量(mm),不是放大後的畫面尺寸
+  for (const n of lastResult.nodes) {
+    const disp = Math.hypot(n.ux, n.uy);
+    if (disp < 1e-9) continue;
+    const nn = nodeById(n.node);
+    if (!nn) continue;
+    const [x, y] = toScreen(nn.x, nn.y, t);
+    const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c'});
+    lbl2.textContent = `Δ=${(disp * 1000).toFixed(1)}mm`;
+    put(lbl2);
+  }
+}
+
+function labelIndices(vals) {
+  const idxs = new Set([0, vals.length - 1]);
+  for (let i = 1; i < vals.length - 1; i++) {
+    const d1 = vals[i] - vals[i - 1], d2 = vals[i + 1] - vals[i];
+    if (d1 * d2 < -1e-6) idxs.add(i);
+  }
+  return [...idxs].sort((a, b) => a - b);
 }
 
 function drawDiagram(t, kind) {
@@ -275,28 +479,42 @@ function drawDiagram(t, kind) {
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
   const valueToWorld = (worldDiag * 0.15) / maxAbs;
+  const unit = kind === 'M' ? 'kN·m' : 'kN';
 
-  const lbl = el('text', {x: 10, y: 20, class: 'scale-label', fill: '#2563eb'});
-  lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${kind==='M' ? 'kN·m' : 'kN'})`;
-  svg.appendChild(lbl);
+  const lbl = el('text', {x: 10, y: 20, class: 'scale-label', fill: kind === 'M' ? '#dc2626' : '#2563eb'});
+  lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${unit})` + (kind === 'M' ? ' — 畫在拉力側' : '');
+  put(lbl);
 
   for (const m of model.members) {
     const d = lastResult.diagrams[m.id];
     if (!d) continue;
     const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
     const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
-    const perp = [-Math.sin(angle), Math.cos(angle)];
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const perp = [-s, c];
     let basePts = [], diagPts = [];
     for (let i = 0; i < d.x.length; i++) {
-      const bx = ni.x + d.x[i] * Math.cos(angle);
-      const by = ni.y + d.x[i] * Math.sin(angle);
+      const bx = ni.x + d.x[i] * c;
+      const by = ni.y + d.x[i] * s;
+      // 跟 plotting.py 的 plot_diagram() 同一套偏移方向(- perp * value),
+      // 已經跟 SW FEA 對照驗證過; M 圖此慣例下會畫在拉力側。
       const val = d[kind][i] * valueToWorld;
-      const ox = bx + perp[0] * val, oy = by + perp[1] * val;
+      const ox = bx - perp[0] * val, oy = by - perp[1] * val;
       basePts.push(toScreen(bx, by, t));
       diagPts.push(toScreen(ox, oy, t));
     }
     const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + diagPts.slice().reverse().map(p => p.join(',')).join(' ');
-    svg.appendChild(el('polygon', {points: poly, class: 'diagram-fill'}));
+    put(el('polygon', {points: poly, class: 'diagram-fill' + (kind === 'M' ? ' M' : '')}));
+
+    // 標數值: 兩端點 + 桿件內部所有轉折點(幾何/力量不連續處), 帶單位
+    for (const i of labelIndices(d[kind])) {
+      const val = d[kind][i];
+      if (Math.abs(val) < maxAbs * 0.02) continue; // 太小的值不標, 避免畫面太亂
+      const [lx, ly] = diagPts[i];
+      const t2 = el('text', {x: lx, y: ly, class: 'value-label', fill: kind === 'M' ? '#dc2626' : '#2563eb', 'text-anchor': 'middle'});
+      t2.textContent = (val / 1000).toFixed(2);
+      put(t2);
+    }
   }
 }
 
@@ -307,6 +525,7 @@ function selectNode(id) {
   renderPropPanel();
 }
 function selectMember(id) { selected = {type: 'member', id}; renderPropPanel(); render(); }
+function clearSelection() { selected = null; memberFirstNode = null; renderPropPanel(); render(); }
 
 function handleMemberAddClick(id) {
   if (memberFirstNode === null) {
@@ -329,7 +548,7 @@ function renderPropPanel() {
     const n = nodeById(selected.id);
     const sup = model.supports.find(s => s.node === n.id);
     const pl = model.point_loads.find(p => p.node === n.id);
-    const supType = !sup ? 'free' : (sup.rot !== null && sup.rot !== undefined ? 'fixed' : 'pin');
+    const kind = sup ? supportKind(sup) : 'free';
     panel.innerHTML = `
       <fieldset><legend>節點 N${n.id}</legend>
         <div class="row3">
@@ -339,9 +558,11 @@ function renderPropPanel() {
         </div>
         <label>支承</label>
         <select id="p_sup">
-          <option value="free" ${supType==='free'?'selected':''}>自由(無支承)</option>
-          <option value="pin" ${supType==='pin'?'selected':''}>鉸支承(ux=uy=0)</option>
-          <option value="fixed" ${supType==='fixed'?'selected':''}>固定支承(ux=uy=rot=0)</option>
+          <option value="free" ${kind==='free'?'selected':''}>自由(無支承)</option>
+          <option value="pin" ${kind==='pin'?'selected':''}>鉸支承(ux=uy=0)</option>
+          <option value="fixed" ${kind==='fixed'?'selected':''}>固定支承(ux=uy=rot=0)</option>
+          <option value="roller_y" ${kind==='roller_y'?'selected':''}>滾支承-擋垂直(uy=0)</option>
+          <option value="roller_x" ${kind==='roller_x'?'selected':''}>滾支承-擋水平(ux=0)</option>
         </select>
         <label>集中力 fx / fy (N) / m (N·m)</label>
         <div class="row3">
@@ -349,9 +570,13 @@ function renderPropPanel() {
           <input id="p_fy" type="number" step="any" value="${pl ? pl.fy : 0}">
           <input id="p_fm" type="number" step="any" value="${pl ? pl.m : 0}">
         </div>
-        <button id="p_apply">套用</button>
+        <div class="row2">
+          <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+          <button id="p_cancel">取消</button>
+        </div>
         <button id="p_delete" style="background:#dc2626;color:white;">刪除節點</button>
       </fieldset>`;
+    document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
       n.x = parseFloat(document.getElementById('p_x').value);
       n.y = parseFloat(document.getElementById('p_y').value);
@@ -359,6 +584,8 @@ function renderPropPanel() {
       model.supports = model.supports.filter(s => s.node !== n.id);
       if (supVal === 'pin') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: null});
       if (supVal === 'fixed') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: 0.0});
+      if (supVal === 'roller_y') model.supports.push({node: n.id, ux: null, uy: 0.0, rot: null});
+      if (supVal === 'roller_x') model.supports.push({node: n.id, ux: 0.0, uy: null, rot: null});
       const fx = parseFloat(document.getElementById('p_fx').value) || 0;
       const fy = parseFloat(document.getElementById('p_fy').value) || 0;
       const fm = parseFloat(document.getElementById('p_fm').value) || 0;
@@ -371,8 +598,7 @@ function renderPropPanel() {
       model.members = model.members.filter(m => m.node_i !== n.id && m.node_j !== n.id);
       model.supports = model.supports.filter(s => s.node !== n.id);
       model.point_loads = model.point_loads.filter(p => p.node !== n.id);
-      selected = null;
-      renderPropPanel(); render();
+      clearSelection();
     };
   } else {
     const m = model.members.find(x => x.id === selected.id);
@@ -385,17 +611,21 @@ function renderPropPanel() {
           <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架)</option>
           <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線)</option>
         </select>
-        <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放</label>
-        <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放</label>
+        <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放(N${m.node_i}端,畫空心圓)</label>
+        <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放(N${m.node_j}端,畫空心圓)</label>
         <label>斷面 "${sec.name}"(改這裡會影響所有共用此斷面的桿件)</label>
         <div class="row3">
           <div><label>E (Pa)</label><input id="p_E" type="number" step="any" value="${sec.E}"></div>
           <div><label>I (m⁴)</label><input id="p_I" type="number" step="any" value="${sec.I}"></div>
           <div><label>A (m²)</label><input id="p_A" type="number" step="any" value="${sec.A}"></div>
         </div>
-        <button id="p_apply">套用</button>
+        <div class="row2">
+          <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+          <button id="p_cancel">取消</button>
+        </div>
         <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
       </fieldset>`;
+    document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
       m.member_type = document.getElementById('p_type').value;
       m.release_i = document.getElementById('p_ri').checked;
@@ -407,43 +637,59 @@ function renderPropPanel() {
     };
     document.getElementById('p_delete').onclick = () => {
       model.members = model.members.filter(x => x.id !== m.id);
-      selected = null;
-      renderPropPanel(); render();
+      clearSelection();
     };
   }
 }
 
-// ---------- 事件 ----------
+// ---------- 畫布事件(節點拖曳 / 新增 / 平移) ----------
 svg.addEventListener('pointerdown', (e) => {
+  if (activePointers.size >= 2) return;
   if (dragNodeId !== null) return;
   const t = computeTransform();
-  const [wx, wy] = clientToWorld(e, t);
   if (addMode === 'node') {
+    const [wx, wy] = clientToWorld(e, t);
     const newId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
     model.nodes.push({id: newId, x: Math.round(wx * 100) / 100, y: Math.round(wy * 100) / 100});
     setStatus('新增節點 N' + newId);
     render();
-  } else if (addMode !== 'member') {
-    selected = null; renderPropPanel(); render();
+    return;
   }
+  panState = {start: clientToCameraSpace(e), startCam: {...camera}, moved: false};
 });
 
 svg.addEventListener('pointermove', (e) => {
-  if (dragNodeId === null) return;
-  dragMoved = true;
-  const t = computeTransform();
-  const [wx, wy] = clientToWorld(e, t);
-  const n = nodeById(dragNodeId);
-  n.x = Math.round(wx * 100) / 100; n.y = Math.round(wy * 100) / 100;
-  render();
+  if (activePointers.size >= 2) return;
+  if (dragNodeId !== null) {
+    dragMoved = true;
+    const t = computeTransform();
+    const [wx, wy] = clientToWorld(e, t);
+    const n = nodeById(dragNodeId);
+    n.x = Math.round(wx * 100) / 100; n.y = Math.round(wy * 100) / 100;
+    render();
+    return;
+  }
+  if (panState) {
+    const p = clientToCameraSpace(e);
+    const dx = p.x - panState.start.x, dy = p.y - panState.start.y;
+    if (Math.hypot(dx, dy) > 3) panState.moved = true;
+    camera.x = panState.startCam.x + dx;
+    camera.y = panState.startCam.y + dy;
+    applyCameraTransform();
+  }
 });
 
 svg.addEventListener('pointerup', () => {
   if (dragNodeId !== null) {
     const id = dragNodeId;
     dragNodeId = null;
-    if (!dragMoved) { selectNode(id); render(); }
-    else { selected = {type: 'node', id}; renderPropPanel(); render(); }
+    if (!dragMoved) selectNode(id); else { selected = {type: 'node', id}; renderPropPanel(); }
+    render();
+    return;
+  }
+  if (panState) {
+    if (!panState.moved && addMode !== 'member') clearSelection();
+    panState = null;
   }
 });
 
