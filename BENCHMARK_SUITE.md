@@ -1,7 +1,7 @@
 # Benchmark Suite 索引
 
 frame2d 的正確性不是靠單一權威來源背書,是靠多種互相獨立的驗證方式
-交叉確認。這份文件把 `tests/` 底下 30 個驗證案例依「驗證對象」分類整理,
+交叉確認。這份文件把 `tests/` 底下 35 個驗證案例依「驗證對象」分類整理,
 方便快速找到「某個功能是用什麼方法驗證過的」,不用逐一打開每個檔案的
 docstring。
 
@@ -18,7 +18,7 @@ frame2d 使用四種互相獨立的驗證方式, 沒有任何一個功能只靠�
 |---|---|---|
 | **解析解** | 純數學推導, 不依賴任何程式碼 | 懸臂梁、簡支梁等靜定/簡單靜不定結構 |
 | **純靜力學(力平衡)** | 不依賴 fixed_end_forces 公式本身對不對 | 桿件內部載重、局部段均佈載重、支承沉陷 |
-| **第三方獨立工具**(slope_deflection_framework、SW FEA) | 完全獨立的另一套實作 | 側移剛架、內部鉸接、支承沉陷等多數案例 |
+| **第三方獨立工具**(slope_deflection_framework、SW FEA、anastruct、PyNite) | 完全獨立的另一套實作 | 側移剛架、內部鉸接、支承沉陷、任意角度載重等多數案例 |
 | **兩套獨立內部實作互相驗證**(靜力凝縮 vs DOFManager) | 同一個團隊寫的兩套完全不共用組裝邏輯的程式碼 | 內部鉸接系列 |
 
 ## 案例索引(按主題分組)
@@ -75,11 +75,52 @@ frame2d 使用四種互相獨立的驗證方式, 沒有任何一個功能只靠�
 | 案例 | 檔案 | 驗證對象 | 方法 |
 |---|---|---|---|
 | 29 | `test_result_api.py` | Result API便利查詢介面(純介面整理) | 對照底層函式手動查詢+解析解 |
-| 30 | `test_sloped_roof_global_udl.py` | `distributed_load(direction='global_y')`(斜屋頂重力/雪載重) | SW FEA(slop-roof案例, 4桿件x11點N/V/M) |
+| 30 | `test_sloped_roof_global_udl.py` | `distributed_load(direction='global_y')`(斜屋頂重力/雪載重, 整根桿件) | SW FEA(slop-roof案例, 4桿件x11點N/V/M) |
+
+### 任意角度均佈載重系列(案例 31-35)
+
+`direction='global_y'` 只支援整根桿件, 開發過程中發現 SW FEA 自己
+「局部段+角度」這個組合不可靠(見下方), 逼出了更完整的 `direction='global'`
+(任意角度, 支援局部段+線性變化任意組合)。這組案例也是第一次引入
+frame2d 以外的獨立FEM工具(anastruct、PyNite)做交叉驗證, 不再只靠
+SW FEA 一個外部參照。
+
+| 案例 | 檔案 | 驗證對象 | 方法 |
+|---|---|---|---|
+| 31 | `test_global_angle_load.py` | `direction='global'`(任意角度)基礎功能, `global_y`是其`angle_deg=-90`特例 | 退化案例對照(不是自己驗自己) |
+| 32 | `test_global_y_varying_snow_load.py` | `global_y`梯形變化(不均勻雪載重), 整根桿件 | 細網格分段收斂驗證(獨立於新公式本身)+ 退化案例對照SW FEA |
+| 33 | `test_snow_load_vs_swfea_app.py` | 整根桿件梯形變化均佈載重 | SW FEA app真實截圖+.frame資料庫匯出反力, 4位小數精確吻合 |
+| 34 | `test_partial_snow_three_way_crosscheck.py` | **局部段+角度+線性變化任意組合**, frame2d用真正的`x_start`/`x_end`參數(不是分割節點) | anastruct + PyNite 三方獨立FEM交叉驗證 |
+| 35 | `test_swfea_partial_load_split.py`(`tests/validation/`) | SW FEA「局部段+角度」路徑不可靠的判定 + workaround(插入真實節點繞開) | 對稱性定理健檢 + 三方FEM + SW FEA app重新輸入後的實測 |
+
+`tests/validation/` 底下另外三個檔案(`test_swfea_full_member_load.py`、
+`test_swfea_internal_pin.py`、`test_swfea_symmetry.py`)是「驗證矩陣索引」,
+用 subprocess 引用上面已有案例的結論, 不重複計算, 目的是把 SW FEA 在
+四大類功能(整根桿件載重/局部段載重/內部鉸接/對稱性健檢)各自的可信度
+狀態集中列出。
+
+## SW FEA 驗證邊界: 哪些功能可以當驗證基準, 哪些不行
+
+不是「SW FEA 是不是一個好軟體」這種二分判斷, 是「SW FEA 哪些功能可以
+拿來當 verification oracle, 哪些不能」——這比單純說「SW FEA 有 bug」
+更有工程價值, 因為它精確定義了這個第三方工具的可信邊界:
+
+| 功能 | 判斷 | 證據 |
+|---|---|---|
+| 整根桿件均佈/梯形載重(局部或全域方向) | ✅ 可靠 | 案例3, 13, 30, 32, 33 |
+| 局部段載重(單純局部方向, 沒有角度換算) | ✅ 可靠 | 案例13(`test_partial_udl_vs_swfea.py`) |
+| **局部段 + 非0°/90°角度** | ⚠️ 不可靠 | 案例34, 35——連鏡射對稱定理都會違反, 三方獨立FEM(frame2d/anastruct/PyNite)彼此吻合但跟SW FEA這個特定組合對不上 |
+| 內部鉸接, 用`release_i`/`release_j`原生端點釋放 | ✅ frame2d可直接處理, 不需要SW FEA對照 | 案例15-19 |
+| 內部鉸接, SW FEA用短桿件模擬 | ⚠️ 有數值病態風險(a/L懸崖) | 案例20-28 |
+
+**局部段+角度不可靠的 workaround**: 在局部段邊界插入真實節點, 把「一根
+桿件的局部段載重」改成「兩根桿件, 其中一根整段都有載重」, 繞開SW FEA
+不可靠的計算路徑, 走它可靠的full-member路徑。這不是理論推導, 是使用者
+實際在SW FEA app裡重新輸入驗證過的(案例35)。
 
 ## 這套 benchmark suite 意外抓到的 SW FEA 問題
 
-開發過程中, 有兩次獨立發現 SW FEA(第三方參照工具)本身在特定邊界情況
+開發過程中, 有三次獨立發現 SW FEA(第三方參照工具)本身在特定邊界情況
 下有問題, 不是 frame2d 的模型設錯:
 
 1. **鉸接距離恰好等於 0**(案例20): F4桿件在distance=0處設鉸接, SW FEA
@@ -94,7 +135,17 @@ frame2d 使用四種互相獨立的驗證方式, 沒有任何一個功能只靠�
    "短桿段模擬鉸接"這個建模手法本身的數值脆弱性, 不是SW FEA獨有的
    神秘bug。
 
-這兩個發現最終收斂成案例27(a/L敏感度掃描), 精確定位出數值安全邊界在
+3. **局部段+角度換算**(案例34-35): SW FEA對「局部段+非0°/90°角度」
+   這個特定組合算出的反力, 連鏡射對稱結構的基本鏡射對稱定理都會違反
+   (不需要任何外部工具, 純粹用線性彈性力學定理就能斷定該答案不可能
+   正確)。frame2d/anastruct/PyNite三方完全獨立實作彼此吻合, 且用
+   「插入真實節點繞開」的workaround重新在SW FEA app裡實測過, 答案
+   恢復吻合。full-member載重(不管方向)則不受影響, 精確可靠。
+
+這幾個發現最終收斂成案例27(a/L敏感度掃描), 精確定位出數值安全邊界在
 a/L≈4~5×10⁻⁵, 並寫入README.md正式的使用準則: 鉸接在桿件端點用
 release_i/release_j(不受這個問題影響); 鉸接在桿件中段需要節點分割時,
 offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端點模擬。
+局部段載重需要跟角度換算組合時, 同樣不要依賴SW FEA的Start/End Distance
+局部段輸入, 改用插入真實節點的做法。
+

@@ -13,8 +13,7 @@
 - 纜線元素 (cable):跟truss共用軸向公式,但只受拉,受壓時自動判定鬆弛、
   移除勁度貢獻、重新求解,反覆迭代至收斂(見下方「纜線元素」章節)
 - 支承除了fixed/pin/roller,也支援強制位移(沉陷/施工誤差分析)
-- **尚未支援**: 均佈載重的任意角度(目前只有'local'/'global_y'兩種, 且
-  'global_y'只支援均佈+整根桿件)、幾何非線性(P-Delta)、
+- **尚未支援**: 幾何非線性(P-Delta)、
   材料非線性——這些等基本框架穩定後再視需求加入,不要為了還沒出現的需求
   先付架構成本(詳細優先順序見ROADMAP.md)
 
@@ -214,16 +213,32 @@ frame2d模型設錯, 用同樣offset我們自己也會重現同等量級的殘�
 由 `elements.member_geometry()` 用 `atan2(dy,dx)` 算出(標準右手系,angle=0時
 局部y=全域y)。w<0 就是物理上的「向下」,直接照直覺用即可。
 
-**`direction='global_y'`(斜屋頂重力/雪載重)**: `distributed_load(member, w,
-direction='global_y')` 表示「沿全域垂直方向、大小以沿桿件長度量測」的均佈
-載重(不管桿件本身斜不斜, 每公尺桿長多重, 方向永遠垂直向下——這是工程上
-表示屋頂重力/雪載重的標準方式)。桿件是斜的時候, 這會同時產生局部x(軸向)
-+局部y(橫向)兩個分量, 由solve()在組裝時依桿件角度自動分解, 兩個分量的
-固定端反力直接相加(局部y分量套用既有UDL公式, 局部x分量套用新增的
-`fixed_end_forces_axial_udl()`)。目前只支援均佈+整根桿件, 只有主要求解器
-`solve()`支援(`solve_condensation()`遇到會直接報錯)。已用斜屋頂案例(單層
-三角形屋架, 4根桿件x11點N/V/M)對照SW FEA驗證, 誤差在報告小數位精度範圍內,
-見`tests/test_sloped_roof_global_udl.py`。
+**`direction='global_y'`(斜屋頂重力/雪載重, 整根桿件)**: `distributed_load(
+member, w, direction='global_y')` 表示「沿全域垂直方向、大小以沿桿件長度
+量測」的均佈載重(不管桿件本身斜不斜, 每公尺桿長多重, 方向永遠垂直向下
+——這是工程上表示屋頂重力/雪載重的標準方式)。桿件是斜的時候, 這會同時
+產生局部x(軸向)+局部y(橫向)兩個分量, 由solve()在組裝時依桿件角度自動
+分解。支援線性變化(w_start≠w_end, 梯形/不均勻雪載重), 但**只支援整根
+桿件, 不支援局部段(x_start/x_end)**——只有主要求解器`solve()`支援
+(`solve_condensation()`遇到會直接報錯)。已用斜屋頂案例(單層三角形屋架,
+4根桿件x11點N/V/M)對照SW FEA驗證, 誤差在報告小數位精度範圍內, 見
+`tests/test_sloped_roof_global_udl.py`; 梯形變化額外用細網格分段收斂
+驗證(獨立於新公式本身), 見`tests/test_global_y_varying_snow_load.py`。
+
+**`direction='global'`(任意角度, global_y的推廣版)**: `distributed_load(
+member, w, direction='global', angle_deg=...)` 用`angle_deg`指定全域角度
+(標準數學慣例, 0度=+x方向, 逆時針為正; `global_y`等同`angle_deg=-90`或
+`270`)。跟`global_y`不同, **這個方向支援局部段(x_start/x_end)跟線性變化
+的任意組合**——桿件是直的、角度沿桿長不變, 全域載重向量投影到局部x/y後
+仍各自是線性函數, 用高斯積分(對point_load公式積分, 數值精確不是近似)
+分開處理局部x(`fixed_end_forces_axial_partial_udl`)、局部y(既有的
+`fixed_end_forces_partial_udl`)。用途例如SW FEA app儲存的載重角度跟
+桿件本身角度不對齊時, 直接用app紀錄的絕對角度重現。已用三方獨立FEM工具
+(anastruct、PyNite)交叉驗證「局部段+角度+線性變化」的任意組合, 見
+`tests/test_partial_snow_three_way_crosscheck.py`, `test_global_angle_load.py`。
+**這個功能是被SW FEA自己的一個邊界問題逼出來的**——SW FEA對「局部段+
+非0°/90°角度」這個特定組合算出的反力不可靠(連鏡射對稱定理都會違反),
+完整脈絡跟workaround見`BENCHMARK_SUITE.md`的「SW FEA驗證邊界」章節。
 
 這個慣例已經三方驗證過,而且**全部直接吻合、不需要任何翻轉或特例**:
 - sd_framework/anastruct(11個案例、46個數值,見下方驗證狀態表)
