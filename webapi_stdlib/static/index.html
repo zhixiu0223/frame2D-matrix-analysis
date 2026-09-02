@@ -142,7 +142,8 @@
 
       <div class="menuGroup" data-group="query">
         <select id="queryMember" style="width:8rem;"></select>
-        <button id="btnQueryPick" style="width:auto;">🎯 從畫布選桿件</button>
+        <button id="btnQueryPick" style="width:auto;">🎯 點選桿件</button>
+        <button id="btnQueryLinePick" style="width:auto;">／ 畫線選桿件</button>
         <select id="queryMode" style="width:8rem;">
           <option value="relative">相對位置 0~1</option>
           <option value="absolute">絕對距離(m)</option>
@@ -268,6 +269,7 @@ let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選�
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
 let multiSelection = null;  // {nodeIds:[...], memberIds:[...]} -- 批次選取的結果
 let pendingBatchAction = null; // null | 'support' | 'load' -- 從快捷按鈕觸發選取時, 選完要直接跳哪個表單
+let pendingQueryLinePick = false; // true時, 這次的直線選取是為了查詢桿件用, 不是批次編輯
 let queryPickMode = false; // true時, 點畫布上的桿件會直接填進查詢用的下拉選單, 不用在清單裡找編號
 let memberFirstNode = null;
 let dragNodeId = null;
@@ -453,11 +455,26 @@ svg.addEventListener('pointermove', (e) => {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
     const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
-    const willZoom = Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist;
+    const willZoom = Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist && pinchState.lastMid;
     debugLog(`MOVE id=${e.pointerId} active=${activePointers.size} pts[0]={x:${pts[0].x},y:${pts[0].y}} pts[1]={x:${pts[1].x},y:${pts[1].y}} dist=${dist} lastDist=${pinchState.lastDist} willZoom=${willZoom}`);
     if (willZoom) {
-      zoomAt(mid, dist / pinchState.lastDist);
-      debugLog(`  -> zoomAt呼叫完成, camera.k=${camera.k.toFixed(3)}`);
+      // 同時支援縮放+平移: 「上一幀兩指中點」所在位置對應的世界內容,
+      // 更新完之後應該要出現在「這一幀兩指中點」的位置——縮放比例
+      // 來自距離變化(dist/lastDist), 平移量則自然來自中點本身的移動
+      // (mid跟lastMid不同的地方)。單純呼叫zoomAt(mid, factor)只有
+      // 處理縮放比例、沒有處理中點移動這件事, 縮放時中點飄動會被
+      // 忽略掉, 導致雙指縮放的時候沒辦法同時平移。
+      const factor = dist / pinchState.lastDist;
+      const newK = clampK(camera.k * factor);
+      const canonicalAtLastMid = {
+        x: (pinchState.lastMid.x - camera.x) / camera.k,
+        y: (pinchState.lastMid.y - camera.y) / camera.k,
+      };
+      camera.k = newK;
+      camera.x = mid.x - canonicalAtLastMid.x * newK;
+      camera.y = mid.y - canonicalAtLastMid.y * newK;
+      applyCameraTransform();
+      debugLog(`  -> 縮放+平移套用完成, camera.k=${camera.k.toFixed(3)} camera.x=${camera.x.toFixed(1)} camera.y=${camera.y.toFixed(1)}`);
     }
     pinchState.lastDist = Number.isFinite(dist) && dist > 1e-3 ? dist : pinchState.lastDist;
     pinchState.lastMid = mid;
@@ -556,6 +573,16 @@ document.getElementById('btnQueryPick').addEventListener('click', (e) => {
   queryPickMode = !queryPickMode;
   e.target.classList.toggle('active', queryPickMode);
   setStatus(queryPickMode ? '點畫布上要查詢的桿件(結構/荷載視圖下可以點)' : '');
+});
+document.getElementById('btnQueryLinePick').addEventListener('click', () => {
+  // 重用「建模」選單的直線選取工具, 用pendingQueryLinePick標記這次
+  // 選取是為了查詢用, 選完之後在選取結束的地方接手處理(不會跳去
+  // 建模的批次面板), 選到的桿件直接填進查詢下拉選單。
+  // 順序很重要: 要先呼叫toggleMode(會把舊的pendingQueryLinePick清掉),
+  // 再設定新的旗標, 不然旗標會被toggleMode自己的清理邏輯洗掉。
+  if (selectMode !== 'line') toggleMode('line');
+  pendingQueryLinePick = true;
+  setStatus('拖曳畫一條線, 掃過的桿件都會被選到(如果切到多根, 會自動挑離線最近的那一根)');
 });
 document.getElementById('btnQueryPoint').addEventListener('click', async () => {
   sanitizeModel();
@@ -1265,8 +1292,16 @@ function renderPropPanel() {
     const sup = model.supports.find(s => s.node === n.id);
     const pl = model.point_loads.find(p => p.node === n.id);
     const kind = sup ? supportKind(sup) : 'free';
+    const nr = lastResult ? lastResult.nodes.find(x => x.node === n.id) : null;
+    const solvedInfo = nr ? `
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:0.5rem;margin-bottom:0.6rem;font-size:0.8rem;">
+        <b>Solve 結果(唯讀)</b><br>
+        Rx=${(nr.Rx/1000).toFixed(3)}kN Ry=${(nr.Ry/1000).toFixed(3)}kN M=${(nr.M/1000).toFixed(3)}kN·m<br>
+        ux=${nr.ux.toExponential(3)}m uy=${nr.uy.toExponential(3)}m rot=${nr.rot.toExponential(3)}rad
+      </div>` : `<p class="hint">還沒 Solve 過, 沒有反力/位移數值可以顯示。</p>`;
     panel.innerHTML = `
       <fieldset><legend>節點 N${n.id}</legend>
+        ${solvedInfo}
         <div class="row3">
           <div><label>x</label><input id="p_x" type="number" step="any" value="${n.x}"></div>
           <div><label>y</label><input id="p_y" type="number" step="any" value="${n.y}"></div>
@@ -1863,6 +1898,37 @@ svg.addEventListener('pointerup', () => {
     const result = mode === 'rect'
       ? rectSelect(startWorld.x, startWorld.y, curWorld.x, curWorld.y)
       : lineSelect(startWorld, curWorld);
+    // 這次選取是「畫線選桿件」拿去查詢用的, 不是一般的建模批次選取
+    // ——不管切到幾根都不會出錯: 0根就請重畫, 1根直接用, 2根以上
+    // 自動挑「離這條線的中點最近」的那一根當首選, 同時把切到的全部
+    // 列出來, 選錯了可以直接用下拉選單換, 不用重新畫線。
+    if (pendingQueryLinePick && mode === 'line') {
+      pendingQueryLinePick = false;
+      toggleMode('line'); // 選完自動關掉畫線模式(它本來是開關,再呼叫一次等於關閉)
+      if (result.memberIds.length === 0) {
+        setStatus('這條線沒有切到任何桿件, 請重新畫一次');
+        render();
+        return;
+      }
+      let pickedId = result.memberIds[0];
+      if (result.memberIds.length > 1) {
+        const lineMid = {x: (startWorld.x + curWorld.x) / 2, y: (startWorld.y + curWorld.y) / 2};
+        let bestDist = Infinity;
+        for (const mid of result.memberIds) {
+          const m = model.members.find(x => x.id === mid);
+          const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+          const mx = (ni.x + nj.x) / 2, my = (ni.y + nj.y) / 2;
+          const d = Math.hypot(mx - lineMid.x, my - lineMid.y);
+          if (d < bestDist) { bestDist = d; pickedId = mid; }
+        }
+        setStatus(`這條線切到 ${result.memberIds.length} 根桿件(M${result.memberIds.join(', M')}), 已自動選離線最近的 M${pickedId}, 選錯的話用下拉選單換一根`);
+      } else {
+        setStatus('已選 M' + pickedId + ' 作為查詢目標');
+      }
+      document.getElementById('queryMember').value = pickedId;
+      render();
+      return;
+    }
     const wasPendingSupport = pendingBatchAction === 'support';
     const wasPendingLoad = pendingBatchAction === 'load';
     pendingBatchAction = null;
@@ -1970,6 +2036,7 @@ function clearAllModes() {
 }
 function toggleMode(kind) {
   pendingBatchAction = null; // 任何時候手動切換模式, 之前快捷按鈕留下的「待處理動作」都作廢
+  pendingQueryLinePick = false;
   const wasActive = document.getElementById(MODE_BUTTONS[kind]).classList.contains('active');
   clearAllModes();
   if (wasActive) { setStatus(''); render(); return; }
