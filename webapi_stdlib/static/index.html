@@ -168,6 +168,20 @@
         <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
         <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
         <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
+        <span class="sep"></span>
+        <label class="snapLabel">E單位<select id="unitE" style="width:5rem;">
+          <option value="Pa">Pa</option><option value="MPa">MPa</option><option value="GPa" selected>GPa</option>
+        </select></label>
+        <label class="snapLabel">I單位<select id="unitI" style="width:5rem;">
+          <option value="m4">m⁴</option><option value="mm4" selected>mm⁴</option><option value="cm4">cm⁴</option>
+        </select></label>
+        <label class="snapLabel">A單位<select id="unitA" style="width:5rem;">
+          <option value="m2" selected>m²</option><option value="mm2">mm²</option><option value="cm2">cm²</option>
+        </select></label>
+        <label class="snapLabel">位移單位<select id="unitDisp" style="width:5rem;">
+          <option value="m">m</option><option value="mm" selected>mm</option>
+        </select></label>
+        <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
       </div>
     </div>
 
@@ -638,6 +652,25 @@ function visibleWorldRect(t) {
 }
 
 let gridLabelSize = 24; // 可從「檢視」選單調整
+
+// ---------- 單位轉換: 後端solver永遠用SI單位(Pa/m⁴/m²/m)算, 不動 ----------
+// 這裡是純前端的輸入/顯示轉換層 —— 使用者打字用習慣的單位(例如I用mm⁴,
+// E用GPa), toSI()在送給後端前換算成SI; 顯示結果(例如位移)用fromSI()
+// 從SI換算回使用者選的單位。跟SW FEA那個Units設定頁同樣的精神。
+const UNIT_FACTORS = {
+  // 每個單位 -> 對應SI值要乘的倍率(例如1 GPa = 1e9 Pa, 所以GPa的factor=1e9)
+  E: {Pa: 1, MPa: 1e6, GPa: 1e9},
+  I: {m4: 1, mm4: 1e-12, cm4: 1e-8},
+  A: {m2: 1, mm2: 1e-6, cm2: 1e-4},
+  disp: {m: 1, mm: 1e-3},
+};
+function unitOf(kind) {
+  const ids = {E: 'unitE', I: 'unitI', A: 'unitA', disp: 'unitDisp'};
+  return document.getElementById(ids[kind]).value;
+}
+function toSI(kind, displayVal) { return displayVal * UNIT_FACTORS[kind][unitOf(kind)]; }
+function fromSI(kind, siVal) { return siVal / UNIT_FACTORS[kind][unitOf(kind)]; }
+
 function gridLabelStyle() { return `font-size:${gridLabelSize}px;font-weight:600;fill:#475569;`; }
 
 function drawGrid(t) {
@@ -1135,9 +1168,9 @@ function renderBatchMemberEditForm(memberIds) {
     <label style="margin-top:0.8rem;">或者新增一個斷面直接套用到這批桿件(例如選一排柱子, 一次建立col_sec)</label>
     <input id="be_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
     <div class="row3">
-      <input id="be_sec_new_E" type="number" step="any" placeholder="E(Pa)">
-      <input id="be_sec_new_I" type="number" step="any" placeholder="I(m⁴)">
-      <input id="be_sec_new_A" type="number" step="any" placeholder="A(m²)">
+      <input id="be_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
+      <input id="be_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
+      <input id="be_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
     </div>
     <button id="be_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這批桿件</button>
   </fieldset>`;
@@ -1147,9 +1180,12 @@ function renderBatchMemberEditForm(memberIds) {
     if (!name) { setStatus('請輸入新斷面名稱'); return; }
     if (model.sections.some(s => s.name === name)) { setStatus('斷面名稱 "' + name + '" 已經存在, 換一個名字'); return; }
     const ref = model.sections.find(s => s.name === model.members.find(x => x.id === memberIds[0]).section);
-    const E = parseFloat(document.getElementById('be_sec_new_E').value) || ref.E;
-    const I = parseFloat(document.getElementById('be_sec_new_I').value) || ref.I;
-    const A = parseFloat(document.getElementById('be_sec_new_A').value) || ref.A;
+    const eRaw = document.getElementById('be_sec_new_E').value;
+    const iRaw = document.getElementById('be_sec_new_I').value;
+    const aRaw = document.getElementById('be_sec_new_A').value;
+    const E = eRaw !== '' ? toSI('E', parseFloat(eRaw)) : ref.E;
+    const I = iRaw !== '' ? toSI('I', parseFloat(iRaw)) : ref.I;
+    const A = aRaw !== '' ? toSI('A', parseFloat(aRaw)) : ref.A;
     model.sections.push({name, E, I, A});
     for (const id of memberIds) {
       const m = model.members.find(x => x.id === id);
@@ -1297,7 +1333,7 @@ function renderPropPanel() {
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:0.5rem;margin-bottom:0.6rem;font-size:0.8rem;">
         <b>Solve 結果(唯讀)</b><br>
         Rx=${(nr.Rx/1000).toFixed(3)}kN Ry=${(nr.Ry/1000).toFixed(3)}kN M=${(nr.M/1000).toFixed(3)}kN·m<br>
-        ux=${nr.ux.toExponential(3)}m uy=${nr.uy.toExponential(3)}m rot=${nr.rot.toExponential(3)}rad
+        ux=${fromSI('disp', nr.ux).toExponential(3)}${unitOf('disp')} uy=${fromSI('disp', nr.uy).toExponential(3)}${unitOf('disp')} rot=${nr.rot.toExponential(3)}rad
       </div>` : `<p class="hint">還沒 Solve 過, 沒有反力/位移數值可以顯示。</p>`;
     panel.innerHTML = `
       <fieldset><legend>節點 N${n.id}</legend>
@@ -1376,9 +1412,9 @@ function renderPropPanel() {
 
           <label>這根桿件目前用的斷面: "${sec.name}"</label>
           <div class="row3">
-            <div><label>E (Pa)</label><input id="p_E" type="number" step="any" value="${sec.E}"></div>
-            <div><label>I (m⁴)</label><input id="p_I" type="number" step="any" value="${sec.I}"></div>
-            <div><label>A (m²)</label><input id="p_A" type="number" step="any" value="${sec.A}"></div>
+            <div><label>E (${unitOf('E')})</label><input id="p_E" type="number" step="any" value="${fromSI('E', sec.E)}"></div>
+            <div><label>I (${unitOf('I')})</label><input id="p_I" type="number" step="any" value="${fromSI('I', sec.I)}"></div>
+            <div><label>A (${unitOf('A')})</label><input id="p_A" type="number" step="any" value="${fromSI('A', sec.A)}"></div>
           </div>
           <p class="hint">改上面這三個值會影響所有共用 "${sec.name}" 斷面的桿件。如果梁柱要用不同斷面, 用下面的功能切換或新增。</p>
 
@@ -1391,9 +1427,9 @@ function renderPropPanel() {
           <label>新增一個斷面(例如梁跟柱分開)</label>
           <input id="p_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
           <div class="row3">
-            <input id="p_sec_new_E" type="number" step="any" placeholder="E(Pa)">
-            <input id="p_sec_new_I" type="number" step="any" placeholder="I(m⁴)">
-            <input id="p_sec_new_A" type="number" step="any" placeholder="A(m²)">
+            <input id="p_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
+            <input id="p_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
+            <input id="p_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
           </div>
           <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
         </div>
@@ -1499,9 +1535,9 @@ function renderPropPanel() {
       m.member_type = document.getElementById('p_type').value;
       m.release_i = document.getElementById('p_ri').checked;
       m.release_j = document.getElementById('p_rj').checked;
-      sec.E = parseFloat(document.getElementById('p_E').value);
-      sec.I = parseFloat(document.getElementById('p_I').value);
-      sec.A = parseFloat(document.getElementById('p_A').value);
+      sec.E = toSI('E', parseFloat(document.getElementById('p_E').value));
+      sec.I = toSI('I', parseFloat(document.getElementById('p_I').value));
+      sec.A = toSI('A', parseFloat(document.getElementById('p_A').value));
       render();
     };
     document.getElementById('p_sec_switch').onclick = () => {
@@ -1514,9 +1550,12 @@ function renderPropPanel() {
       const name = document.getElementById('p_sec_new_name').value.trim();
       if (!name) { setStatus('請輸入新斷面名稱'); return; }
       if (model.sections.some(s => s.name === name)) { setStatus('斷面名稱 "' + name + '" 已經存在, 換一個名字'); return; }
-      const E = parseFloat(document.getElementById('p_sec_new_E').value) || sec.E;
-      const I = parseFloat(document.getElementById('p_sec_new_I').value) || sec.I;
-      const A = parseFloat(document.getElementById('p_sec_new_A').value) || sec.A;
+      const eRaw = document.getElementById('p_sec_new_E').value;
+      const iRaw = document.getElementById('p_sec_new_I').value;
+      const aRaw = document.getElementById('p_sec_new_A').value;
+      const E = eRaw !== '' ? toSI('E', parseFloat(eRaw)) : sec.E;
+      const I = iRaw !== '' ? toSI('I', parseFloat(iRaw)) : sec.I;
+      const A = aRaw !== '' ? toSI('A', parseFloat(aRaw)) : sec.A;
       model.sections.push({name, E, I, A});
       m.section = name;
       setStatus('已新增斷面 "' + name + '" 並套用到 M' + m.id);
@@ -1999,6 +2038,12 @@ svg.addEventListener('pointercancel', () => {
 });
 
 document.getElementById('showGridToggle').addEventListener('change', render);
+['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
+    if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
+  });
+});
 document.getElementById('debugCopyBtn').addEventListener('click', async () => {
   const text = document.getElementById('debugLog').innerText;
   try {
@@ -2137,10 +2182,13 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
 function setStatus(s) { document.getElementById('status').textContent = s; }
 
 function renderTables() {
+  const dispUnit = unitOf('disp');
+  const nodeThead = document.querySelector('#nodeTable thead tr');
+  nodeThead.innerHTML = `<th>node</th><th>ux(${dispUnit})</th><th>uy(${dispUnit})</th><th>rot</th><th>Rx(kN)</th><th>Ry(kN)</th><th>M(kN·m)</th>`;
   const nb = document.querySelector('#nodeTable tbody'); nb.innerHTML = '';
   for (const n of lastResult.nodes) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${n.node}</td><td>${n.ux.toExponential(3)}</td><td>${n.uy.toExponential(3)}</td>
+    tr.innerHTML = `<td>${n.node}</td><td>${fromSI('disp', n.ux).toExponential(3)}</td><td>${fromSI('disp', n.uy).toExponential(3)}</td>
       <td>${n.rot.toExponential(3)}</td><td>${(n.Rx/1000).toFixed(3)}</td><td>${(n.Ry/1000).toFixed(3)}</td><td>${(n.M/1000).toFixed(3)}</td>`;
     nb.appendChild(tr);
   }
