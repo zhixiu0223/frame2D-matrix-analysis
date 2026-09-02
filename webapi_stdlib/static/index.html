@@ -124,6 +124,7 @@
 
       <div class="menuGroup" data-group="query">
         <select id="queryMember" style="width:8rem;"></select>
+        <button id="btnQueryPick" style="width:auto;">🎯 從畫布選桿件</button>
         <select id="queryMode" style="width:8rem;">
           <option value="relative">相對位置 0~1</option>
           <option value="absolute">絕對距離(m)</option>
@@ -243,6 +244,7 @@ let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選�
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
 let multiSelection = null;  // {nodeIds:[...], memberIds:[...]} -- 批次選取的結果
 let pendingBatchAction = null; // null | 'support' | 'load' -- 從快捷按鈕觸發選取時, 選完要直接跳哪個表單
+let queryPickMode = false; // true時, 點畫布上的桿件會直接填進查詢用的下拉選單, 不用在清單裡找編號
 let memberFirstNode = null;
 let dragNodeId = null;
 let dragMoved = false;
@@ -458,6 +460,11 @@ function refreshQueryMemberOptions() {
   if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
+document.getElementById('btnQueryPick').addEventListener('click', (e) => {
+  queryPickMode = !queryPickMode;
+  e.target.classList.toggle('active', queryPickMode);
+  setStatus(queryPickMode ? '點畫布上要查詢的桿件(結構/荷載視圖下可以點)' : '');
+});
 document.getElementById('btnQueryPoint').addEventListener('click', async () => {
   const memberId = parseInt(document.getElementById('queryMember').value, 10);
   const mode = document.getElementById('queryMode').value;
@@ -572,7 +579,17 @@ function drawMembers(t, faint) {
     const inMulti = multiSelection && multiSelection.memberIds.includes(m.id);
     const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : '') + (inMulti ? ' multi-selected' : ''));
     const line = el('line', {x1, y1, x2, y2, class: cls});
-    if (!faint) line.addEventListener('click', (e) => { e.stopPropagation(); if (!selectMode) selectMember(m.id); });
+    if (!faint) line.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (queryPickMode) {
+        document.getElementById('queryMember').value = m.id;
+        queryPickMode = false;
+        document.getElementById('btnQueryPick').classList.remove('active');
+        setStatus('已選 M' + m.id + ' 作為查詢目標');
+        return;
+      }
+      if (!selectMode) selectMember(m.id);
+    });
     put(line);
     if (!faint) {
       const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 - 4, class: 'member-label'});
