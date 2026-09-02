@@ -10,7 +10,7 @@
   #left { padding: 0 0.8rem 0.8rem; max-width: 900px; margin: 0 auto; }
 
   /* ---- 屬性面板改成彈出式(bottom sheet), 不用往下滑找 ---- */
-  #propModalBackdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 100; }
+  #propModalBackdrop { display: none; position: fixed; inset: 0; background: transparent; z-index: 100; pointer-events: none; }
   #propModalBackdrop.open { display: block; }
   #propModal { display: none; position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
                width: min(440px, 94vw); max-height: 82vh; overflow-y: auto; background: #fff;
@@ -1798,16 +1798,10 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
 });
 
-document.getElementById('propModalBackdrop').addEventListener('click', () => {
-  // 手機瀏覽器對「輕點」手勢, 放開手指後常常會「補送」一個合成的
-  // click事件, 時間點通常落在遮罩已經打開之後 —— 那個補送的click
-  // 重新判斷落點時, 遮罩已經蓋住剛選取的節點/桿件, 結果誤觸到遮罩
-  // 本身, 面板剛打開就被自己觸發的click關掉(使用者看到的就是
-  // 「閃一下就消失」)。這裡遮罩剛打開的一小段時間內忽略點擊,
-  // 不用去猜瀏覽器到底什麼時候會補送那個click。
-  if (Date.now() - modalOpenedAt < 400) return;
-  clearSelection();
-});
+// propModalBackdrop 現在是 pointer-events:none(見上面CSS), 不會再
+// 接收到任何點擊 —— 面板開著時點畫布空白處會直接被畫布自己的
+// 背景點擊邏輯處理掉(平移手勢沒有位移時會呼叫 clearSelection()),
+// 效果等同「點外面關閉面板」, 不需要遮罩自己的點擊監聽器了。
 
 refreshModelList();
 render();
