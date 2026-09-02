@@ -44,10 +44,14 @@
   svg { width: 100%; height: auto; display: block; touch-action: none; }
   .node-circle { fill: #1f2937; stroke: #1f2937; stroke-width: 2; cursor: grab; }
   .node-circle.selected { fill: #2563eb; stroke: #2563eb; }
+  .node-circle.multi-selected { fill: #d97706; stroke: #d97706; }
   .pin-marker { fill: #fff; stroke: #1f2937; stroke-width: 1.5; }
   .node-label { font-size: 11px; fill: #1f2937; pointer-events: none; }
   .member-line { stroke: #1f2937; stroke-width: 3; cursor: pointer; }
   .member-line.selected { stroke: #2563eb; }
+  .member-line.multi-selected { stroke: #d97706; stroke-width: 5; }
+  .marquee-rect { fill: rgba(217, 119, 6, 0.12); stroke: #d97706; stroke-width: 1.5; stroke-dasharray: 5 3; }
+  .marquee-line { stroke: #d97706; stroke-width: 2.5; stroke-dasharray: 5 3; }
   .member-line.faint { stroke: #cbd5e1; stroke-width: 1.5; }
   .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
@@ -107,6 +111,11 @@
       <div class="menuGroup" data-group="model">
         <button id="btnAddNode">➕ 節點</button>
         <button id="btnAddMember">➕ 桿件</button>
+        <button id="btnSelectRect">⬚ 方框選取</button>
+        <button id="btnSelectLine">／ 直線選取</button>
+        <span class="sep"></span>
+        <button id="btnBatchSupport">🔒 支承(選取套用)</button>
+        <button id="btnBatchLoad">⬇ 施加外力(選取套用)</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="snapGrid" checked>格線鎖定</label>
         <label class="snapLabel"><input type="checkbox" id="snapNode" checked>節點鎖定</label>
@@ -230,9 +239,13 @@ let selected = null;        // {type:'node'|'member', id}
 let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面上標記)
 let viewMode = 'structure';
 let addMode = null;         // null | 'node' | 'member'
+let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選取模式
+let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
+let multiSelection = null;  // {nodeIds:[...], memberIds:[...]} -- 批次選取的結果
 let memberFirstNode = null;
 let dragNodeId = null;
 let dragMoved = false;
+let dragStartScreen = null;
 
 const svg = document.getElementById('svg');
 const cameraG = document.getElementById('camera');
@@ -395,7 +408,23 @@ function render() {
     if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
   }
   drawQueryMarker(t);
+  drawMarquee(t);
   refreshQueryMemberOptions();
+}
+
+function drawMarquee(t) {
+  if (!marqueeState) return;
+  const [x1, y1] = toScreen(marqueeState.startWorld.x, marqueeState.startWorld.y, t);
+  const [x2, y2] = toScreen(marqueeState.curWorld.x, marqueeState.curWorld.y, t);
+  if (marqueeState.mode === 'rect') {
+    put(el('rect', {
+      x: Math.min(x1, x2), y: Math.min(y1, y2),
+      width: Math.abs(x2 - x1), height: Math.abs(y2 - y1),
+      class: 'marquee-rect',
+    }));
+  } else {
+    put(el('line', {x1, y1, x2, y2, class: 'marquee-line'}));
+  }
 }
 
 function drawQueryMarker(t) {
@@ -538,9 +567,10 @@ function drawMembers(t, faint) {
     if (!ni || !nj) continue;
     const [x1, y1] = toScreen(ni.x, ni.y, t);
     const [x2, y2] = toScreen(nj.x, nj.y, t);
-    const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : ''));
+    const inMulti = multiSelection && multiSelection.memberIds.includes(m.id);
+    const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : '') + (inMulti ? ' multi-selected' : ''));
     const line = el('line', {x1, y1, x2, y2, class: cls});
-    if (!faint) line.addEventListener('click', (e) => { e.stopPropagation(); selectMember(m.id); });
+    if (!faint) line.addEventListener('click', (e) => { e.stopPropagation(); if (!selectMode) selectMember(m.id); });
     put(line);
     if (!faint) {
       const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 - 4, class: 'member-label'});
@@ -576,8 +606,15 @@ function drawNodes(t) {
   for (const n of model.nodes) {
     const [x, y] = toScreen(n.x, n.y, t);
     const sel = selected && selected.type === 'node' && selected.id === n.id;
-    const c = el('circle', {cx: x, cy: y, r: 6, class: 'node-circle' + (sel ? ' selected' : '')});
-    c.addEventListener('pointerdown', (e) => { e.stopPropagation(); dragNodeId = n.id; dragMoved = false; svg.setPointerCapture(e.pointerId); });
+    const inMulti = multiSelection && multiSelection.nodeIds.includes(n.id);
+    const c = el('circle', {cx: x, cy: y, r: 6, class: 'node-circle' + (sel ? ' selected' : '') + (inMulti ? ' multi-selected' : '')});
+    c.addEventListener('pointerdown', (e) => {
+      if (selectMode) return; // 選取模式下, 節點自己的拖曳/點擊都讓給背景的方框/直線選取處理
+      e.stopPropagation();
+      dragNodeId = n.id; dragMoved = false;
+      dragStartScreen = clientToCameraSpace(e);
+      svg.setPointerCapture(e.pointerId);
+    });
     put(c);
     const lbl = el('text', {x: x + 9, y: y - 9, class: 'node-label'});
     lbl.textContent = 'N' + n.id;
@@ -753,6 +790,131 @@ function selectNode(id) {
 }
 function selectMember(id) { selected = {type: 'member', id}; renderPropPanel(); render(); }
 function clearSelection() { selected = null; memberFirstNode = null; renderPropPanel(); render(); }
+function clearMultiSelection() { multiSelection = null; renderMultiSelectPanel(); render(); }
+
+// ---------- 批次選取後的操作面板(方框: 節點+桿件皆可; 直線: 只有桿件) ----------
+function renderMultiSelectPanel() {
+  const panel = document.getElementById('propPanel');
+  const modal = document.getElementById('propModal');
+  const backdrop = document.getElementById('propModalBackdrop');
+  if (!multiSelection) { modal.classList.remove('open'); backdrop.classList.remove('open'); return; }
+  modal.classList.add('open');
+  backdrop.classList.add('open');
+  const {nodeIds, memberIds} = multiSelection;
+  let html = `<fieldset><legend>批次選取</legend>
+    <p class="hint">選到 ${nodeIds.length} 個節點、${memberIds.length} 根桿件(桿件要兩端都在方框內, 或被選取線畫過, 才算選到)。</p>`;
+  if (nodeIds.length) {
+    html += `<button id="ms_support" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">🔒 批次設定支承</button>`;
+    html += `<button id="ms_nodeload" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">⬇ 批次施加節點集中力</button>`;
+  }
+  if (memberIds.length) {
+    html += `<button id="ms_distload" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">⬇ 批次施加均佈載重</button>`;
+  }
+  html += `<div class="row2"><button id="ms_delete" style="background:#dc2626;color:white;">刪除選取項目</button><button id="ms_cancel">取消</button></div></fieldset>`;
+  panel.innerHTML = html;
+  document.getElementById('ms_cancel').onclick = clearMultiSelection;
+  document.getElementById('ms_delete').onclick = () => {
+    model.members = model.members.filter(m => !(memberIds.includes(m.id) || nodeIds.includes(m.node_i) || nodeIds.includes(m.node_j)));
+    model.nodes = model.nodes.filter(n => !nodeIds.includes(n.id));
+    model.supports = model.supports.filter(s => !nodeIds.includes(s.node));
+    model.point_loads = model.point_loads.filter(p => !nodeIds.includes(p.node));
+    model.distributed_loads = model.distributed_loads.filter(d => !memberIds.includes(d.member));
+    model.member_point_loads = model.member_point_loads.filter(p => !memberIds.includes(p.member));
+    setStatus('已刪除 ' + nodeIds.length + ' 個節點、' + memberIds.length + ' 根桿件(含連帶的支承/載重)');
+    clearMultiSelection();
+  };
+  if (nodeIds.length) {
+    document.getElementById('ms_support').onclick = () => renderBatchSupportForm(nodeIds);
+    document.getElementById('ms_nodeload').onclick = () => renderBatchNodeLoadForm(nodeIds);
+  }
+  if (memberIds.length) {
+    document.getElementById('ms_distload').onclick = () => renderBatchDistLoadForm(memberIds);
+  }
+}
+
+function renderBatchSupportForm(nodeIds) {
+  const panel = document.getElementById('propPanel');
+  panel.innerHTML = `<fieldset><legend>批次設定支承(${nodeIds.length} 個節點)</legend>
+    <label>支承類型(取代這些節點原本的支承設定)</label>
+    <select id="bs_type">
+      <option value="free">自由(移除支承)</option>
+      <option value="pin">鉸支承(ux=uy=0)</option>
+      <option value="fixed">固定支承(ux=uy=rot=0)</option>
+      <option value="roller_y">滾支承-擋垂直(uy=0)</option>
+      <option value="roller_x">滾支承-擋水平(ux=0)</option>
+    </select>
+    <div class="row2"><button id="bs_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bs_back">返回</button></div>
+  </fieldset>`;
+  document.getElementById('bs_back').onclick = renderMultiSelectPanel;
+  document.getElementById('bs_apply').onclick = () => {
+    const val = document.getElementById('bs_type').value;
+    model.supports = model.supports.filter(s => !nodeIds.includes(s.node));
+    for (const id of nodeIds) {
+      if (val === 'pin') model.supports.push({node: id, ux: 0.0, uy: 0.0, rot: null});
+      if (val === 'fixed') model.supports.push({node: id, ux: 0.0, uy: 0.0, rot: 0.0});
+      if (val === 'roller_y') model.supports.push({node: id, ux: null, uy: 0.0, rot: null});
+      if (val === 'roller_x') model.supports.push({node: id, ux: 0.0, uy: null, rot: null});
+    }
+    setStatus('已套用支承到 ' + nodeIds.length + ' 個節點');
+    clearMultiSelection();
+  };
+}
+
+function renderBatchNodeLoadForm(nodeIds) {
+  const panel = document.getElementById('propPanel');
+  panel.innerHTML = `<fieldset><legend>批次施加節點集中力(${nodeIds.length} 個節點)</legend>
+    <label>fx (N)</label><input id="bl_fx" type="number" step="any" value="0">
+    <label>fy (N)</label><input id="bl_fy" type="number" step="any" value="0">
+    <label>集中彎矩 m (N·m)</label><input id="bl_m" type="number" step="any" value="0">
+    <p class="hint">會取代這些節點原本的集中力設定(全部設成0代表移除)。</p>
+    <div class="row2"><button id="bl_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bl_back">返回</button></div>
+  </fieldset>`;
+  document.getElementById('bl_back').onclick = renderMultiSelectPanel;
+  document.getElementById('bl_apply').onclick = () => {
+    const fx = parseFloat(document.getElementById('bl_fx').value) || 0;
+    const fy = parseFloat(document.getElementById('bl_fy').value) || 0;
+    const mm = parseFloat(document.getElementById('bl_m').value) || 0;
+    model.point_loads = model.point_loads.filter(p => !nodeIds.includes(p.node));
+    if (fx !== 0 || fy !== 0 || mm !== 0) {
+      for (const id of nodeIds) model.point_loads.push({node: id, fx, fy, m: mm});
+    }
+    setStatus('已套用集中力到 ' + nodeIds.length + ' 個節點');
+    clearMultiSelection();
+  };
+}
+
+function renderBatchDistLoadForm(memberIds) {
+  const panel = document.getElementById('propPanel');
+  panel.innerHTML = `<fieldset><legend>批次施加均佈/梯形載重(${memberIds.length} 根桿件, 全長)</legend>
+    <label>方向</label>
+    <select id="bd_dir">
+      <option value="global_y">整體垂直向下(重力方向, 最常用)</option>
+      <option value="local">局部y方向(垂直於桿件本身)</option>
+    </select>
+    <label>w1 起點強度 (N/m, 正值方向依上面選的方向而定)</label>
+    <input id="bd_w1" type="number" step="any" value="0">
+    <label>w2 終點強度 (N/m, 留空 = 均佈載重跟w1一樣; 填不同值 = 梯形載重)</label>
+    <input id="bd_w2" type="number" step="any" placeholder="留空表示跟w1相同">
+    <p class="hint">會取代這些桿件原本的均佈載重設定(這裡的批次功能只覆蓋全長, 局部範圍/桿件集中力請到單一桿件的屬性面板設定)。</p>
+    <div class="row2"><button id="bd_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bd_back">返回</button></div>
+  </fieldset>`;
+  document.getElementById('bd_back').onclick = renderMultiSelectPanel;
+  document.getElementById('bd_apply').onclick = () => {
+    const dir = document.getElementById('bd_dir').value;
+    const w1 = parseFloat(document.getElementById('bd_w1').value) || 0;
+    const w2raw = document.getElementById('bd_w2').value;
+    const w2 = w2raw === '' ? undefined : parseFloat(w2raw);
+    model.distributed_loads = model.distributed_loads.filter(d => !memberIds.includes(d.member));
+    for (const id of memberIds) {
+      const entry = {member: id, w_start: w1, direction: dir};
+      if (w2 !== undefined && !isNaN(w2)) entry.w_end = w2;
+      model.distributed_loads.push(entry);
+    }
+    setStatus('已套用均佈載重到 ' + memberIds.length + ' 根桿件');
+    clearMultiSelection();
+  };
+}
+
 
 function handleMemberAddClick(id) {
   if (memberFirstNode === null) {
@@ -975,12 +1137,55 @@ function snapPoint(pt, opts) {
   return {x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000};
 }
 
+// ---------- 批次選取: 方框(完全包含) / 直線(相交即算) ----------
+function rectSelect(x1, y1, x2, y2) {
+  const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+  const inRect = (n) => n.x >= minX && n.x <= maxX && n.y >= minY && n.y <= maxY;
+  const nodeIds = model.nodes.filter(inRect).map(n => n.id);
+  const memberIds = model.members
+    .filter(m => inRect(nodeById(m.node_i)) && inRect(nodeById(m.node_j)))
+    .map(m => m.id);
+  return {nodeIds, memberIds};
+}
+function orientation(p, q, r) {
+  const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+  if (Math.abs(val) < 1e-9) return 0;
+  return val > 0 ? 1 : 2;
+}
+function onSegment(p, q, r) {
+  return q.x <= Math.max(p.x, r.x) + 1e-9 && q.x >= Math.min(p.x, r.x) - 1e-9 &&
+         q.y <= Math.max(p.y, r.y) + 1e-9 && q.y >= Math.min(p.y, r.y) - 1e-9;
+}
+function segmentsIntersect(p1, p2, p3, p4) {
+  const o1 = orientation(p1, p2, p3), o2 = orientation(p1, p2, p4);
+  const o3 = orientation(p3, p4, p1), o4 = orientation(p3, p4, p2);
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(p1, p3, p2)) return true;
+  if (o2 === 0 && onSegment(p1, p4, p2)) return true;
+  if (o3 === 0 && onSegment(p3, p1, p4)) return true;
+  if (o4 === 0 && onSegment(p3, p2, p4)) return true;
+  return false;
+}
+function lineSelect(lp1, lp2) {
+  const memberIds = model.members
+    .filter(m => segmentsIntersect(lp1, lp2, nodeById(m.node_i), nodeById(m.node_j)))
+    .map(m => m.id);
+  return {nodeIds: [], memberIds};
+}
+
 // ---------- 畫布事件(節點拖曳 / 新增 / 平移) ----------
 svg.addEventListener('pointerdown', (e) => {
   if (activePointers.size >= 2) return;
   if (dragNodeId !== null) return;
   e.preventDefault();
   const t = computeTransform();
+  if (selectMode) {
+    const [wx, wy] = clientToWorld(e, t);
+    marqueeState = {mode: selectMode, startWorld: {x: wx, y: wy}, curWorld: {x: wx, y: wy}};
+    render();
+    return;
+  }
   if (addMode === 'node') {
     const [wx, wy] = clientToWorld(e, t);
     const orthoRef = (selected && selected.type === 'node') ? nodeById(selected.id)
@@ -1002,7 +1207,21 @@ svg.addEventListener('pointerdown', (e) => {
 
 svg.addEventListener('pointermove', (e) => {
   if (activePointers.size >= 2) return;
+  if (marqueeState) {
+    const t = computeTransform();
+    const [wx, wy] = clientToWorld(e, t);
+    marqueeState.curWorld = {x: wx, y: wy};
+    render();
+    return;
+  }
   if (dragNodeId !== null) {
+    // 移動門檻: 手指按下後小範圍的抖動不算拖曳, 避免點擊節點時
+    // 手指微微晃動就被誤判成拖曳、把節點搬走(這是先前的bug)。
+    // 超過門檻才真的開始移動節點, 邏輯跟下面平移用的3px門檻一致,
+    // 這裡用稍大一點的6px(觸控本來就比滑鼠不精準, 而且誤觸的代價
+    // 是節點被搬走, 比平移誤觸的代價更高)。
+    const pNow = clientToCameraSpace(e);
+    if (!dragMoved && Math.hypot(pNow.x - dragStartScreen.x, pNow.y - dragStartScreen.y) < 6) return;
     dragMoved = true;
     const t = computeTransform();
     const [wx, wy] = clientToWorld(e, t);
@@ -1026,6 +1245,23 @@ svg.addEventListener('pointermove', (e) => {
 });
 
 svg.addEventListener('pointerup', () => {
+  if (marqueeState) {
+    const {mode, startWorld, curWorld} = marqueeState;
+    marqueeState = null;
+    const result = mode === 'rect'
+      ? rectSelect(startWorld.x, startWorld.y, curWorld.x, curWorld.y)
+      : lineSelect(startWorld, curWorld);
+    if (result.nodeIds.length === 0 && result.memberIds.length === 0) {
+      setStatus('這個範圍內沒有選到任何東西');
+      render();
+      return;
+    }
+    selected = null;
+    multiSelection = result;
+    renderMultiSelectPanel();
+    render();
+    return;
+  }
   if (dragNodeId !== null) {
     const id = dragNodeId;
     dragNodeId = null;
@@ -1055,19 +1291,46 @@ document.querySelectorAll('.viewBtn').forEach(btn => {
   });
 });
 
-document.getElementById('btnAddNode').addEventListener('click', (e) => {
-  addMode = addMode === 'node' ? null : 'node';
-  memberFirstNode = null;
-  e.target.classList.toggle('active', addMode === 'node');
-  document.getElementById('btnAddMember').classList.remove('active');
-  setStatus(addMode === 'node' ? '新增節點模式:點畫布空白處' : '');
+const MODE_BUTTONS = {node: 'btnAddNode', member: 'btnAddMember', rect: 'btnSelectRect', line: 'btnSelectLine'};
+function clearAllModes() {
+  addMode = null; selectMode = null; memberFirstNode = null; marqueeState = null;
+  Object.values(MODE_BUTTONS).forEach(id => document.getElementById(id).classList.remove('active'));
+}
+function toggleMode(kind) {
+  const wasActive = document.getElementById(MODE_BUTTONS[kind]).classList.contains('active');
+  clearAllModes();
+  if (wasActive) { setStatus(''); render(); return; }
+  if (kind === 'node' || kind === 'member') addMode = kind;
+  else selectMode = kind;
+  document.getElementById(MODE_BUTTONS[kind]).classList.add('active');
+  const msgs = {
+    node: '新增節點模式:點畫布空白處',
+    member: '新增桿件模式:依序點兩個節點',
+    rect: '方框選取模式:拖曳出一個方框, 節點在框內就選到, 桿件要兩端都在框內才選到',
+    line: '直線選取模式:拖曳畫一條線, 掃過的桿件都會選到',
+  };
+  setStatus(msgs[kind]);
+  render();
+}
+document.getElementById('btnAddNode').addEventListener('click', () => toggleMode('node'));
+document.getElementById('btnAddMember').addEventListener('click', () => toggleMode('member'));
+document.getElementById('btnSelectRect').addEventListener('click', () => toggleMode('rect'));
+document.getElementById('btnSelectLine').addEventListener('click', () => toggleMode('line'));
+
+document.getElementById('btnBatchSupport').addEventListener('click', () => {
+  if (!multiSelection || multiSelection.nodeIds.length === 0) {
+    setStatus('請先用「方框選取」選一些節點, 才能批次設定支承');
+    return;
+  }
+  renderBatchSupportForm(multiSelection.nodeIds);
 });
-document.getElementById('btnAddMember').addEventListener('click', (e) => {
-  addMode = addMode === 'member' ? null : 'member';
-  memberFirstNode = null;
-  e.target.classList.toggle('active', addMode === 'member');
-  document.getElementById('btnAddNode').classList.remove('active');
-  setStatus(addMode === 'member' ? '新增桿件模式:依序點兩個節點' : '');
+document.getElementById('btnBatchLoad').addEventListener('click', () => {
+  if (!multiSelection || (multiSelection.nodeIds.length === 0 && multiSelection.memberIds.length === 0)) {
+    setStatus('請先用「方框選取」或「直線選取」選一些節點/桿件, 才能批次施加外力');
+    return;
+  }
+  if (multiSelection.nodeIds.length > 0) renderBatchNodeLoadForm(multiSelection.nodeIds);
+  else renderBatchDistLoadForm(multiSelection.memberIds);
 });
 
 document.getElementById('btnSolve').addEventListener('click', async () => {
