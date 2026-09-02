@@ -146,7 +146,7 @@
         <button id="btnZoomReset">⟲ 原大小</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
-        <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="14" min="8" max="28" style="width:3.6rem;"></label>
+        <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
       </div>
     </div>
 
@@ -246,6 +246,7 @@ let memberFirstNode = null;
 let dragNodeId = null;
 let dragMoved = false;
 let dragStartScreen = null;
+let modalOpenedAt = 0;
 
 const svg = document.getElementById('svg');
 const cameraG = document.getElementById('camera');
@@ -508,7 +509,7 @@ function visibleWorldRect(t) {
   };
 }
 
-let gridLabelSize = 14; // 可從「檢視」選單調整
+let gridLabelSize = 24; // 可從「檢視」選單調整
 function gridLabelStyle() { return `font-size:${gridLabelSize}px;font-weight:600;fill:#475569;`; }
 
 function drawGrid(t) {
@@ -904,6 +905,7 @@ function renderMultiSelectPanel() {
   if (!multiSelection) { modal.classList.remove('open'); backdrop.classList.remove('open'); return; }
   modal.classList.add('open');
   backdrop.classList.add('open');
+  modalOpenedAt = Date.now();
   const {nodeIds, memberIds} = multiSelection;
   let html = `<fieldset><legend>批次選取</legend>
     <p class="hint">選到 ${nodeIds.length} 個節點、${memberIds.length} 根桿件(桿件要兩端都在方框內, 或被選取線畫過, 才算選到)。</p>`;
@@ -1085,6 +1087,7 @@ function renderPropPanel() {
   }
   modal.classList.add('open');
   backdrop.classList.add('open');
+  modalOpenedAt = Date.now();
 
   if (selected.type === 'node') {
     const n = nodeById(selected.id);
@@ -1546,6 +1549,20 @@ svg.addEventListener('pointerup', () => {
   }
 });
 
+// 手勢中途被系統取消(pointercancel)時的保險: 常發生在長按、或手勢
+// 被瀏覽器自己的手勢辨識攔截時。之前完全沒處理這個事件, 導致
+// dragNodeId/panState/marqueeState 卡在「進行中」的狀態永遠不會
+// 被清掉 —— 後面所有背景pointerdown(平移/新增節點/選取)開頭都有
+// `if (dragNodeId !== null) return`這類判斷, 卡死之後畫布本身就會
+// 變成完全沒反應(但畫布以外的按鈕不受影響, 因為它們是各自獨立的
+// DOM元素監聽器), 正好對應「畫面卡住, 只有裡面滑不動」的狀況。
+svg.addEventListener('pointercancel', () => {
+  dragNodeId = null;
+  panState = null;
+  marqueeState = null;
+  render();
+});
+
 document.getElementById('showGridToggle').addEventListener('change', render);
 document.getElementById('gridLabelSizeInput').addEventListener('input', (e) => {
   const v = parseInt(e.target.value, 10);
@@ -1781,7 +1798,16 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
 });
 
-document.getElementById('propModalBackdrop').addEventListener('click', clearSelection);
+document.getElementById('propModalBackdrop').addEventListener('click', () => {
+  // 手機瀏覽器對「輕點」手勢, 放開手指後常常會「補送」一個合成的
+  // click事件, 時間點通常落在遮罩已經打開之後 —— 那個補送的click
+  // 重新判斷落點時, 遮罩已經蓋住剛選取的節點/桿件, 結果誤觸到遮罩
+  // 本身, 面板剛打開就被自己觸發的click關掉(使用者看到的就是
+  // 「閃一下就消失」)。這裡遮罩剛打開的一小段時間內忽略點擊,
+  // 不用去猜瀏覽器到底什麼時候會補送那個click。
+  if (Date.now() - modalOpenedAt < 400) return;
+  clearSelection();
+});
 
 refreshModelList();
 render();
