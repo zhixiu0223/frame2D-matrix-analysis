@@ -2,7 +2,14 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<!-- user-scalable=no + maximum-scale=1: 明確關掉瀏覽器自己「整個網頁」的
+     原生雙指縮放。畫布本身用 touch-action:none 已經想擋掉這件事, 但
+     沒有這個meta tag明確禁用的話, 部分手機瀏覽器在雙指手勢時還是會
+     同時觸發原生頁面縮放, 導致座標系統的換算基準在手勢過程中被
+     瀏覽器自己中途改掉、跟我們自己的JS縮放邏輯互相打架, 每一幀算出
+     來的縮放倍率都兜不起來(這正是雙指縮放完全失效、每次都觸發
+     camera自動修復機制的根本原因)。 -->
 <title>frame2d 互動編輯器</title>
 <style>
   * { box-sizing: border-box; }
@@ -393,10 +400,15 @@ svg.addEventListener('pointerdown', (e) => {
     dragNodeId = null; panState = null;
     const pts = [...activePointers.values()];
     const dist0 = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+    // 只記錄「這一刻」的距離跟中點, 不記錄camera快照 —— 上一版記錄
+    // 手勢開始時的camera快照、每一幀都重算一次絕對位置的做法太複雜,
+    // 在實機上每次雙指一碰就算出無效值。改成每一幀只算「跟上一幀
+    // 比起來放大/縮小了多少」這種相對增量, 直接餵給zoomAt() ——
+    // 這個函式是🔍+/-按鈕在用的, 已經證實沒問題, 不再自己重新
+    // 推導一套容易出錯的絕對位置公式。
     pinchState = {
-      startDist: Number.isFinite(dist0) && dist0 > 1e-6 ? dist0 : 1,
-      startCam: {...camera},
-      startMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
+      lastDist: Number.isFinite(dist0) && dist0 > 1e-3 ? dist0 : null,
+      lastMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
     };
   }
 }, {capture: true});
@@ -405,23 +417,13 @@ svg.addEventListener('pointermove', (e) => {
   activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
   if (activePointers.size >= 2 && pinchState) {
     const pts = [...activePointers.values()];
-    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
     const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
-    const newK = clampK(pinchState.startCam.k * (dist / pinchState.startDist));
-    const canonicalAtStart = {
-      x: (pinchState.startMid.x - pinchState.startCam.x) / pinchState.startCam.k,
-      y: (pinchState.startMid.y - pinchState.startCam.y) / pinchState.startCam.k,
-    };
-    // 這裡不再額外檢查數值有效性就跳過整幀不套用了 —— 上一版加了這層
-    // 檢查之後雙指縮放完全沒反應, 代表這層檢查太保守, 把正常的縮放
-    // 計算也一起擋掉了。現在直接套用, 真的算壞的話靠
-    // applyCameraTransform() 裡那層保險自動修復(已經單獨測試過壞值
-    // 會被修回原點), 兩者算是不同層次的防呆: 這裡負責讓縮放正常
-    // 運作, applyCameraTransform() 負責兜底避免真的卡死。
-    camera.k = newK;
-    camera.x = mid.x - canonicalAtStart.x * newK;
-    camera.y = mid.y - canonicalAtStart.y * newK;
-    applyCameraTransform();
+    if (Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist) {
+      zoomAt(mid, dist / pinchState.lastDist);
+    }
+    pinchState.lastDist = Number.isFinite(dist) && dist > 1e-3 ? dist : pinchState.lastDist;
+    pinchState.lastMid = mid;
     scheduleRender();
   }
 }, {capture: true});
