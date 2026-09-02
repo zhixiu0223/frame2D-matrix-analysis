@@ -180,7 +180,10 @@
     </svg>
   </div>
 
-  <pre id="debugLog" style="display:none;background:#111;color:#0f0;font-size:11px;padding:0.5rem;max-height:200px;overflow-y:auto;white-space:pre-wrap;margin:0.4rem 0;border-radius:6px;"></pre>
+  <div id="debugPanel" style="display:none;">
+    <button id="debugCopyBtn" style="width:100%;margin-bottom:0.3rem;">📋 複製除錯訊息</button>
+    <pre id="debugLog" style="background:#111;color:#0f0;font-size:11px;padding:0.5rem;max-height:260px;overflow-y:auto;white-space:pre-wrap;margin:0;border-radius:6px;"></pre>
+  </div>
 
   <details>
     <summary>詳細數值(節點反力/位移、桿件端內力)</summary>
@@ -311,7 +314,16 @@ function clientToWorld(evt, t) {
 function clientToCameraSpace(evt) {
   const pt = svg.createSVGPoint();
   pt.x = evt.clientX; pt.y = evt.clientY;
-  return pt.matrixTransform(svg.getScreenCTM().inverse());
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+  // 刻意在這裡把 x/y 明確挑出來組成一個「一般」JS物件回傳, 不要直接
+  // 回傳原生的 SVGPoint 物件本身 —— SVGPoint 的 x/y 是瀏覽器底層實作
+  // 的存取器(getter), 不是一般物件那種「自己的、可列舉」屬性, 用
+  // {...svgPoint} 這種展開語法去複製的時候會完全抓不到, 展開出來的
+  // 東西x/y變成undefined(但直接用.x/.y存取是正常的, 這就是為什麼
+  // 單指一直都正常、只有雙指這邊因為程式碼裡用了展開語法才整個壞掉,
+  // 而且是每次、百分之百重現)。這裡先轉成純物件, 之後不管展開幾次
+  // 都不會有這個問題。
+  return {x: p.x, y: p.y};
 }
 
 function nodeById(id) { return model.nodes.find(n => n.id === id); }
@@ -395,12 +407,12 @@ let pinchState = null;
 function debugLog(msg) {
   const toggle = document.getElementById('debugToggle');
   if (!toggle || !toggle.checked) return;
+  document.getElementById('debugPanel').style.display = 'block';
   const el = document.getElementById('debugLog');
-  el.style.display = 'block';
   const line = document.createElement('div');
   line.textContent = msg;
   el.appendChild(line);
-  while (el.childNodes.length > 40) el.removeChild(el.firstChild);
+  while (el.childNodes.length > 300) el.removeChild(el.firstChild);
   el.scrollTop = el.scrollHeight;
 }
 function pruneStalePointers() {
@@ -412,7 +424,8 @@ function pruneStalePointers() {
 svg.addEventListener('pointerdown', (e) => {
   pruneStalePointers();
   activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
-  debugLog(`DOWN id=${e.pointerId} type=${e.pointerType} target=${e.target.tagName} active=${activePointers.size} keys=[${[...activePointers.keys()]}]`);
+  const thisPt = activePointers.get(e.pointerId);
+  debugLog(`DOWN id=${e.pointerId} type=${e.pointerType} target=${e.target.tagName} active=${activePointers.size} keys=[${[...activePointers.keys()]}] xy={x:${thisPt.x},y:${thisPt.y}}`);
   // >=2 而不是嚴格===2: 避免手機誤觸多出一個「幽靈」第三觸控點時
   // (這類情況真的會發生), 縮放邏輯整組失效——只取Map裡最先加入的
   // 兩個點當作縮放基準, 多出來的點忽略掉, 不影響雙指縮放正常運作。
@@ -430,7 +443,7 @@ svg.addEventListener('pointerdown', (e) => {
       lastDist: Number.isFinite(dist0) && dist0 > 1e-3 ? dist0 : null,
       lastMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
     };
-    debugLog(`  -> 建立pinchState, dist0=${dist0.toFixed(1)}, lastDist=${pinchState.lastDist}`);
+    debugLog(`  -> 建立pinchState, pts[0]={x:${pts[0].x},y:${pts[0].y}} pts[1]={x:${pts[1].x},y:${pts[1].y}} dist0=${dist0} lastDist=${pinchState.lastDist}`);
   }
 }, {capture: true});
 svg.addEventListener('pointermove', (e) => {
@@ -441,7 +454,7 @@ svg.addEventListener('pointermove', (e) => {
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
     const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
     const willZoom = Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist;
-    debugLog(`MOVE id=${e.pointerId} active=${activePointers.size} dist=${dist.toFixed(1)} lastDist=${pinchState.lastDist ? pinchState.lastDist.toFixed(1) : pinchState.lastDist} willZoom=${willZoom} factor=${willZoom ? (dist/pinchState.lastDist).toFixed(3) : '-'}`);
+    debugLog(`MOVE id=${e.pointerId} active=${activePointers.size} pts[0]={x:${pts[0].x},y:${pts[0].y}} pts[1]={x:${pts[1].x},y:${pts[1].y}} dist=${dist} lastDist=${pinchState.lastDist} willZoom=${willZoom}`);
     if (willZoom) {
       zoomAt(mid, dist / pinchState.lastDist);
       debugLog(`  -> zoomAt呼叫完成, camera.k=${camera.k.toFixed(3)}`);
@@ -1920,6 +1933,22 @@ svg.addEventListener('pointercancel', () => {
 });
 
 document.getElementById('showGridToggle').addEventListener('change', render);
+document.getElementById('debugCopyBtn').addEventListener('click', async () => {
+  const text = document.getElementById('debugLog').innerText;
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus('除錯訊息已複製到剪貼簿(' + text.split('\n').length + ' 行)');
+  } catch (e) {
+    // 部分手機瀏覽器 clipboard API 權限不給用, 退而求其次: 選取文字
+    // 讓使用者自己長按複製。
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('debugLog'));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setStatus('自動複製失敗, 已幫你選取文字, 請長按選取範圍手動複製');
+  }
+});
 document.getElementById('gridLabelSizeInput').addEventListener('input', (e) => {
   const v = parseInt(e.target.value, 10);
   if (!isNaN(v) && v > 0) { gridLabelSize = v; render(); }
