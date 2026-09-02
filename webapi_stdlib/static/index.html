@@ -48,6 +48,8 @@
   .pin-marker { fill: #fff; stroke: #1f2937; stroke-width: 1.5; }
   .node-label { font-size: 11px; fill: #1f2937; pointer-events: none; }
   .member-line { stroke: #1f2937; stroke-width: 3; cursor: pointer; }
+  .member-line.member-truss { stroke-dasharray: 8 5; }
+  .member-line.member-cable { stroke: #0d9488; stroke-dasharray: 1 5; stroke-linecap: round; }
   .member-line.selected { stroke: #2563eb; }
   .member-line.multi-selected { stroke: #d97706; stroke-width: 5; }
   .marquee-rect { fill: rgba(217, 119, 6, 0.12); stroke: #d97706; stroke-width: 1.5; stroke-dasharray: 5 3; }
@@ -357,10 +359,24 @@ svg.addEventListener('wheel', (e) => {
 }, {passive: false});
 
 // 雙指縮放/平移(capture phase,不受節點 stopPropagation 影響)
-const activePointers = new Map();
+const activePointers = new Map(); // pointerId -> {x, y, t}
 let pinchState = null;
+// 防止指標狀態卡死: 如果某個pointerId因為瀏覽器沒有正常送出
+// pointerup/pointercancel而一直卡在activePointers裡(這是真的會發生
+// 的觸控邊界情況, 例如手指滑出畫布邊界時, 或是某些瀏覽器/裝置的
+// 事件實作不一致), 下一次單指觸控會被誤判成「已經有兩指」, 導致
+// 單指手勢被當成縮放處理、畫面卡住不能平移。這裡幫每個點加時間戳記,
+// 新的pointerdown進來時先清掉超過2秒沒更新的舊記錄, 從根本避免
+// 卡死狀態一直累積下去。
+function pruneStalePointers() {
+  const now = Date.now();
+  for (const [id, p] of activePointers) {
+    if (now - p.t > 2000) activePointers.delete(id);
+  }
+}
 svg.addEventListener('pointerdown', (e) => {
-  activePointers.set(e.pointerId, clientToCameraSpace(e));
+  pruneStalePointers();
+  activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
   if (activePointers.size === 2) {
     dragNodeId = null; panState = null;
     const pts = [...activePointers.values()];
@@ -373,7 +389,7 @@ svg.addEventListener('pointerdown', (e) => {
 }, {capture: true});
 svg.addEventListener('pointermove', (e) => {
   if (!activePointers.has(e.pointerId)) return;
-  activePointers.set(e.pointerId, clientToCameraSpace(e));
+  activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
   if (activePointers.size === 2 && pinchState) {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
@@ -396,6 +412,11 @@ function releasePointer(e) {
 }
 svg.addEventListener('pointerup', releasePointer, {capture: true});
 svg.addEventListener('pointercancel', releasePointer, {capture: true});
+// 額外的安全網: 手指滑出畫布邊界、或pointer capture在某些瀏覽器上
+// 意外釋放時, 有些裝置不會送標準的pointerup/pointercancel, 這裡多
+// 綁兩個事件確保activePointers還是會被清掉。
+svg.addEventListener('pointerleave', releasePointer, {capture: true});
+svg.addEventListener('lostpointercapture', releasePointer, {capture: true});
 
 // 單指拖曳空白處 = 平移
 let panState = null;
@@ -587,7 +608,12 @@ function drawMembers(t, faint) {
     const [x1, y1] = toScreen(ni.x, ni.y, t);
     const [x2, y2] = toScreen(nj.x, nj.y, t);
     const inMulti = multiSelection && multiSelection.memberIds.includes(m.id);
-    const cls = faint ? 'member-line faint' : ('member-line' + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : '') + (inMulti ? ' multi-selected' : ''));
+    // 線條樣式跟 frame2d/plotting.py(Python端)已經定好的慣例保持一致:
+    // frame=實線, truss=黑色虛線, cable=藍綠色點線。不額外畫空心圓標記
+    // truss/cable的鉸接(跟plotting.py一樣, 純粹靠線條樣式表達, 因為
+    // truss/cable本來就整根都是鉸接, 不需要再標兩個端點)。
+    const typeCls = m.member_type === 'truss' ? ' member-truss' : m.member_type === 'cable' ? ' member-cable' : '';
+    const cls = (faint ? 'member-line faint' : ('member-line' + typeCls + (selected && selected.type === 'member' && selected.id === m.id ? ' selected' : '') + (inMulti ? ' multi-selected' : '')));
     const line = el('line', {x1, y1, x2, y2, class: cls});
     if (!faint) line.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -602,18 +628,36 @@ function drawMembers(t, faint) {
     });
     put(line);
     if (!faint) {
+      const tag = m.member_type === 'truss' ? 'T' : m.member_type === 'cable' ? 'C' : 'M';
       const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 - 4, class: 'member-label'});
-      lbl.textContent = 'M' + m.id;
+      lbl.textContent = tag + m.id;
       put(lbl);
+      // cable受壓會被frame2d當成鬆弛移除(物理上代表纜線垮掉、不受力),
+      // Solve 過後如果偵測到這根cable是鬆弛狀態, 在桿件中間畫一個小剪刀
+      // 符號提示「這條線現在沒在出力」, 不用去猜纜線目前是不是真的在work。
+      if (m.member_type === 'cable' && lastResult) {
+        const mr = lastResult.members.find(x => x.member_id === m.id);
+        if (mr && mr.slack) {
+          const scissors = el('text', {
+            x: (x1 + x2) / 2, y: (y1 + y2) / 2, 'text-anchor': 'middle', 'dominant-baseline': 'central',
+            style: 'font-size:16px;',
+          });
+          scissors.textContent = '✂';
+          put(scissors);
+        }
+      }
     }
   }
 }
 
 // 節點本體一律畫實心圓(剛接/連續節點的標準畫法);
 // 桿件端點若有release,在靠近該端點處另外畫一個空心小圓(內部鉸接的標準畫法),
-// 不是整個節點空心 —— 同一節點上其他沒release的桿件仍然是剛接。
+// 不是整個節點空心 —— 同一節點上其他沒release的桿件仍然是剛接。只對
+// member_type==='frame' 有效: truss/cable本來就整根鉸接, release_i/j
+// 對它們完全不生效(見property panel, 選truss/cable時這兩個選項會隱藏)。
 function drawPinMarkers(t) {
   for (const m of model.members) {
+    if (m.member_type !== 'frame') continue; // release對truss/cable不生效, 不畫誤導性的圓圈
     const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
     if (!ni || !nj) continue;
     const dx = nj.x - ni.x, dy = nj.y - ni.y;
@@ -998,8 +1042,33 @@ function renderBatchMemberEditForm(memberIds) {
       <option value="1">鉸接釋放</option>
     </select>
     <div class="row2"><button id="be_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="be_back">返回</button></div>
+
+    <label style="margin-top:0.8rem;">或者新增一個斷面直接套用到這批桿件(例如選一排柱子, 一次建立col_sec)</label>
+    <input id="be_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
+    <div class="row3">
+      <input id="be_sec_new_E" type="number" step="any" placeholder="E(Pa)">
+      <input id="be_sec_new_I" type="number" step="any" placeholder="I(m⁴)">
+      <input id="be_sec_new_A" type="number" step="any" placeholder="A(m²)">
+    </div>
+    <button id="be_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這批桿件</button>
   </fieldset>`;
   document.getElementById('be_back').onclick = renderMultiSelectPanel;
+  document.getElementById('be_sec_new_add').onclick = () => {
+    const name = document.getElementById('be_sec_new_name').value.trim();
+    if (!name) { setStatus('請輸入新斷面名稱'); return; }
+    if (model.sections.some(s => s.name === name)) { setStatus('斷面名稱 "' + name + '" 已經存在, 換一個名字'); return; }
+    const ref = model.sections.find(s => s.name === model.members.find(x => x.id === memberIds[0]).section);
+    const E = parseFloat(document.getElementById('be_sec_new_E').value) || ref.E;
+    const I = parseFloat(document.getElementById('be_sec_new_I').value) || ref.I;
+    const A = parseFloat(document.getElementById('be_sec_new_A').value) || ref.A;
+    model.sections.push({name, E, I, A});
+    for (const id of memberIds) {
+      const m = model.members.find(x => x.id === id);
+      if (m) m.section = name;
+    }
+    setStatus('已新增斷面 "' + name + '" 並套用到 ' + memberIds.length + ' 根桿件');
+    clearMultiSelection();
+  };
   document.getElementById('be_apply').onclick = () => {
     const typeVal = document.getElementById('be_type').value;
     const secVal = document.getElementById('be_sec').value;
@@ -1199,11 +1268,14 @@ function renderPropPanel() {
           <label>元素類型</label>
           <select id="p_type">
             <option value="frame" ${m.member_type==='frame'?'selected':''}>frame(樑柱)</option>
-            <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架)</option>
-            <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線)</option>
+            <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架, 兩端本來就是鉸接)</option>
+            <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線, 只能受拉, 兩端本來就是鉸接)</option>
           </select>
-          <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放(N${m.node_i}端,畫空心圓)</label>
-          <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放(N${m.node_j}端,畫空心圓)</label>
+          <div id="p_release_wrap" style="display:${m.member_type==='frame'?'block':'none'};">
+            <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放(N${m.node_i}端,畫空心圓)</label>
+            <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放(N${m.node_j}端,畫空心圓)</label>
+          </div>
+          <p class="hint" id="p_release_hint" style="display:${m.member_type==='frame'?'none':'block'};">truss/cable 整根本來就是兩端鉸接(不傳彎矩), i/j端釋放選項對它們沒有作用, 所以先隱藏起來。</p>
 
           <label>這根桿件目前用的斷面: "${sec.name}"</label>
           <div class="row3">
@@ -1227,12 +1299,6 @@ function renderPropPanel() {
             <input id="p_sec_new_A" type="number" step="any" placeholder="A(m²)">
           </div>
           <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
-
-          <div class="row2" style="margin-top:0.6rem;">
-            <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
-            <button id="p_cancel">取消</button>
-          </div>
-          <button id="p_delete" style="width:100%;margin-top:0.4rem;background:#dc2626;color:white;">刪除桿件</button>
         </div>
       </details>
 
@@ -1319,8 +1385,19 @@ function renderPropPanel() {
           </div>
           <button id="mp_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增集中力/彎矩</button>
         </div>
-      </details>`;
+      </details>
+
+      <div class="row2" style="margin-top:0.8rem;">
+        <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+        <button id="p_cancel">取消</button>
+      </div>
+      <button id="p_delete" style="width:100%;margin-top:0.4rem;background:#dc2626;color:white;">刪除桿件</button>`;
     document.getElementById('p_cancel').onclick = clearSelection;
+    document.getElementById('p_type').addEventListener('change', (e) => {
+      const isFrame = e.target.value === 'frame';
+      document.getElementById('p_release_wrap').style.display = isFrame ? 'block' : 'none';
+      document.getElementById('p_release_hint').style.display = isFrame ? 'none' : 'block';
+    });
     document.getElementById('p_apply').onclick = () => {
       m.member_type = document.getElementById('p_type').value;
       m.release_i = document.getElementById('p_ri').checked;
