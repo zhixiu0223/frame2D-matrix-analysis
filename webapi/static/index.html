@@ -611,6 +611,16 @@ function drawNodes(t) {
     c.addEventListener('pointerdown', (e) => {
       if (selectMode) return; // 選取模式下, 節點自己的拖曳/點擊都讓給背景的方框/直線選取處理
       e.stopPropagation();
+      // 兩段式互動, 避免點擊跟拖曳互相衝突: 第一下點擊「永遠」只負責
+      // 選取, 不會啟動拖曳; 已經是選取中的節點, 再按著拖曳才會搬移。
+      // 這是大多數CAD/繪圖軟體(Figma、SW FEA等)的標準做法, 比單純
+      // 用移動距離門檻分辨可靠得多, 觸控螢幕上不會再有「點擊時手指
+      // 微抖動就被當成拖曳、節點被搬走」的問題。
+      if (!sel) {
+        selectNode(n.id);
+        render();
+        return;
+      }
       dragNodeId = n.id; dragMoved = false;
       dragStartScreen = clientToCameraSpace(e);
       svg.setPointerCapture(e.pointerId);
@@ -692,6 +702,92 @@ function drawLoads(t) {
     const x1 = x - ux * len, y1 = y - uy * len;
     put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
+    lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
+    put(lbl);
+  }
+
+  drawDistributedLoadIndicators(t);
+  drawMemberPointLoadIndicators(t);
+}
+
+// 桿件均佈/梯形載重的視覺化: 之前這個函式完全沒畫這兩種載重, 資料
+// 有寫進 model 但畫面上看不到任何東西, 讓人以為「沒有真的放上去」。
+// 用跟N/V/M圖同樣的畫法(沿桿件偏移一個跟強度成正比的量), 但偏移
+// 幅度比內力圖保守(0.08 vs 0.15), 避免跟結構線搶視覺焦點。
+function drawDistributedLoadIndicators(t) {
+  if (!model.distributed_loads.length) return;
+  let maxAbs = 1e-9;
+  for (const d of model.distributed_loads) {
+    maxAbs = Math.max(maxAbs, Math.abs(d.w_start), Math.abs(d.w_end !== undefined && d.w_end !== null ? d.w_end : d.w_start));
+  }
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  const valueToWorld = (worldDiag * 0.08) / maxAbs;
+
+  for (const d of model.distributed_loads) {
+    const m = model.members.find(mm => mm.id === d.member);
+    if (!m) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const L = Math.hypot(nj.x - ni.x, nj.y - ni.y);
+    const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
+    const c = Math.cos(angle), s = Math.sin(angle);
+    let perp;
+    if (d.direction === 'global_y') perp = [0, 1];
+    else if (d.direction === 'global') { const a = (d.angle_deg || 0) * Math.PI / 180; perp = [Math.cos(a), Math.sin(a)]; }
+    else perp = [-s, c]; // local: 垂直於桿件本身
+    const x0 = (d.x_start !== undefined && d.x_start !== null) ? d.x_start : 0;
+    const x1 = (d.x_end !== undefined && d.x_end !== null) ? d.x_end : L;
+    const w0 = d.w_start, w1 = (d.w_end !== undefined && d.w_end !== null) ? d.w_end : d.w_start;
+    const nSeg = 6;
+    let basePts = [], loadPts = [];
+    for (let i = 0; i <= nSeg; i++) {
+      const xi = x0 + (x1 - x0) * i / nSeg;
+      const wi = w0 + (w1 - w0) * i / nSeg;
+      const bx = ni.x + xi * c, by = ni.y + xi * s;
+      const off = wi * valueToWorld;
+      basePts.push(toScreen(bx, by, t));
+      loadPts.push(toScreen(bx + perp[0] * off, by + perp[1] * off, t));
+    }
+    const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + loadPts.slice().reverse().map(p => p.join(',')).join(' ');
+    put(el('polygon', {points: poly, fill: 'rgba(220,38,38,0.18)', stroke: '#dc2626', 'stroke-width': 1}));
+    for (let i = 0; i <= nSeg; i += 2) {
+      const [bx1, by1] = basePts[i], [lx1, ly1] = loadPts[i];
+      if (Math.hypot(lx1 - bx1, ly1 - by1) < 2) continue;
+      put(el('line', {x1: lx1, y1: ly1, x2: bx1, y2: by1, stroke: '#dc2626', 'stroke-width': 1.5, 'marker-end': 'url(#arrowhead)'}));
+    }
+    const [mx, my] = toScreen(ni.x + (x0 + x1) / 2 * c, ni.y + (x0 + x1) / 2 * s, t);
+    const lbl = el('text', {x: mx, y: my - 6, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'middle'});
+    lbl.textContent = (w0 === w1 ? w0 : `${w0}~${w1}`) + 'N/m';
+    put(lbl);
+  }
+}
+
+// 桿件集中力/集中彎矩(在桿件中間任意位置, 不是端點)的視覺化。
+function drawMemberPointLoadIndicators(t) {
+  for (const p of model.member_point_loads) {
+    const m = model.members.find(mm => mm.id === p.member);
+    if (!m) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
+    const bx = ni.x + p.a * Math.cos(angle), by = ni.y + p.a * Math.sin(angle);
+    const [x, y] = toScreen(bx, by, t);
+    const [pfx, pfy] = memberPointLoadFxFy(p);
+    const mag = Math.hypot(pfx, pfy);
+    if (mag < 1e-9) {
+      if (p.m) {
+        put(el('circle', {cx: x, cy: y, r: 6, fill: 'none', stroke: '#dc2626', 'stroke-width': 2}));
+        const lbl = el('text', {x: x + 9, y: y + 3, 'font-size': 9, fill: '#dc2626'});
+        lbl.textContent = (p.m / 1000).toFixed(1) + 'kN·m';
+        put(lbl);
+      }
+      continue;
+    }
+    const ux = pfx / mag, uy = -pfy / mag;
+    const len = 36;
+    put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+    const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
     lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
     put(lbl);
   }
@@ -785,10 +881,11 @@ function drawDiagram(t, kind) {
 // ---------- 選取與屬性面板 ----------
 function selectNode(id) {
   if (addMode === 'member') { handleMemberAddClick(id); return; }
+  multiSelection = null;
   selected = {type: 'node', id};
   renderPropPanel();
 }
-function selectMember(id) { selected = {type: 'member', id}; renderPropPanel(); render(); }
+function selectMember(id) { multiSelection = null; selected = {type: 'member', id}; renderPropPanel(); render(); }
 function clearSelection() { selected = null; memberFirstNode = null; renderPropPanel(); render(); }
 function clearMultiSelection() { multiSelection = null; renderMultiSelectPanel(); render(); }
 
@@ -809,6 +906,7 @@ function renderMultiSelectPanel() {
   }
   if (memberIds.length) {
     html += `<button id="ms_distload" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">⬇ 批次施加均佈載重</button>`;
+    html += `<button id="ms_edit" style="width:100%;margin-bottom:0.4rem;background:#7c3aed;color:white;">✎ 批次編輯桿件(斷面/類型/釋放)</button>`;
   }
   html += `<div class="row2"><button id="ms_delete" style="background:#dc2626;color:white;">刪除選取項目</button><button id="ms_cancel">取消</button></div></fieldset>`;
   panel.innerHTML = html;
@@ -829,7 +927,46 @@ function renderMultiSelectPanel() {
   }
   if (memberIds.length) {
     document.getElementById('ms_distload').onclick = () => renderBatchDistLoadForm(memberIds);
+    document.getElementById('ms_edit').onclick = () => renderBatchMemberEditForm(memberIds);
   }
+}
+
+function renderBatchMemberEditForm(memberIds) {
+  const panel = document.getElementById('propPanel');
+  const sections = model.sections.map(s => s.name);
+  panel.innerHTML = `<fieldset><legend>批次編輯桿件(${memberIds.length} 根)</legend>
+    <p class="hint">只有勾選「套用」的欄位才會覆蓋這些桿件原本的設定, 沒勾的維持每根桿件原本的值不變。</p>
+    <label><input id="be_type_on" type="checkbox" style="width:auto;"> 套用元素類型</label>
+    <select id="be_type">
+      <option value="frame">frame(樑柱)</option>
+      <option value="truss">truss(桁架)</option>
+      <option value="cable">cable(纜線)</option>
+    </select>
+    <label><input id="be_sec_on" type="checkbox" style="width:auto;"> 套用斷面(改成套用已存在的斷面名稱, 不會新建斷面)</label>
+    <select id="be_sec">${sections.map(s => `<option value="${s}">${s}</option>`).join('')}</select>
+    <label><input id="be_ri_on" type="checkbox" style="width:auto;"> 套用 i端釋放</label>
+    <label><input id="be_ri" type="checkbox" style="width:auto;"> i端鉸接釋放</label>
+    <label><input id="be_rj_on" type="checkbox" style="width:auto;"> 套用 j端釋放</label>
+    <label><input id="be_rj" type="checkbox" style="width:auto;"> j端鉸接釋放</label>
+    <div class="row2"><button id="be_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="be_back">返回</button></div>
+  </fieldset>`;
+  document.getElementById('be_back').onclick = renderMultiSelectPanel;
+  document.getElementById('be_apply').onclick = () => {
+    const typeOn = document.getElementById('be_type_on').checked, typeVal = document.getElementById('be_type').value;
+    const secOn = document.getElementById('be_sec_on').checked, secVal = document.getElementById('be_sec').value;
+    const riOn = document.getElementById('be_ri_on').checked, riVal = document.getElementById('be_ri').checked;
+    const rjOn = document.getElementById('be_rj_on').checked, rjVal = document.getElementById('be_rj').checked;
+    for (const id of memberIds) {
+      const m = model.members.find(x => x.id === id);
+      if (!m) continue;
+      if (typeOn) m.member_type = typeVal;
+      if (secOn) m.section = secVal;
+      if (riOn) m.release_i = riVal;
+      if (rjOn) m.release_j = rjVal;
+    }
+    setStatus('已套用到 ' + memberIds.length + ' 根桿件');
+    clearMultiSelection();
+  };
 }
 
 function renderBatchSupportForm(nodeIds) {
@@ -1033,6 +1170,42 @@ function renderPropPanel() {
         <label>數值</label>
         <input id="p_pin_value" type="number" step="any" value="0.5">
         <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
+      </fieldset>
+      <fieldset><legend>桿件均佈/梯形載重(可設區段)</legend>
+        ${renderDistLoadList(m.id)}
+        <label>範圍(留空 = 全長)</label>
+        <div class="row2">
+          <input id="dl_x0" type="number" step="any" placeholder="起點x(m)">
+          <input id="dl_x1" type="number" step="any" placeholder="終點x(m)">
+        </div>
+        <label>強度(N/m): w1(起點) / w2(終點, 留空=均佈)</label>
+        <div class="row2">
+          <input id="dl_w0" type="number" step="any" value="0">
+          <input id="dl_w1" type="number" step="any" placeholder="留空同w1">
+        </div>
+        <label>方向</label>
+        <select id="dl_dir">
+          <option value="vertical">整體垂直(w負值=向下,正值=向上,跟集中力fy慣例一致)</option>
+          <option value="local">局部y向(垂直於桿件本身)</option>
+        </select>
+        <button id="dl_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增均佈載重</button>
+      </fieldset>
+      <fieldset><legend>桿件集中力/集中彎矩(桿件中間任意位置)</legend>
+        ${renderMemberPointLoadList(m.id)}
+        <label>位置量測方式</label>
+        <select id="mp_mode">
+          <option value="relative">相對位置(0~1)</option>
+          <option value="absolute">絕對距離(m)</option>
+        </select>
+        <label>數值</label>
+        <input id="mp_value" type="number" step="any" value="0.5">
+        <label>fx / fy (N) / 集中彎矩 m (N·m)</label>
+        <div class="row3">
+          <input id="mp_fx" type="number" step="any" value="0">
+          <input id="mp_fy" type="number" step="any" value="0">
+          <input id="mp_m" type="number" step="any" value="0">
+        </div>
+        <button id="mp_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增集中力/彎矩</button>
       </fieldset>`;
     document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
@@ -1046,6 +1219,8 @@ function renderPropPanel() {
     };
     document.getElementById('p_delete').onclick = () => {
       model.members = model.members.filter(x => x.id !== m.id);
+      model.distributed_loads = model.distributed_loads.filter(d => d.member !== m.id);
+      model.member_point_loads = model.member_point_loads.filter(p => p.member !== m.id);
       clearSelection();
     };
     document.getElementById('p_pin_add').onclick = () => {
@@ -1053,7 +1228,95 @@ function renderPropPanel() {
       const val = parseFloat(document.getElementById('p_pin_value').value);
       splitMemberAtInternalPin(m, mode, val);
     };
+    document.getElementById('dl_add').onclick = () => {
+      const x0raw = document.getElementById('dl_x0').value, x1raw = document.getElementById('dl_x1').value;
+      const w0 = parseFloat(document.getElementById('dl_w0').value) || 0;
+      const w1raw = document.getElementById('dl_w1').value;
+      const dirChoice = document.getElementById('dl_dir').value;
+      // 'global_y' 這個後端模式只支援整根桿件, 局部區段(x_start/x_end)
+      // 一定要改用 'global'+angle_deg —— 這裡「整體垂直」統一走
+      // angle_deg=90(向上為基準方向), 這樣w負值=向下, 跟集中力fy的
+      // 慣例保持一致, 不管有沒有設區段都能用, 不會撞到後端限制。
+      const entry = {member: m.id, w_start: w0};
+      if (dirChoice === 'vertical') { entry.direction = 'global'; entry.angle_deg = 90; }
+      else entry.direction = 'local';
+      if (x0raw !== '') entry.x_start = parseFloat(x0raw);
+      if (x1raw !== '') entry.x_end = parseFloat(x1raw);
+      if (w1raw !== '') entry.w_end = parseFloat(w1raw);
+      model.distributed_loads.push(entry);
+      renderPropPanel();
+      render();
+    };
+    document.getElementById('mp_add').onclick = () => {
+      const mode = document.getElementById('mp_mode').value;
+      const value = parseFloat(document.getElementById('mp_value').value);
+      const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+      const L = Math.hypot(nj.x - ni.x, nj.y - ni.y);
+      const a = mode === 'relative' ? value * L : value;
+      if (!(a >= 0 && a <= L)) { setStatus('位置必須在 0~' + L.toFixed(3) + 'm 之間'); return; }
+      const fx = parseFloat(document.getElementById('mp_fx').value) || 0;
+      const fy = parseFloat(document.getElementById('mp_fy').value) || 0;
+      const mm = parseFloat(document.getElementById('mp_m').value) || 0;
+      // 你輸入的 fx/fy 是全域座標分量(跟節點集中力一樣的習慣), 但
+      // frame2d 的 member_point_load() 在 direction='global' 模式下
+      // 要的是 F(大小)+angle_deg(全域角度), 不是fx/fy —— 這裡自動轉換,
+      // 畫面上/清單裡還是讓你用 fx/fy 思考, 不用管底層的表示方式。
+      const mag = Math.hypot(fx, fy);
+      const entry = {member: m.id, a, m: mm};
+      if (mag > 1e-9) {
+        entry.direction = 'global';
+        entry.F = mag;
+        entry.angle_deg = Math.atan2(fy, fx) * 180 / Math.PI;
+      } else {
+        entry.direction = 'local';
+      }
+      model.member_point_loads.push(entry);
+      renderPropPanel();
+      render();
+    };
+    model.distributed_loads.filter(d => d.member === m.id).forEach((d, i) => {
+      const btn = document.getElementById('dl_del_' + i);
+      if (btn) btn.onclick = () => { model.distributed_loads = model.distributed_loads.filter(x => x !== d); renderPropPanel(); render(); };
+    });
+    model.member_point_loads.filter(p => p.member === m.id).forEach((p, i) => {
+      const btn = document.getElementById('mp_del_' + i);
+      if (btn) btn.onclick = () => { model.member_point_loads = model.member_point_loads.filter(x => x !== p); renderPropPanel(); render(); };
+    });
   }
+}
+
+function distLoadDirLabel(d) {
+  if (d.direction === 'global_y') return '垂直';
+  if (d.direction === 'global') return '垂直(全域' + (d.angle_deg ?? 0) + '°)';
+  return '局部y';
+}
+function renderDistLoadList(memberId) {
+  const list = model.distributed_loads.filter(d => d.member === memberId);
+  if (!list.length) return '<p class="hint">目前沒有均佈載重。</p>';
+  return '<table><thead><tr><th>範圍</th><th>w1</th><th>w2</th><th>方向</th><th></th></tr></thead><tbody>' +
+    list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${d.w_start}</td><td>${d.w_end ?? d.w_start}</td><td>${distLoadDirLabel(d)}</td>
+      <td><button id="dl_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
+    '</tbody></table>';
+}
+function renderMemberPointLoadList(memberId) {
+  const list = model.member_point_loads.filter(p => p.member === memberId);
+  if (!list.length) return '<p class="hint">目前沒有桿件集中力/彎矩。</p>';
+  return '<table><thead><tr><th>位置x</th><th>fx</th><th>fy</th><th>m</th><th></th></tr></thead><tbody>' +
+    list.map((p, i) => {
+      const [fx, fy] = memberPointLoadFxFy(p);
+      return `<tr><td>${p.a.toFixed(2)}</td><td>${fx.toFixed(1)}</td><td>${fy.toFixed(1)}</td><td>${p.m||0}</td>
+      <td><button id="mp_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`;
+    }).join('') +
+    '</tbody></table>';
+}
+// member_point_load 可能用 fx/fy(direction='local') 或 F+angle_deg
+// (direction='global') 兩種方式表示, 統一還原成(fx,fy)方便清單/畫面顯示。
+function memberPointLoadFxFy(p) {
+  if (p.F !== undefined && p.F !== null) {
+    const rad = (p.angle_deg || 0) * Math.PI / 180;
+    return [p.F * Math.cos(rad), p.F * Math.sin(rad)];
+  }
+  return [p.fx || 0, p.fy || 0];
 }
 
 // 在桿件中間某個位置加「內部鉸接」: 力學上跟端點 release 是同一件事,
@@ -1329,8 +1592,10 @@ document.getElementById('btnBatchLoad').addEventListener('click', () => {
     setStatus('請先用「方框選取」或「直線選取」選一些節點/桿件, 才能批次施加外力');
     return;
   }
-  if (multiSelection.nodeIds.length > 0) renderBatchNodeLoadForm(multiSelection.nodeIds);
-  else renderBatchDistLoadForm(multiSelection.memberIds);
+  // 不猜你要對節點還是桿件施加外力(方框選到桿件時, 它兩端的節點也會
+  // 一起出現在 nodeIds 裡, 之前這裡猜錯就一律跳節點表單), 直接打開
+  // 選取面板讓你自己選「節點集中力」還是「桿件均佈載重」。
+  renderMultiSelectPanel();
 });
 
 document.getElementById('btnSolve').addEventListener('click', async () => {
