@@ -466,6 +466,7 @@ document.getElementById('btnQueryPick').addEventListener('click', (e) => {
   setStatus(queryPickMode ? '點畫布上要查詢的桿件(結構/荷載視圖下可以點)' : '');
 });
 document.getElementById('btnQueryPoint').addEventListener('click', async () => {
+  sanitizeModel();
   const memberId = parseInt(document.getElementById('queryMember').value, 10);
   const mode = document.getElementById('queryMode').value;
   const value = parseFloat(document.getElementById('queryValue').value);
@@ -962,34 +963,46 @@ function renderBatchMemberEditForm(memberIds) {
   const panel = document.getElementById('propPanel');
   const sections = model.sections.map(s => s.name);
   panel.innerHTML = `<fieldset><legend>批次編輯桿件(${memberIds.length} 根)</legend>
-    <p class="hint">只有勾選「套用」的欄位才會覆蓋這些桿件原本的設定, 沒勾的維持每根桿件原本的值不變。</p>
-    <label><input id="be_type_on" type="checkbox" style="width:auto;"> 套用元素類型</label>
+    <p class="hint">每個欄位選「不變」就維持每根桿件原本的值不動, 選別的選項才會覆蓋。</p>
+    <label>元素類型</label>
     <select id="be_type">
+      <option value="__keep__">不變</option>
       <option value="frame">frame(樑柱)</option>
       <option value="truss">truss(桁架)</option>
       <option value="cable">cable(纜線)</option>
     </select>
-    <label><input id="be_sec_on" type="checkbox" style="width:auto;"> 套用斷面(改成套用已存在的斷面名稱, 不會新建斷面)</label>
-    <select id="be_sec">${sections.map(s => `<option value="${s}">${s}</option>`).join('')}</select>
-    <label><input id="be_ri_on" type="checkbox" style="width:auto;"> 套用 i端釋放</label>
-    <label><input id="be_ri" type="checkbox" style="width:auto;"> i端鉸接釋放</label>
-    <label><input id="be_rj_on" type="checkbox" style="width:auto;"> 套用 j端釋放</label>
-    <label><input id="be_rj" type="checkbox" style="width:auto;"> j端鉸接釋放</label>
+    <label>斷面(改成套用已存在的斷面名稱, 不會新建斷面)</label>
+    <select id="be_sec">
+      <option value="__keep__">不變</option>
+      ${sections.map(s => `<option value="${s}">${s}</option>`).join('')}
+    </select>
+    <label>i端</label>
+    <select id="be_ri">
+      <option value="__keep__">不變</option>
+      <option value="0">剛接(不釋放)</option>
+      <option value="1">鉸接釋放</option>
+    </select>
+    <label>j端</label>
+    <select id="be_rj">
+      <option value="__keep__">不變</option>
+      <option value="0">剛接(不釋放)</option>
+      <option value="1">鉸接釋放</option>
+    </select>
     <div class="row2"><button id="be_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="be_back">返回</button></div>
   </fieldset>`;
   document.getElementById('be_back').onclick = renderMultiSelectPanel;
   document.getElementById('be_apply').onclick = () => {
-    const typeOn = document.getElementById('be_type_on').checked, typeVal = document.getElementById('be_type').value;
-    const secOn = document.getElementById('be_sec_on').checked, secVal = document.getElementById('be_sec').value;
-    const riOn = document.getElementById('be_ri_on').checked, riVal = document.getElementById('be_ri').checked;
-    const rjOn = document.getElementById('be_rj_on').checked, rjVal = document.getElementById('be_rj').checked;
+    const typeVal = document.getElementById('be_type').value;
+    const secVal = document.getElementById('be_sec').value;
+    const riVal = document.getElementById('be_ri').value;
+    const rjVal = document.getElementById('be_rj').value;
     for (const id of memberIds) {
       const m = model.members.find(x => x.id === id);
       if (!m) continue;
-      if (typeOn) m.member_type = typeVal;
-      if (secOn) m.section = secVal;
-      if (riOn) m.release_i = riVal;
-      if (rjOn) m.release_j = rjVal;
+      if (typeVal !== '__keep__') m.member_type = typeVal;
+      if (secVal !== '__keep__') m.section = secVal;
+      if (riVal !== '__keep__') m.release_i = riVal === '1';
+      if (rjVal !== '__keep__') m.release_j = rjVal === '1';
     }
     setStatus('已套用到 ' + memberIds.length + ' 根桿件');
     clearMultiSelection();
@@ -1642,26 +1655,44 @@ svg.addEventListener('pointerup', () => {
     const result = mode === 'rect'
       ? rectSelect(startWorld.x, startWorld.y, curWorld.x, curWorld.y)
       : lineSelect(startWorld, curWorld);
+    const wasPendingSupport = pendingBatchAction === 'support';
+    const wasPendingLoad = pendingBatchAction === 'load';
+    pendingBatchAction = null;
     if (result.nodeIds.length === 0 && result.memberIds.length === 0) {
       setStatus('這個範圍內沒有選到任何東西');
-      pendingBatchAction = null;
       render();
+      return;
+    }
+    // 剛好只選到一個節點或一個桿件的話, 直接跳回原本熟悉的單一物件
+    // 完整編輯畫面(座標、斷面E/I/A、桿件上的載重清單都在), 不用停留
+    // 在只能改支承/外力/類型的陽春批次面板 —— 批次選取工具方便的地方
+    // 是「用框/線比用手指精準點擊容易命中」, 選到單一物件時應該給
+    // 完整功能, 不該反而功能變少。
+    if (result.nodeIds.length === 1 && result.memberIds.length === 0) {
+      multiSelection = null;
+      selectNode(result.nodeIds[0]);
+      render();
+      return;
+    }
+    if (result.memberIds.length === 1 && result.nodeIds.length === 0) {
+      multiSelection = null;
+      selectMember(result.memberIds[0]);
       return;
     }
     selected = null;
     multiSelection = result;
     // 如果是從「支承(選取套用)」/「施加外力(選取套用)」快捷按鈕
-    // 觸發的選取, 選完直接跳對應的表單, 跳過中間那層「批次選取」
-    // 摘要畫面, 省一次點擊。
-    if (pendingBatchAction === 'support' && result.nodeIds.length > 0) {
+    // 觸發的選取(選到2個以上東西時才會走到這裡, 剛好1個的話上面已經
+    // 提早跳去完整面板了), 選完直接跳對應的表單, 跳過中間那層
+    // 「批次選取」摘要畫面, 省一次點擊。
+    if (wasPendingSupport && result.nodeIds.length > 0) {
       renderBatchSupportForm(result.nodeIds);
-    } else if (pendingBatchAction === 'load') {
+    } else if (wasPendingLoad) {
       if (result.nodeIds.length > 0) renderBatchNodeLoadForm(result.nodeIds);
       else renderBatchDistLoadForm(result.memberIds);
     } else {
       renderMultiSelectPanel();
     }
-    pendingBatchAction = null;
     render();
     return;
   }
@@ -1759,7 +1790,46 @@ document.getElementById('btnBatchLoad').addEventListener('click', () => {
   setStatus('先框選要施加外力的節點/桿件, 框完會直接跳出設定表單(選到桿件的話用「直線選取」也可以)');
 });
 
+// 每次要送模型給後端算之前, 一律先清掉所有「指向不存在的節點/桿件」
+// 的殘留參照(桿件端點節點不見了、支承/集中力掛在不存在的節點上、
+// 均佈載重/桿件集中力掛在不存在的桿件上) —— 不管殘留是怎麼造成的
+// (分割/刪除某個路徑沒堵到、手動改過JSON匯入、以後新功能忘記清),
+// 送出前一律清乾淨, 從根本避免後端丟出「找不到ID」這種錯誤。
+function sanitizeModel() {
+  const nodeIds = new Set(model.nodes.map(n => n.id));
+  const removed = [];
+
+  const beforeMem = model.members.length;
+  model.members = model.members.filter(m => nodeIds.has(m.node_i) && nodeIds.has(m.node_j));
+  if (model.members.length !== beforeMem) removed.push('桿件(端點節點已不存在)');
+
+  const memberIds = new Set(model.members.map(m => m.id));
+
+  const beforeSup = model.supports.length;
+  model.supports = model.supports.filter(s => nodeIds.has(s.node));
+  if (model.supports.length !== beforeSup) removed.push('支承');
+
+  const beforePl = model.point_loads.length;
+  model.point_loads = model.point_loads.filter(p => nodeIds.has(p.node));
+  if (model.point_loads.length !== beforePl) removed.push('節點集中力');
+
+  const beforeDl = model.distributed_loads.length;
+  model.distributed_loads = model.distributed_loads.filter(d => memberIds.has(d.member));
+  if (model.distributed_loads.length !== beforeDl) removed.push('均佈載重');
+
+  const beforeMp = model.member_point_loads.length;
+  model.member_point_loads = model.member_point_loads.filter(p => memberIds.has(p.member));
+  if (model.member_point_loads.length !== beforeMp) removed.push('桿件集中力/彎矩');
+
+  if (removed.length) {
+    render();
+    setStatus('偵測到殘留參照, 已自動清除: ' + removed.join('、'));
+  }
+  return removed.length > 0;
+}
+
 document.getElementById('btnSolve').addEventListener('click', async () => {
+  sanitizeModel();
   setStatus('求解中...');
   try {
     const res = await fetch('/solve', {
@@ -1923,6 +1993,7 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
 });
 
 document.getElementById('btnExportPdf').addEventListener('click', async () => {
+  sanitizeModel();
   setStatus('產生 PDF 中...');
   try {
     const res = await fetch('/export/pdf', {
