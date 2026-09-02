@@ -22,6 +22,7 @@ from frame2d.postprocess import member_internal_forces
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import build_pdf_report
+from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
 # saved_models/ 放在 repo 根目錄, 跟 webapi/(FastAPI版)共用同一份存檔,
@@ -155,6 +156,16 @@ class Handler(BaseHTTPRequestHandler):
                 pdf_bytes = build_pdf_report(f)
                 self._send_bytes(pdf_bytes, "application/pdf",
                                   extra_headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/query_point":
+            try:
+                payload = self._read_json_body()
+                f = _build_frame(payload)
+                result = solve(f)
+                out = query_point(f, result, payload["member"], payload["mode"], payload["value"])
+                self._send_json(out)
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return

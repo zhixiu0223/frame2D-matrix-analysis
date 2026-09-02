@@ -85,6 +85,17 @@
     <button id="btnExportMd">⬇ 匯出Markdown</button>
     <button id="btnExportPdf">⬇ 匯出PDF</button>
   </div>
+
+  <div id="toolbar" style="margin-top:0.4rem;">
+    <select id="queryMember" style="width:8rem;"></select>
+    <select id="queryMode" style="width:8rem;">
+      <option value="relative">相對位置 0~1</option>
+      <option value="absolute">絕對距離(m)</option>
+    </select>
+    <input id="queryValue" type="number" step="any" value="0.5" style="width:6rem;">
+    <button id="btnQueryPoint" style="background:#0891b2;color:white;">🔎 查詢該點</button>
+    <span id="queryResult" style="font-size:0.85rem;"></span>
+  </div>
   <div id="status"></div>
 
   <div id="canvasWrap">
@@ -143,6 +154,7 @@ let model = {
 
 let lastResult = null;
 let selected = null;        // {type:'node'|'member', id}
+let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面上標記)
 let viewMode = 'structure';
 let addMode = null;         // null | 'node' | 'member'
 let memberFirstNode = null;
@@ -277,7 +289,57 @@ function render() {
     drawMembers(t, true);
     if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
   }
+  drawQueryMarker(t);
+  refreshQueryMemberOptions();
 }
+
+function drawQueryMarker(t) {
+  if (!queryMarker) return;
+  const [x, y] = toScreen(queryMarker.world_x, queryMarker.world_y, t);
+  put(el('circle', {cx: x, cy: y, r: 6, fill: 'none', stroke: '#0891b2', 'stroke-width': 2.5}));
+  put(el('line', {x1: x - 9, y1: y, x2: x + 9, y2: y, stroke: '#0891b2', 'stroke-width': 1.5}));
+  put(el('line', {x1: x, y1: y - 9, x2: x, y2: y + 9, stroke: '#0891b2', 'stroke-width': 1.5}));
+  const lines = [
+    `N=${(queryMarker.N/1000).toFixed(2)}kN V=${(queryMarker.V/1000).toFixed(2)}kN`,
+    `M=${(queryMarker.M/1000).toFixed(2)}kN·m Δ=${(queryMarker.disp*1000).toFixed(2)}mm`,
+  ];
+  lines.forEach((s, i) => {
+    const lbl = el('text', {x: x + 11, y: y - 6 + i * 12, class: 'value-label', fill: '#0891b2'});
+    lbl.textContent = s;
+    put(lbl);
+  });
+}
+
+function refreshQueryMemberOptions() {
+  const sel = document.getElementById('queryMember');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const m of model.members) {
+    const opt = document.createElement('option');
+    opt.value = m.id; opt.textContent = 'M' + m.id + ' (N' + m.node_i + '→N' + m.node_j + ')';
+    sel.appendChild(opt);
+  }
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+document.getElementById('btnQueryPoint').addEventListener('click', async () => {
+  const memberId = parseInt(document.getElementById('queryMember').value, 10);
+  const mode = document.getElementById('queryMode').value;
+  const value = parseFloat(document.getElementById('queryValue').value);
+  if (isNaN(memberId)) { setStatus('請先建立至少一根桿件'); return; }
+  const resultEl = document.getElementById('queryResult');
+  resultEl.textContent = '查詢中...';
+  try {
+    const res = await fetch('/query_point', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...model, member: memberId, mode, value})
+    });
+    if (!res.ok) { resultEl.textContent = '查詢失敗: ' + await res.text(); queryMarker = null; render(); return; }
+    queryMarker = await res.json();
+    resultEl.textContent = `x=${queryMarker.x.toFixed(3)}m(L=${queryMarker.L.toFixed(3)}m): N=${(queryMarker.N/1000).toFixed(3)}kN V=${(queryMarker.V/1000).toFixed(3)}kN M=${(queryMarker.M/1000).toFixed(3)}kN·m Δ=${(queryMarker.disp*1000).toFixed(2)}mm`;
+    render();
+  } catch (e) { resultEl.textContent = '查詢失敗: ' + e.message; }
+});
 
 function drawNeedSolveMsg() {
   const m = el('text', {x: 10, y: 22, 'font-size': 13, fill: '#dc2626'});

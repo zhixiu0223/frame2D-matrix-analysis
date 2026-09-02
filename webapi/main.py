@@ -19,6 +19,7 @@ from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import build_pdf_report
+from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
 
@@ -153,3 +154,21 @@ def export_pdf(payload: FrameIn):
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'},
     )
+
+
+# ---------------- 查詢桿件內部任意位置的內力/位移 ----------------
+
+class QueryPointIn(FrameIn):
+    member: int
+    mode: str  # 'relative' | 'absolute'
+    value: float
+
+
+@app.post("/query_point")
+def query_point_endpoint(payload: QueryPointIn):
+    f = _build_frame(payload)
+    result = solve(f)
+    try:
+        return query_point(f, result, payload.member, payload.mode, payload.value)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
