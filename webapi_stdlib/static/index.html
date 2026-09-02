@@ -64,6 +64,15 @@
   .grid-line { stroke: #cbd5e1; stroke-width: 1; }
   #status { font-size: 0.8rem; margin: 0.25rem 0 0; min-height: 1.1em; color: #0891b2; }
   fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
+  .propSection { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.6rem; overflow: hidden; }
+  .propSection summary { padding: 0.6rem 0.7rem; font-size: 0.88rem; font-weight: 600; cursor: pointer;
+                          background: #f8fafc; list-style: none; display: flex; align-items: center; gap: 0.4rem; }
+  .propSection summary::-webkit-details-marker { display: none; }
+  .propSection summary::before { content: '▸'; font-size: 0.75rem; color: #6b7280; transition: transform 0.15s; }
+  .propSection[open] summary::before { transform: rotate(90deg); }
+  .propSection[open] summary { border-bottom: 1px solid #eee; }
+  .propSection .propSectionBody { padding: 0.7rem; }
+  .sectionCount { font-weight: 400; color: #6b7280; font-size: 0.8rem; }
   legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
   label { display: block; font-size: 0.8rem; margin: 0.3rem 0 0.1rem; }
   input, select { width: 100%; padding: 0.3rem; font-size: 0.85rem; }
@@ -1179,97 +1188,138 @@ function renderPropPanel() {
   } else {
     const m = model.members.find(x => x.id === selected.id);
     const sec = model.sections.find(s => s.name === m.section);
+    const dlCount = model.distributed_loads.filter(d => d.member === m.id).length;
+    const mpCount = model.member_point_loads.filter(p => p.member === m.id).length;
     panel.innerHTML = `
-      <fieldset><legend>桿件 M${m.id}(N${m.node_i}→N${m.node_j})</legend>
-        <label>元素類型</label>
-        <select id="p_type">
-          <option value="frame" ${m.member_type==='frame'?'selected':''}>frame(樑柱)</option>
-          <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架)</option>
-          <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線)</option>
-        </select>
-        <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放(N${m.node_i}端,畫空心圓)</label>
-        <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放(N${m.node_j}端,畫空心圓)</label>
-        <label>斷面 "${sec.name}"(改這裡會影響所有共用此斷面的桿件)</label>
-        <div class="row3">
-          <div><label>E (Pa)</label><input id="p_E" type="number" step="any" value="${sec.E}"></div>
-          <div><label>I (m⁴)</label><input id="p_I" type="number" step="any" value="${sec.I}"></div>
-          <div><label>A (m²)</label><input id="p_A" type="number" step="any" value="${sec.A}"></div>
-        </div>
-        <div class="row2">
-          <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
-          <button id="p_cancel">取消</button>
-        </div>
-        <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
-      </fieldset>
-      <fieldset><legend>內部鉸接(桿件中間)</legend>
-        <p class="hint">力學上跟你自己拆桿件+兩端 release 完全等價(彎矩在該點不連續,剪力/軸力照樣傳遞),這裡是自動幫你拆——按下去會把 M${m.id} 從輸入的位置切成兩根桿件,並在切點互相釋放彎矩,等同 SW FEA 的 Add Internal Pin/Hinge。<br><b>注意</b>:如果切開後某一段沒有其他支承或桿件幫忙抗轉(例如懸臂的自由端),那一段會變成可以繞鉸接自由轉動的機構,Solve 會回報「勁度矩陣奇異」——這是真實的力學不穩定,不是這個功能的 bug,跟你截圖那種兩端都還接著柱子的梁不會有這個問題。</p>
-        <label>位置量測方式</label>
-        <select id="p_pin_mode">
-          <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
-          <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
-        </select>
-        <label>數值</label>
-        <input id="p_pin_value" type="number" step="any" value="0.5">
-        <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
-      </fieldset>
-      <fieldset><legend>在桿件中間插入節點(保持剛接, 用來改幾何形狀)</legend>
-        <p class="hint">跟上面的內部鉸接不一樣: 這裡插入的節點還是剛接, 力學行為完全不變, 純粹是幫你把一根直桿拆成好幾段, 之後可以把新節點拖到別的位置——例如一根樑中間插2個節點、把中間段拉高, 就變成門型鋼架; 之後再對頂梁中間插1個節點往上拉, 就變成斜屋頂。</p>
-        <label>插入一個點: 位置量測方式</label>
-        <select id="p_split_mode">
-          <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
-          <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
-        </select>
-        <div class="row2">
-          <input id="p_split_value" type="number" step="any" value="0.5">
-          <button id="p_split_add" style="background:#0891b2;color:white;">➕ 插入這個點</button>
-        </div>
-        <label>或者一次等分</label>
-        <div class="row2">
-          <select id="p_split_n">
-            <option value="2">分成 2 段(插入1個點)</option>
-            <option value="3">分成 3 等份(插入2個點)</option>
-            <option value="4">分成 4 等份(插入3個點)</option>
-            <option value="5">分成 5 等份(插入4個點)</option>
+      <h3 style="margin:0 0 0.5rem;font-size:1rem;">桿件 M${m.id}(N${m.node_i}→N${m.node_j})</h3>
+
+      <details class="propSection" open>
+        <summary>基本設定</summary>
+        <div class="propSectionBody">
+          <label>元素類型</label>
+          <select id="p_type">
+            <option value="frame" ${m.member_type==='frame'?'selected':''}>frame(樑柱)</option>
+            <option value="truss" ${m.member_type==='truss'?'selected':''}>truss(桁架)</option>
+            <option value="cable" ${m.member_type==='cable'?'selected':''}>cable(纜線)</option>
           </select>
-          <button id="p_split_equal" style="background:#0891b2;color:white;">➕ 等分插入</button>
+          <label><input id="p_ri" type="checkbox" style="width:auto;" ${m.release_i?'checked':''}> i端鉸接釋放(N${m.node_i}端,畫空心圓)</label>
+          <label><input id="p_rj" type="checkbox" style="width:auto;" ${m.release_j?'checked':''}> j端鉸接釋放(N${m.node_j}端,畫空心圓)</label>
+
+          <label>這根桿件目前用的斷面: "${sec.name}"</label>
+          <div class="row3">
+            <div><label>E (Pa)</label><input id="p_E" type="number" step="any" value="${sec.E}"></div>
+            <div><label>I (m⁴)</label><input id="p_I" type="number" step="any" value="${sec.I}"></div>
+            <div><label>A (m²)</label><input id="p_A" type="number" step="any" value="${sec.A}"></div>
+          </div>
+          <p class="hint">改上面這三個值會影響所有共用 "${sec.name}" 斷面的桿件。如果梁柱要用不同斷面, 用下面的功能切換或新增。</p>
+
+          <label>切換成別的既有斷面</label>
+          <div class="row2">
+            <select id="p_sec_pick">${model.sections.map(s => `<option value="${s.name}" ${s.name===m.section?'selected':''}>${s.name}</option>`).join('')}</select>
+            <button id="p_sec_switch">套用這個斷面</button>
+          </div>
+
+          <label>新增一個斷面(例如梁跟柱分開)</label>
+          <input id="p_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
+          <div class="row3">
+            <input id="p_sec_new_E" type="number" step="any" placeholder="E(Pa)">
+            <input id="p_sec_new_I" type="number" step="any" placeholder="I(m⁴)">
+            <input id="p_sec_new_A" type="number" step="any" placeholder="A(m²)">
+          </div>
+          <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
+
+          <div class="row2" style="margin-top:0.6rem;">
+            <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+            <button id="p_cancel">取消</button>
+          </div>
+          <button id="p_delete" style="width:100%;margin-top:0.4rem;background:#dc2626;color:white;">刪除桿件</button>
         </div>
-      </fieldset>
-      <fieldset><legend>桿件均佈/梯形載重(可設區段)</legend>
-        ${renderDistLoadList(m.id)}
-        <label>範圍(留空 = 全長)</label>
-        <div class="row2">
-          <input id="dl_x0" type="number" step="any" placeholder="起點x(m)">
-          <input id="dl_x1" type="number" step="any" placeholder="終點x(m)">
+      </details>
+
+      <details class="propSection">
+        <summary>內部鉸接(桿件中間)</summary>
+        <div class="propSectionBody">
+          <p class="hint">力學上跟你自己拆桿件+兩端 release 完全等價(彎矩在該點不連續,剪力/軸力照樣傳遞),這裡是自動幫你拆——按下去會把 M${m.id} 從輸入的位置切成兩根桿件,並在切點互相釋放彎矩,等同 SW FEA 的 Add Internal Pin/Hinge。<br><b>注意</b>:如果切開後某一段沒有其他支承或桿件幫忙抗轉(例如懸臂的自由端),那一段會變成可以繞鉸接自由轉動的機構,Solve 會回報「勁度矩陣奇異」——這是真實的力學不穩定,不是這個功能的 bug,跟兩端都還接著柱子的梁不會有這個問題。</p>
+          <label>位置量測方式</label>
+          <select id="p_pin_mode">
+            <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
+            <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
+          </select>
+          <label>數值</label>
+          <input id="p_pin_value" type="number" step="any" value="0.5">
+          <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
         </div>
-        <label>強度(N/m): w1(起點) / w2(終點, 留空=均佈)</label>
-        <div class="row2">
-          <input id="dl_w0" type="number" step="any" value="0">
-          <input id="dl_w1" type="number" step="any" placeholder="留空同w1">
+      </details>
+
+      <details class="propSection">
+        <summary>在桿件中間插入節點(保持剛接)</summary>
+        <div class="propSectionBody">
+          <p class="hint">跟上面的內部鉸接不一樣: 這裡插入的節點還是剛接, 力學行為完全不變, 純粹是幫你把一根直桿拆成好幾段, 之後可以把新節點拖到別的位置——例如一根樑中間插2個節點、把中間段拉高, 就變成門型鋼架; 之後再對頂梁中間插1個節點往上拉, 就變成斜屋頂。</p>
+          <label>插入一個點: 位置量測方式</label>
+          <select id="p_split_mode">
+            <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
+            <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
+          </select>
+          <div class="row2">
+            <input id="p_split_value" type="number" step="any" value="0.5">
+            <button id="p_split_add" style="background:#0891b2;color:white;">➕ 插入這個點</button>
+          </div>
+          <label>或者一次等分</label>
+          <div class="row2">
+            <select id="p_split_n">
+              <option value="2">分成 2 段(插入1個點)</option>
+              <option value="3">分成 3 等份(插入2個點)</option>
+              <option value="4">分成 4 等份(插入3個點)</option>
+              <option value="5">分成 5 等份(插入4個點)</option>
+            </select>
+            <button id="p_split_equal" style="background:#0891b2;color:white;">➕ 等分插入</button>
+          </div>
         </div>
-        <label>方向</label>
-        <select id="dl_dir">
-          <option value="vertical">整體垂直(w負值=向下,正值=向上,跟集中力fy慣例一致)</option>
-          <option value="local">局部y向(垂直於桿件本身)</option>
-        </select>
-        <button id="dl_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增均佈載重</button>
-      </fieldset>
-      <fieldset><legend>桿件集中力/集中彎矩(桿件中間任意位置)</legend>
-        ${renderMemberPointLoadList(m.id)}
-        <label>位置量測方式</label>
-        <select id="mp_mode">
-          <option value="relative">相對位置(0~1)</option>
-          <option value="absolute">絕對距離(m)</option>
-        </select>
-        <label>數值</label>
-        <input id="mp_value" type="number" step="any" value="0.5">
-        <label>fx / fy (N) / 集中彎矩 m (N·m)</label>
-        <div class="row3">
-          <input id="mp_fx" type="number" step="any" value="0">
-          <input id="mp_fy" type="number" step="any" value="0">
-          <input id="mp_m" type="number" step="any" value="0">
+      </details>
+
+      <details class="propSection">
+        <summary>桿件均佈/梯形載重 <span class="sectionCount">(${dlCount} 筆)</span></summary>
+        <div class="propSectionBody">
+          ${renderDistLoadList(m.id)}
+          <label>範圍(留空 = 全長)</label>
+          <div class="row2">
+            <input id="dl_x0" type="number" step="any" placeholder="起點x(m)">
+            <input id="dl_x1" type="number" step="any" placeholder="終點x(m)">
+          </div>
+          <label>強度(N/m): w1(起點) / w2(終點, 留空=均佈)</label>
+          <div class="row2">
+            <input id="dl_w0" type="number" step="any" value="0">
+            <input id="dl_w1" type="number" step="any" placeholder="留空同w1">
+          </div>
+          <label>方向</label>
+          <select id="dl_dir">
+            <option value="vertical">整體垂直(w負值=向下,正值=向上,跟集中力fy慣例一致)</option>
+            <option value="local">局部y向(垂直於桿件本身)</option>
+          </select>
+          <button id="dl_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增均佈載重</button>
         </div>
-        <button id="mp_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增集中力/彎矩</button>
-      </fieldset>`;
+      </details>
+
+      <details class="propSection">
+        <summary>桿件集中力/集中彎矩 <span class="sectionCount">(${mpCount} 筆)</span></summary>
+        <div class="propSectionBody">
+          ${renderMemberPointLoadList(m.id)}
+          <label>位置量測方式</label>
+          <select id="mp_mode">
+            <option value="relative">相對位置(0~1)</option>
+            <option value="absolute">絕對距離(m)</option>
+          </select>
+          <label>數值</label>
+          <input id="mp_value" type="number" step="any" value="0.5">
+          <label>fx / fy (N) / 集中彎矩 m (N·m)</label>
+          <div class="row3">
+            <input id="mp_fx" type="number" step="any" value="0">
+            <input id="mp_fy" type="number" step="any" value="0">
+            <input id="mp_m" type="number" step="any" value="0">
+          </div>
+          <button id="mp_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增集中力/彎矩</button>
+        </div>
+      </details>`;
     document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
       m.member_type = document.getElementById('p_type').value;
@@ -1278,6 +1328,25 @@ function renderPropPanel() {
       sec.E = parseFloat(document.getElementById('p_E').value);
       sec.I = parseFloat(document.getElementById('p_I').value);
       sec.A = parseFloat(document.getElementById('p_A').value);
+      render();
+    };
+    document.getElementById('p_sec_switch').onclick = () => {
+      m.section = document.getElementById('p_sec_pick').value;
+      setStatus('M' + m.id + ' 已切換成斷面 "' + m.section + '"');
+      renderPropPanel();
+      render();
+    };
+    document.getElementById('p_sec_new_add').onclick = () => {
+      const name = document.getElementById('p_sec_new_name').value.trim();
+      if (!name) { setStatus('請輸入新斷面名稱'); return; }
+      if (model.sections.some(s => s.name === name)) { setStatus('斷面名稱 "' + name + '" 已經存在, 換一個名字'); return; }
+      const E = parseFloat(document.getElementById('p_sec_new_E').value) || sec.E;
+      const I = parseFloat(document.getElementById('p_sec_new_I').value) || sec.I;
+      const A = parseFloat(document.getElementById('p_sec_new_A').value) || sec.A;
+      model.sections.push({name, E, I, A});
+      m.section = name;
+      setStatus('已新增斷面 "' + name + '" 並套用到 M' + m.id);
+      renderPropPanel();
       render();
     };
     document.getElementById('p_delete').onclick = () => {
