@@ -63,10 +63,27 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     return f
 
 
+def _build_and_solve(payload: FrameIn):
+    """_build_frame()+solve() 的共用包裝, 統一處理「模型內有殘留參照」
+    這類錯誤(例如分割/刪除桿件後, 還留著指向舊桿件編號的均佈載重),
+    這種情況下 frame2d 底層會丟出 KeyError(9) 這種只印一個數字的
+    錯誤, 前端顯示出來完全看不懂在講什麼, 這裡統一轉成看得懂的訊息。"""
+    f = _build_frame(payload)
+    try:
+        result = solve(f)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                   f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                   f"還留著指向舊桿件編號), 請檢查並移除",
+        )
+    return f, result
+
+
 @app.post("/solve")
 def solve_frame(payload: FrameIn):
-    f = _build_frame(payload)
-    result = solve(f)
+    f, result = _build_and_solve(payload)
 
     node_out = []
     for n in payload.nodes:
@@ -148,7 +165,15 @@ def delete_model(name: str):
 @app.post("/export/pdf")
 def export_pdf(payload: FrameIn):
     f = _build_frame(payload)
-    pdf_bytes = build_pdf_report(f)
+    try:
+        pdf_bytes = build_pdf_report(f)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                   f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                   f"還留著指向舊桿件編號), 請檢查並移除",
+        )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -166,8 +191,7 @@ class QueryPointIn(FrameIn):
 
 @app.post("/query_point")
 def query_point_endpoint(payload: QueryPointIn):
-    f = _build_frame(payload)
-    result = solve(f)
+    f, result = _build_and_solve(payload)
     try:
         return query_point(f, result, payload.member, payload.mode, payload.value)
     except (KeyError, ValueError) as e:

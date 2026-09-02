@@ -1392,6 +1392,22 @@ function memberPointLoadFxFy(p) {
 // 讓一根直樑逐漸「折」成門型鋼架、斜屋頂之類的幾何形狀。
 // positions: 0~1之間的相對位置陣列(由小到大), 一次可以插入多個點,
 // 例如 [0.5] 分兩段, [1/3, 2/3] 分三等份。
+// 分割桿件時, 如果原桿件上掛著均佈載重/桿件集中力, 分割後無法自動
+// 判斷該對應到哪個新桿件(尤其局部區段+多個新桿件的情況), 之前只有
+// 警告、沒有真的清掉, 殘留參照留在model裡, 之後Solve送到後端會找
+// 不到這個桿件編號, 直接丟出一個很難懂的KeyError(顯示成
+// {"error": "9"} 這種樣子)。改成直接清掉, 回傳有沒有清過東西,
+// 呼叫端決定要不要另外提示使用者。
+function removeStaleMemberLoads(memberId) {
+  const hadLoads = model.distributed_loads.some(d => d.member === memberId) ||
+                   model.member_point_loads.some(p => p.member === memberId);
+  if (hadLoads) {
+    model.distributed_loads = model.distributed_loads.filter(d => d.member !== memberId);
+    model.member_point_loads = model.member_point_loads.filter(p => p.member !== memberId);
+  }
+  return hadLoads;
+}
+
 function splitMemberPlain(m, positions) {
   const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
   const dx = nj.x - ni.x, dy = nj.y - ni.y;
@@ -1401,11 +1417,7 @@ function splitMemberPlain(m, positions) {
     setStatus('分割位置必須嚴格在桿件內部(不能是兩端點),請確認數值');
     return;
   }
-  const hasExtraLoads = model.distributed_loads.some(d => d.member === m.id) ||
-                        model.member_point_loads.some(p => p.member === m.id);
-  if (hasExtraLoads) {
-    setStatus('注意: M' + m.id + ' 上有分佈載重/桿件中點載重, 分割後需要手動改 JSON 把它們對應到正確的新桿件, 這裡不會自動搬移');
-  }
+  const hadLoads = removeStaleMemberLoads(m.id);
   const newNodeIds = [];
   let nextNodeId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
   for (const t of sorted) {
@@ -1429,7 +1441,9 @@ function splitMemberPlain(m, positions) {
     nextMemberId++;
   }
   model.members = model.members.filter(x => x.id !== m.id);
-  if (!hasExtraLoads) {
+  if (hadLoads) {
+    setStatus('注意: M' + m.id + ' 原本的均佈載重/桿件集中力已經被移除(分割後無法自動判斷該對應到哪個新桿件), 請在新桿件上重新設定');
+  } else {
     setStatus('已插入 ' + newNodeIds.length + ' 個節點(N' + newNodeIds.join(',N') + '), M' + m.id + ' 分割成 M' + newMemberIds.join('/M'));
   }
   selected = {type: 'member', id: newMemberIds[0]};
@@ -1446,11 +1460,7 @@ function splitMemberAtInternalPin(m, mode, value) {
     setStatus('內部鉸接位置必須嚴格在桿件內部(不能是兩端點),請確認數值');
     return;
   }
-  const hasExtraLoads = model.distributed_loads.some(d => d.member === m.id) ||
-                        model.member_point_loads.some(p => p.member === m.id);
-  if (hasExtraLoads) {
-    setStatus('注意: M' + m.id + ' 上有分佈載重/桿件中點載重, 分割後需要手動改 JSON 把它們對應到正確的新桿件, 這裡不會自動搬移');
-  }
+  const hadLoads = removeStaleMemberLoads(m.id);
   const t = a / L;
   const px = ni.x + dx * t, py = ni.y + dy * t;
   const newNodeId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
@@ -1462,7 +1472,11 @@ function splitMemberAtInternalPin(m, mode, value) {
   model.members.push({id: idB, node_i: newNodeId, node_j: m.node_j, section: m.section,
                        member_type: m.member_type, release_i: true, release_j: m.release_j});
   model.members = model.members.filter(x => x.id !== m.id);
-  if (!hasExtraLoads) setStatus('已在 N' + newNodeId + ' 新增內部鉸接, M' + m.id + ' 分割成 M' + idA + '/M' + idB);
+  if (hadLoads) {
+    setStatus('注意: M' + m.id + ' 原本的均佈載重/桿件集中力已經被移除(分割後無法自動判斷該對應到哪個新桿件), 請在新桿件上重新設定');
+  } else {
+    setStatus('已在 N' + newNodeId + ' 新增內部鉸接, M' + m.id + ' 分割成 M' + idA + '/M' + idB);
+  }
   selected = {type: 'member', id: idA};
   renderPropPanel();
   render();
