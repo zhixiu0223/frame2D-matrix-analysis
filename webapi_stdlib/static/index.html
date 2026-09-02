@@ -324,6 +324,15 @@ function putOverlay(e) { overlayG.appendChild(e); return e; }
 // ---------- 縮放/平移 ----------
 function clampK(k) { return Math.min(15, Math.max(0.3, k)); }
 function applyCameraTransform() {
+  // 保險機制: 不管是什麼原因(目前懷疑是雙指觸控在某些邊界情況下,
+  // 例如手機誤觸多出一個幽靈觸控點, 讓縮放倍率算出NaN), 只要
+  // camera的x/y/k裡有任何一個不是有效數字, 這裡直接重設成初始值,
+  // 不會再讓「一旦算壞就永遠卡住, 只能按原大小才能救回來」的情況
+  // 發生 —— 下一次套用縮放/平移時就會自動修正, 不用等使用者自己
+  // 發現卡住才去按重置。
+  if (!Number.isFinite(camera.x) || !Number.isFinite(camera.y) || !Number.isFinite(camera.k) || camera.k <= 0) {
+    camera = {x: 0, y: 0, k: 1};
+  }
   cameraG.setAttribute('transform', `translate(${camera.x},${camera.y}) scale(${camera.k})`);
 }
 // 縮放/平移時格線要跟著重算(drawGrid現在是按「目前看得到的範圍」畫的),
@@ -377,11 +386,15 @@ function pruneStalePointers() {
 svg.addEventListener('pointerdown', (e) => {
   pruneStalePointers();
   activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
-  if (activePointers.size === 2) {
+  // >=2 而不是嚴格===2: 避免手機誤觸多出一個「幽靈」第三觸控點時
+  // (這類情況真的會發生), 縮放邏輯整組失效——只取Map裡最先加入的
+  // 兩個點當作縮放基準, 多出來的點忽略掉, 不影響雙指縮放正常運作。
+  if (activePointers.size >= 2 && !pinchState) {
     dragNodeId = null; panState = null;
     const pts = [...activePointers.values()];
+    const dist0 = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
     pinchState = {
-      startDist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1,
+      startDist: Number.isFinite(dist0) && dist0 > 1e-6 ? dist0 : 1,
       startCam: {...camera},
       startMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
     };
@@ -390,7 +403,7 @@ svg.addEventListener('pointerdown', (e) => {
 svg.addEventListener('pointermove', (e) => {
   if (!activePointers.has(e.pointerId)) return;
   activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
-  if (activePointers.size === 2 && pinchState) {
+  if (activePointers.size >= 2 && pinchState) {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
     const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
@@ -399,11 +412,17 @@ svg.addEventListener('pointermove', (e) => {
       x: (pinchState.startMid.x - pinchState.startCam.x) / pinchState.startCam.k,
       y: (pinchState.startMid.y - pinchState.startCam.y) / pinchState.startCam.k,
     };
-    camera.k = newK;
-    camera.x = mid.x - canonicalAtStart.x * newK;
-    camera.y = mid.y - canonicalAtStart.y * newK;
-    applyCameraTransform();
-    scheduleRender();
+    const newX = mid.x - canonicalAtStart.x * newK;
+    const newY = mid.y - canonicalAtStart.y * newK;
+    // 再一層保險: 算出來的值不是有效數字就整個跳過這一幀, 不套用
+    // (寧可這一瞬間畫面沒反應, 也不要把camera狀態寫壞導致之後永遠卡住)。
+    if (Number.isFinite(newK) && Number.isFinite(newX) && Number.isFinite(newY)) {
+      camera.k = newK;
+      camera.x = newX;
+      camera.y = newY;
+      applyCameraTransform();
+      scheduleRender();
+    }
   }
 }, {capture: true});
 function releasePointer(e) {
