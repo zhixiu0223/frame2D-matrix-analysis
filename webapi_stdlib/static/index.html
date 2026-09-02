@@ -1199,6 +1199,28 @@ function renderPropPanel() {
         <input id="p_pin_value" type="number" step="any" value="0.5">
         <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
       </fieldset>
+      <fieldset><legend>在桿件中間插入節點(保持剛接, 用來改幾何形狀)</legend>
+        <p class="hint">跟上面的內部鉸接不一樣: 這裡插入的節點還是剛接, 力學行為完全不變, 純粹是幫你把一根直桿拆成好幾段, 之後可以把新節點拖到別的位置——例如一根樑中間插2個節點、把中間段拉高, 就變成門型鋼架; 之後再對頂梁中間插1個節點往上拉, 就變成斜屋頂。</p>
+        <label>插入一個點: 位置量測方式</label>
+        <select id="p_split_mode">
+          <option value="relative">相對位置(0~1,從 N${m.node_i} 起算)</option>
+          <option value="absolute">絕對距離(m,從 N${m.node_i} 起算)</option>
+        </select>
+        <div class="row2">
+          <input id="p_split_value" type="number" step="any" value="0.5">
+          <button id="p_split_add" style="background:#0891b2;color:white;">➕ 插入這個點</button>
+        </div>
+        <label>或者一次等分</label>
+        <div class="row2">
+          <select id="p_split_n">
+            <option value="2">分成 2 段(插入1個點)</option>
+            <option value="3">分成 3 等份(插入2個點)</option>
+            <option value="4">分成 4 等份(插入3個點)</option>
+            <option value="5">分成 5 等份(插入4個點)</option>
+          </select>
+          <button id="p_split_equal" style="background:#0891b2;color:white;">➕ 等分插入</button>
+        </div>
+      </fieldset>
       <fieldset><legend>桿件均佈/梯形載重(可設區段)</legend>
         ${renderDistLoadList(m.id)}
         <label>範圍(留空 = 全長)</label>
@@ -1255,6 +1277,20 @@ function renderPropPanel() {
       const mode = document.getElementById('p_pin_mode').value;
       const val = parseFloat(document.getElementById('p_pin_value').value);
       splitMemberAtInternalPin(m, mode, val);
+    };
+    document.getElementById('p_split_add').onclick = () => {
+      const mode = document.getElementById('p_split_mode').value;
+      const val = parseFloat(document.getElementById('p_split_value').value);
+      const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+      const L = Math.hypot(nj.x - ni.x, nj.y - ni.y);
+      const t = mode === 'relative' ? val : val / L;
+      splitMemberPlain(m, [t]);
+    };
+    document.getElementById('p_split_equal').onclick = () => {
+      const n = parseInt(document.getElementById('p_split_n').value, 10);
+      const positions = [];
+      for (let i = 1; i < n; i++) positions.push(i / n);
+      splitMemberPlain(m, positions);
     };
     document.getElementById('dl_add').onclick = () => {
       const x0raw = document.getElementById('dl_x0').value, x1raw = document.getElementById('dl_x1').value;
@@ -1351,6 +1387,56 @@ function memberPointLoadFxFy(p) {
 // 所以直接在該位置插入一個新節點, 把原桿件拆成兩根, 在新節點兩側
 // 互相釋放彎矩(release_j / release_i) —— 不用改 solver, 純粹是
 // 建模層的自動化, 等同使用者自己手動拆桿件 + 設定 release。
+// 純粹在桿件中間插入節點, 保持剛接(不加release, 跟內部鉸接不同):
+// 用來把一根直桿拆成好幾段, 之後可以把中間新節點拖到別的位置,
+// 讓一根直樑逐漸「折」成門型鋼架、斜屋頂之類的幾何形狀。
+// positions: 0~1之間的相對位置陣列(由小到大), 一次可以插入多個點,
+// 例如 [0.5] 分兩段, [1/3, 2/3] 分三等份。
+function splitMemberPlain(m, positions) {
+  const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+  const dx = nj.x - ni.x, dy = nj.y - ni.y;
+  const L = Math.hypot(dx, dy);
+  const sorted = [...positions].filter(t => t > 1e-6 && t < 1 - 1e-6).sort((a, b) => a - b);
+  if (sorted.length === 0) {
+    setStatus('分割位置必須嚴格在桿件內部(不能是兩端點),請確認數值');
+    return;
+  }
+  const hasExtraLoads = model.distributed_loads.some(d => d.member === m.id) ||
+                        model.member_point_loads.some(p => p.member === m.id);
+  if (hasExtraLoads) {
+    setStatus('注意: M' + m.id + ' 上有分佈載重/桿件中點載重, 分割後需要手動改 JSON 把它們對應到正確的新桿件, 這裡不會自動搬移');
+  }
+  const newNodeIds = [];
+  let nextNodeId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
+  for (const t of sorted) {
+    const px = ni.x + dx * t, py = ni.y + dy * t;
+    model.nodes.push({id: nextNodeId, x: Math.round(px * 100) / 100, y: Math.round(py * 100) / 100});
+    newNodeIds.push(nextNodeId);
+    nextNodeId++;
+  }
+  const chain = [m.node_i, ...newNodeIds, m.node_j];
+  let nextMemberId = Math.max(-1, ...model.members.map(mm => mm.id)) + 1;
+  const newMemberIds = [];
+  for (let i = 0; i < chain.length - 1; i++) {
+    const isFirst = i === 0, isLast = i === chain.length - 2;
+    model.members.push({
+      id: nextMemberId, node_i: chain[i], node_j: chain[i + 1], section: m.section,
+      member_type: m.member_type,
+      release_i: isFirst ? m.release_i : false,
+      release_j: isLast ? m.release_j : false,
+    });
+    newMemberIds.push(nextMemberId);
+    nextMemberId++;
+  }
+  model.members = model.members.filter(x => x.id !== m.id);
+  if (!hasExtraLoads) {
+    setStatus('已插入 ' + newNodeIds.length + ' 個節點(N' + newNodeIds.join(',N') + '), M' + m.id + ' 分割成 M' + newMemberIds.join('/M'));
+  }
+  selected = {type: 'member', id: newMemberIds[0]};
+  renderPropPanel();
+  render();
+}
+
 function splitMemberAtInternalPin(m, mode, value) {
   const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
   const dx = nj.x - ni.x, dy = nj.y - ni.y;
