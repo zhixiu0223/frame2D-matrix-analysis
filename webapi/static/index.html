@@ -166,6 +166,7 @@
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
         <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
+        <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
       </div>
     </div>
 
@@ -178,6 +179,8 @@
       <g id="overlay"></g>
     </svg>
   </div>
+
+  <pre id="debugLog" style="display:none;background:#111;color:#0f0;font-size:11px;padding:0.5rem;max-height:200px;overflow-y:auto;white-space:pre-wrap;margin:0.4rem 0;border-radius:6px;"></pre>
 
   <details>
     <summary>詳細數值(節點反力/位移、桿件端內力)</summary>
@@ -384,6 +387,22 @@ let pinchState = null;
 // 單指手勢被當成縮放處理、畫面卡住不能平移。這裡幫每個點加時間戳記,
 // 新的pointerdown進來時先清掉超過2秒沒更新的舊記錄, 從根本避免
 // 卡死狀態一直累積下去。
+// ---------- 觸控除錯面板(暫時性, 只讀事件狀態不改任何縮放邏輯) ----------
+// 手機上沒辦法方便看瀏覽器console, 所以直接把事件細節印在畫面上的
+// 一個小面板裡, 「檢視」選單打開開關才會顯示。用來確認: 第二根手指
+// 到底有沒有收到pointerdown、activePointers是不是真的變成2、
+// pinch的計算分支有沒有真的被執行。
+function debugLog(msg) {
+  const toggle = document.getElementById('debugToggle');
+  if (!toggle || !toggle.checked) return;
+  const el = document.getElementById('debugLog');
+  el.style.display = 'block';
+  const line = document.createElement('div');
+  line.textContent = msg;
+  el.appendChild(line);
+  while (el.childNodes.length > 40) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
 function pruneStalePointers() {
   const now = Date.now();
   for (const [id, p] of activePointers) {
@@ -393,6 +412,7 @@ function pruneStalePointers() {
 svg.addEventListener('pointerdown', (e) => {
   pruneStalePointers();
   activePointers.set(e.pointerId, {...clientToCameraSpace(e), t: Date.now()});
+  debugLog(`DOWN id=${e.pointerId} type=${e.pointerType} target=${e.target.tagName} active=${activePointers.size} keys=[${[...activePointers.keys()]}]`);
   // >=2 而不是嚴格===2: 避免手機誤觸多出一個「幽靈」第三觸控點時
   // (這類情況真的會發生), 縮放邏輯整組失效——只取Map裡最先加入的
   // 兩個點當作縮放基準, 多出來的點忽略掉, 不影響雙指縮放正常運作。
@@ -410,6 +430,7 @@ svg.addEventListener('pointerdown', (e) => {
       lastDist: Number.isFinite(dist0) && dist0 > 1e-3 ? dist0 : null,
       lastMid: {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2},
     };
+    debugLog(`  -> 建立pinchState, dist0=${dist0.toFixed(1)}, lastDist=${pinchState.lastDist}`);
   }
 }, {capture: true});
 svg.addEventListener('pointermove', (e) => {
@@ -419,15 +440,21 @@ svg.addEventListener('pointermove', (e) => {
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
     const mid = {x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2};
-    if (Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist) {
+    const willZoom = Number.isFinite(dist) && dist > 1e-3 && pinchState.lastDist;
+    debugLog(`MOVE id=${e.pointerId} active=${activePointers.size} dist=${dist.toFixed(1)} lastDist=${pinchState.lastDist ? pinchState.lastDist.toFixed(1) : pinchState.lastDist} willZoom=${willZoom} factor=${willZoom ? (dist/pinchState.lastDist).toFixed(3) : '-'}`);
+    if (willZoom) {
       zoomAt(mid, dist / pinchState.lastDist);
+      debugLog(`  -> zoomAt呼叫完成, camera.k=${camera.k.toFixed(3)}`);
     }
     pinchState.lastDist = Number.isFinite(dist) && dist > 1e-3 ? dist : pinchState.lastDist;
     pinchState.lastMid = mid;
     scheduleRender();
+  } else if (activePointers.size === 1) {
+    // 單指時不要每個pointermove都印, 太洗版, 只在偵錯需要時可以自己打開
   }
 }, {capture: true});
 function releasePointer(e) {
+  debugLog(`UP/CANCEL id=${e.pointerId} type=${e.type} beforeActive=${activePointers.size}`);
   activePointers.delete(e.pointerId);
   if (activePointers.size < 2) pinchState = null;
 }
