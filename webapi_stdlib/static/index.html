@@ -134,6 +134,7 @@
         <span class="sep"></span>
         <button id="btnBatchSupport">🔒 支承(選取套用)</button>
         <button id="btnBatchLoad">⬇ 施加外力(選取套用)</button>
+        <button id="btnSectionManager">📐 斷面管理</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="snapGrid" checked>格線鎖定</label>
         <label class="snapLabel"><input type="checkbox" id="snapNode" checked>節點鎖定</label>
@@ -1091,6 +1092,103 @@ function selectMember(id) { multiSelection = null; selected = {type: 'member', i
 function clearSelection() { selected = null; memberFirstNode = null; renderPropPanel(); render(); }
 function clearMultiSelection() { multiSelection = null; renderMultiSelectPanel(); render(); }
 
+// ---------- 斷面管理: 一次看到/編輯所有斷面, 不用透過某根桿件間接操作 ----------
+function renderSectionManager() {
+  const panel = document.getElementById('propPanel');
+  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A');
+  const rows = model.sections.map((s, i) => {
+    const useCount = model.members.filter(m => m.section === s.name).length;
+    return `
+      <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.6rem;margin-bottom:0.6rem;">
+        <div class="row2">
+          <input id="sm_name_${i}" type="text" value="${s.name}">
+          <span class="hint" style="align-self:center;margin:0;">${useCount} 根桿件在用</span>
+        </div>
+        <div class="row3">
+          <div><label>E(${eu})</label><input id="sm_E_${i}" type="number" step="any" value="${fromSI('E', s.E)}"></div>
+          <div><label>I(${iu})</label><input id="sm_I_${i}" type="number" step="any" value="${fromSI('I', s.I)}"></div>
+          <div><label>A(${au})</label><input id="sm_A_${i}" type="number" step="any" value="${fromSI('A', s.A)}"></div>
+        </div>
+        <div class="row2" style="margin-top:0.3rem;">
+          <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
+          <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
+        </div>
+      </div>`;
+  }).join('');
+  panel.innerHTML = `<fieldset><legend>斷面管理(${model.sections.length} 個斷面)</legend>
+    <p class="hint">改名字或E/I/A之後要按「套用這個斷面的修改」才會生效; 改名字會自動把所有正在用這個斷面的桿件一起更新, 不用一根一根改。刪除只能刪「目前沒有任何桿件在用」的斷面, 避免刪掉正在用的斷面讓模型壞掉。</p>
+    ${rows}
+    <hr>
+    <label>新增斷面</label>
+    <input id="sm_new_name" type="text" placeholder="新斷面名稱">
+    <div class="row3">
+      <input id="sm_new_E" type="number" step="any" placeholder="E(${eu})">
+      <input id="sm_new_I" type="number" step="any" placeholder="I(${iu})">
+      <input id="sm_new_A" type="number" step="any" placeholder="A(${au})">
+    </div>
+    <button id="sm_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面</button>
+    <button id="sm_back" style="width:100%;margin-top:0.6rem;">返回</button>
+  </fieldset>`;
+
+  panel.querySelectorAll('.sm_apply').forEach(btn => {
+    btn.onclick = () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      const s = model.sections[i];
+      const newName = document.getElementById('sm_name_' + i).value.trim();
+      if (!newName) { setStatus('斷面名稱不能空白'); return; }
+      if (newName !== s.name && model.sections.some(x => x.name === newName)) {
+        setStatus('斷面名稱 "' + newName + '" 已經存在, 換一個名字');
+        return;
+      }
+      const oldName = s.name;
+      s.name = newName;
+      s.E = toSI('E', parseFloat(document.getElementById('sm_E_' + i).value));
+      s.I = toSI('I', parseFloat(document.getElementById('sm_I_' + i).value));
+      s.A = toSI('A', parseFloat(document.getElementById('sm_A_' + i).value));
+      if (oldName !== newName) {
+        for (const m of model.members) if (m.section === oldName) m.section = newName;
+      }
+      setStatus('已更新斷面 "' + newName + '"');
+      renderSectionManager();
+      render();
+    };
+  });
+  panel.querySelectorAll('.sm_delete').forEach(btn => {
+    if (btn.disabled) return;
+    btn.onclick = () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      const s = model.sections[i];
+      model.sections = model.sections.filter(x => x !== s);
+      setStatus('已刪除斷面 "' + s.name + '"');
+      renderSectionManager();
+    };
+  });
+  document.getElementById('sm_new_add').onclick = () => {
+    const name = document.getElementById('sm_new_name').value.trim();
+    if (!name) { setStatus('請輸入新斷面名稱'); return; }
+    if (model.sections.some(s => s.name === name)) { setStatus('斷面名稱 "' + name + '" 已經存在'); return; }
+    const eRaw = document.getElementById('sm_new_E').value;
+    const iRaw = document.getElementById('sm_new_I').value;
+    const aRaw = document.getElementById('sm_new_A').value;
+    if (eRaw === '' || iRaw === '' || aRaw === '') { setStatus('新斷面的 E/I/A 都要填'); return; }
+    model.sections.push({
+      name, E: toSI('E', parseFloat(eRaw)), I: toSI('I', parseFloat(iRaw)), A: toSI('A', parseFloat(aRaw)),
+    });
+    setStatus('已新增斷面 "' + name + '"');
+    renderSectionManager();
+  };
+  document.getElementById('sm_back').onclick = clearSelection;
+  document.getElementById('propModal').classList.add('open');
+  document.getElementById('propModalBackdrop').classList.add('open');
+  modalOpenedAt = Date.now();
+}
+document.getElementById('btnSectionManager').addEventListener('click', () => {
+  selected = null;
+  multiSelection = null;
+  renderSectionManager();
+  render();
+});
+
 // ---------- 批次選取後的操作面板(方框: 節點+桿件皆可; 直線: 只有桿件) ----------
 function renderMultiSelectPanel() {
   const panel = document.getElementById('propPanel');
@@ -1357,11 +1455,11 @@ function renderPropPanel() {
           <input id="p_fy" type="number" step="any" value="${pl ? pl.fy : 0}">
           <input id="p_fm" type="number" step="any" value="${pl ? pl.m : 0}">
         </div>
-        <div class="row2">
-          <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+        <button id="p_apply" style="width:100%;background:#16a34a;color:white;">套用</button>
+        <div class="row2" style="margin-top:0.4rem;">
+          <button id="p_delete" style="background:#dc2626;color:white;">刪除節點</button>
           <button id="p_cancel">取消</button>
         </div>
-        <button id="p_delete" style="background:#dc2626;color:white;">刪除節點</button>
       </fieldset>`;
     document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_apply').onclick = () => {
@@ -1520,11 +1618,12 @@ function renderPropPanel() {
         </div>
       </details>
 
-      <div class="row2" style="margin-top:0.8rem;">
-        <button id="p_apply" style="background:#16a34a;color:white;">套用</button>
+      <button id="p_apply" style="width:100%;margin-top:0.8rem;background:#16a34a;color:white;">套用「基本設定」的修改(元素類型/釋放/斷面E,I,A)</button>
+      <p class="hint" style="margin-top:0.2rem;">均佈載重跟集中力/彎矩已經各自用「新增」按鈕即時生效, 不用再按這裡。</p>
+      <div class="row2" style="margin-top:0.4rem;">
+        <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
         <button id="p_cancel">取消</button>
-      </div>
-      <button id="p_delete" style="width:100%;margin-top:0.4rem;background:#dc2626;color:white;">刪除桿件</button>`;
+      </div>`;
     document.getElementById('p_cancel').onclick = clearSelection;
     document.getElementById('p_type').addEventListener('change', (e) => {
       const isFrame = e.target.value === 'frame';
