@@ -56,10 +56,8 @@
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
   .support-symbol { fill: #374151; stroke: #374151; }
   .support-hatch { stroke: #374151; stroke-width: 1.2; }
-  .scale-label { font-size: 12px; fill: #ea580c; font-weight: bold; }
   .value-label { font-size: 9px; }
   .grid-line { stroke: #cbd5e1; stroke-width: 1; }
-  .grid-label { font-size: 12px; font-weight: 600; fill: #475569; }
   #status { font-size: 0.8rem; margin: 0.25rem 0 0; min-height: 1.1em; color: #0891b2; }
   fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
   legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
@@ -139,6 +137,7 @@
         <button id="btnZoomReset">⟲ 原大小</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
+        <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="14" min="8" max="28" style="width:3.6rem;"></label>
       </div>
     </div>
 
@@ -259,7 +258,7 @@ function computeTransform(pad) {
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
-const PAD_BY_VIEW = {structure: 0.14, deformed: 0.28, N: 0.32, V: 0.32, M: 0.32};
+const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, N: 0.14, V: 0.14, M: 0.14};
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
@@ -474,6 +473,9 @@ function visibleWorldRect(t) {
   };
 }
 
+let gridLabelSize = 14; // 可從「檢視」選單調整
+function gridLabelStyle() { return `font-size:${gridLabelSize}px;font-weight:600;fill:#475569;`; }
+
 function drawGrid(t) {
   const vis = visibleWorldRect(t);
   const w = (vis.maxX - vis.minX) || 1, h = (vis.maxY - vis.minY) || 1;
@@ -482,21 +484,27 @@ function drawGrid(t) {
   const gx0 = Math.floor((vis.minX - padX) / step) * step, gx1 = Math.ceil((vis.maxX + padX) / step) * step;
   const gy0 = Math.floor((vis.minY - padY) / step) * step, gy1 = Math.ceil((vis.maxY + padY) / step) * step;
   const decimals = step < 1 ? 1 : 0;
-  // 頂端/左側尺規的淡底色帶, 讓刻度數字在結構線條上也看得清楚
-  putOverlay(el('rect', {x: 0, y: 0, width: VB_W, height: 24, fill: 'rgba(255,255,255,0.9)'}));
-  putOverlay(el('rect', {x: 0, y: 0, width: 34, height: VB_H, fill: 'rgba(255,255,255,0.9)'}));
+  const band = 36; // 頂/左/右/下四條尺規底色帶的寬度, 配合可調字體
+  // 四邊尺規的淡底色帶, 讓刻度數字在結構線條上也看得清楚
+  putOverlay(el('rect', {x: 0, y: 0, width: VB_W, height: band, fill: 'rgba(255,255,255,0.9)'}));
+  putOverlay(el('rect', {x: 0, y: 0, width: band, height: VB_H, fill: 'rgba(255,255,255,0.9)'}));
+  putOverlay(el('rect', {x: 0, y: VB_H - band, width: VB_W, height: band, fill: 'rgba(255,255,255,0.9)'}));
+  putOverlay(el('rect', {x: VB_W - band, y: 0, width: band, height: VB_H, fill: 'rgba(255,255,255,0.9)'}));
   let n = 0;
   for (let gx = gx0; gx <= gx1 + 1e-9; gx += step, n++) {
     const [x1, y1] = toScreen(gx, gy0, t), [x2, y2] = toScreen(gx, gy1, t);
     put(el('line', {x1, y1, x2, y2, class: 'grid-line'}));
     if (n % 2 === 0) {
-      // 刻度文字放疊加圖層: X座標跟著這條格線的螢幕位置移動(縮放/平移
-      // 都會跟到), Y座標釘死在畫面最上方, 字體不受camera縮放影響 ——
-      // 效果就像CAD軟體頂端的水平尺規, 不管怎麼縮放平移永遠看得到刻度。
+      // 刻度文字放疊加圖層: 沿格線的螢幕位置移動(縮放/平移都會跟到),
+      // 另一軸釘死在畫面邊緣, 字體不受camera縮放影響 —— 效果就像CAD
+      // 軟體四邊的尺規, 不管怎麼縮放平移永遠看得到刻度, 上下對稱。
       const [ox] = toOverlayScreen(gx, gy0, t);
-      const lbl = el('text', {x: ox, y: 17, class: 'grid-label', 'text-anchor': 'middle'});
-      lbl.textContent = gx.toFixed(decimals);
-      putOverlay(lbl);
+      const lblTop = el('text', {x: ox, y: band - 7, 'text-anchor': 'middle', style: gridLabelStyle()});
+      lblTop.textContent = gx.toFixed(decimals);
+      putOverlay(lblTop);
+      const lblBottom = el('text', {x: ox, y: VB_H - band + 15, 'text-anchor': 'middle', style: gridLabelStyle()});
+      lblBottom.textContent = gx.toFixed(decimals);
+      putOverlay(lblBottom);
     }
   }
   n = 0;
@@ -504,14 +512,16 @@ function drawGrid(t) {
     const [x1, y1] = toScreen(gx0, gy, t), [x2, y2] = toScreen(gx1, gy, t);
     put(el('line', {x1, y1, x2, y2, class: 'grid-line'}));
     if (n % 2 === 0) {
-      // Y軸刻度: 同理, 釘死在畫面最左側(垂直尺規)。
       const [, oy] = toOverlayScreen(gx0, gy, t);
-      const lbl = el('text', {x: 5, y: oy + 4, class: 'grid-label', 'text-anchor': 'start'});
-      lbl.textContent = gy.toFixed(decimals);
-      putOverlay(lbl);
+      const lblLeft = el('text', {x: 5, y: oy + 4, 'text-anchor': 'start', style: gridLabelStyle()});
+      lblLeft.textContent = gy.toFixed(decimals);
+      putOverlay(lblLeft);
+      const lblRight = el('text', {x: VB_W - 5, y: oy + 4, 'text-anchor': 'end', style: gridLabelStyle()});
+      lblRight.textContent = gy.toFixed(decimals);
+      putOverlay(lblRight);
     }
   }
-  const lbl = el('text', {x: VB_W - 8, y: VB_H - 8, class: 'grid-label', 'text-anchor': 'end'});
+  const lbl = el('text', {x: VB_W - band - 6, y: VB_H - band - 8, 'text-anchor': 'end', style: gridLabelStyle()});
   lbl.textContent = `格線間距 ${step} m`;
   putOverlay(lbl);
 }
@@ -647,9 +657,10 @@ function drawLoads(t) {
 function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
 
 function drawDeformed(t) {
-  const lbl = el('text', {x: 10, y: 20, class: 'scale-label'});
+  // 固定在畫面角落的疊加圖層(跟格線刻度同一套機制): 不會隨縮放跑掉/變大變小
+  const lbl = el('text', {x: 42, y: 58, style: 'font-size:15px;font-weight:bold;fill:#ea580c;'});
   lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
-  put(lbl);
+  putOverlay(lbl);
   for (const mid in lastResult.deformed) {
     const d = lastResult.deformed[mid];
     let pts = '';
@@ -691,9 +702,9 @@ function drawDiagram(t, kind) {
   const valueToWorld = (worldDiag * 0.15) / maxAbs;
   const unit = kind === 'M' ? 'kN·m' : 'kN';
 
-  const lbl = el('text', {x: 10, y: 20, class: 'scale-label', fill: kind === 'M' ? '#dc2626' : '#2563eb'});
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:15px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
   lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${unit})` + (kind === 'M' ? ' — 畫在拉力側' : '');
-  put(lbl);
+  putOverlay(lbl);
 
   for (const m of model.members) {
     const d = lastResult.diagrams[m.id];
@@ -1023,6 +1034,10 @@ svg.addEventListener('pointerup', () => {
 });
 
 document.getElementById('showGridToggle').addEventListener('change', render);
+document.getElementById('gridLabelSizeInput').addEventListener('input', (e) => {
+  const v = parseInt(e.target.value, 10);
+  if (!isNaN(v) && v > 0) { gridLabelSize = v; render(); }
+});
 
 document.querySelectorAll('.viewBtn').forEach(btn => {
   btn.addEventListener('click', () => {
