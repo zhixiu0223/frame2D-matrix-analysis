@@ -412,11 +412,12 @@ function releasePointer(e) {
 }
 svg.addEventListener('pointerup', releasePointer, {capture: true});
 svg.addEventListener('pointercancel', releasePointer, {capture: true});
-// 額外的安全網: 手指滑出畫布邊界、或pointer capture在某些瀏覽器上
-// 意外釋放時, 有些裝置不會送標準的pointerup/pointercancel, 這裡多
-// 綁兩個事件確保activePointers還是會被清掉。
-svg.addEventListener('pointerleave', releasePointer, {capture: true});
-svg.addEventListener('lostpointercapture', releasePointer, {capture: true});
+// 註: 原本這裡還多綁了 pointerleave/lostpointercapture 當保險, 但那兩個
+// 事件在手機瀏覽器上似乎會在正常操作時就誤觸發(例如觸控點還在畫布內,
+// 卻被判定成「離開」), 反而把正在進行中的單指/雙指手勢狀態一起清掉,
+// 導致整個畫布完全沒反應。拿掉這兩個, 只靠上面 pointerdown 時的
+// pruneStalePointers()逾時清理(2秒沒更新才清)來處理指標卡死的情況,
+// 這個做法有單獨測試過, 風險比較低。
 
 // 單指拖曳空白處 = 平移
 let panState = null;
