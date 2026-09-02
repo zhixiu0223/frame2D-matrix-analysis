@@ -7,15 +7,29 @@
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, "Noto Sans TC", sans-serif; margin: 0; display: flex; flex-wrap: wrap; }
-  #left { flex: 1 1 640px; min-width: 320px; padding: 0.8rem; }
+  #left { flex: 1 1 640px; min-width: 320px; padding: 0 0.8rem 0.8rem; }
   #right { flex: 0 0 300px; padding: 0.8rem; border-left: 1px solid #ddd; }
-  h1 { font-size: 1.1rem; margin: 0 0 0.4rem; }
+  h1 { font-size: 1.05rem; margin: 0; padding: 0.6rem 0 0.3rem; }
   .hint { font-size: 0.78rem; color: #666; margin-bottom: 0.6rem; }
-  #toolbar { margin-bottom: 0.3rem; display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
-  #toolbar button, #right button { padding: 0.4rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
-  #toolbar button.active { background: #2563eb; color: white; border-color: #2563eb; }
-  #toolbar .sep { flex-basis: 100%; height: 0; }
-  #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; }
+
+  /* ---- 固定工具列: 選單列 + 展開面板 + 常駐快捷列, 用 sticky 讓它捲動時不消失 ---- */
+  #topbar { position: sticky; top: 0; z-index: 50; background: #fff; border-bottom: 1px solid #ddd; margin: 0 -0.8rem; padding: 0 0.8rem; }
+  #menubar { display: flex; gap: 0.3rem; align-items: center; padding: 0.4rem 0; flex-wrap: wrap; }
+  #menubar .menuBtn { padding: 0.4rem 0.8rem; font-size: 0.85rem; cursor: pointer; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4px; }
+  #menubar .menuBtn.open { background: #2563eb; color: white; border-color: #2563eb; }
+  #menubar .sep-v { width: 1px; align-self: stretch; background: #ddd; margin: 0 0.2rem; }
+  #menuPanel { display: none; padding: 0.5rem 0; border-top: 1px dashed #ddd; gap: 0.3rem; flex-wrap: wrap; align-items: center; }
+  #menuPanel.open { display: flex; }
+  #menuPanel > .menuGroup { display: none; gap: 0.3rem; flex-wrap: wrap; align-items: center; width: 100%; }
+  #menuPanel > .menuGroup.active { display: flex; }
+  #quickbar { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; padding: 0.4rem 0; border-top: 1px solid #eee; }
+  #topbar button { padding: 0.4rem 0.7rem; font-size: 0.85rem; cursor: pointer; }
+  #topbar button.active { background: #2563eb; color: white; border-color: #2563eb; }
+  #topbar .sep { flex-basis: 100%; height: 0; }
+  #topbar label.snapLabel { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; margin: 0; width: auto; white-space: nowrap; }
+  #topbar label.snapLabel input { width: auto; }
+
+  #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; }
   svg { width: 100%; height: auto; display: block; touch-action: none; }
   .node-circle { fill: #1f2937; stroke: #1f2937; stroke-width: 2; cursor: grab; }
   .node-circle.selected { fill: #2563eb; stroke: #2563eb; }
@@ -35,7 +49,7 @@
   .value-label { font-size: 9px; }
   .grid-line { stroke: #e5e7eb; stroke-width: 1; }
   .grid-label { font-size: 9px; fill: #9ca3af; }
-  #status { font-size: 0.85rem; margin: 0.3rem 0; min-height: 1.2em; }
+  #status { font-size: 0.8rem; margin: 0.25rem 0 0; min-height: 1.1em; color: #0891b2; }
   fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
   legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
   label { display: block; font-size: 0.8rem; margin: 0.3rem 0 0.1rem; }
@@ -52,51 +66,73 @@
 
 <div id="left">
   <h1>frame2d 互動編輯器</h1>
-  <p class="hint">拖曳節點改位置。點節點/桿件開右側屬性面板。雙指縮放/平移,或用下方 🔍 按鈕。「新增節點/桿件」模式見下。改完按 Solve 才會重新計算。</p>
 
-  <div id="toolbar">
-    <button id="btnAddNode">➕ 節點</button>
-    <button id="btnAddMember">➕ 桿件</button>
-    <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
-    <button id="btnZoomIn">🔍+</button>
-    <button id="btnZoomOut">🔍-</button>
-    <button id="btnZoomReset">⟲ 原大小</button>
-    <span class="sep"></span>
-    <button data-view="structure" class="viewBtn active">結構/荷載</button>
-    <button data-view="deformed" class="viewBtn">變形</button>
-    <button data-view="N" class="viewBtn">N 圖(軸力)</button>
-    <button data-view="V" class="viewBtn">V 圖(剪力)</button>
-    <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
-  </div>
+  <div id="topbar">
+    <div id="menubar">
+      <button class="menuBtn" data-menu="file">📁 檔案</button>
+      <button class="menuBtn" data-menu="model">✏️ 建模</button>
+      <button class="menuBtn" data-menu="query">🔎 查詢</button>
+      <button class="menuBtn" data-menu="view">👁 檢視</button>
+      <span class="sep-v"></span>
+      <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
+    </div>
 
-  <div id="toolbar" style="margin-top:0.4rem;">
-    <input id="modelName" type="text" placeholder="專案名稱" style="width:9rem;padding:0.35rem;">
-    <button id="btnNew">🆕 新建</button>
-    <button id="btnSave">💾 儲存</button>
-    <button id="btnSaveAs">💾 另存新檔</button>
-    <select id="modelSelect" style="width:9rem;"></select>
-    <button id="btnLoad">📂 載入</button>
-    <button id="btnDeleteModel" style="color:#dc2626;">🗑 刪除</button>
-    <span class="sep"></span>
-    <button id="btnExportJson">⬇ 匯出JSON</button>
-    <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;">
-      ⬆ 匯入JSON<input id="importJsonFile" type="file" accept="application/json" style="display:none;">
-    </label>
-    <button id="btnExportMd">⬇ 匯出Markdown</button>
-    <button id="btnExportPdf">⬇ 匯出PDF</button>
-  </div>
+    <div id="menuPanel">
+      <div class="menuGroup" data-group="file">
+        <input id="modelName" type="text" placeholder="專案名稱" style="width:9rem;padding:0.35rem;">
+        <button id="btnNew">🆕 新建</button>
+        <button id="btnSave">💾 儲存</button>
+        <button id="btnSaveAs">💾 另存新檔</button>
+        <select id="modelSelect" style="width:9rem;"></select>
+        <button id="btnLoad">📂 載入</button>
+        <button id="btnDeleteModel" style="color:#dc2626;">🗑 刪除</button>
+        <span class="sep"></span>
+        <button id="btnExportJson">⬇ 匯出JSON</button>
+        <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;width:auto;margin:0;">
+          ⬆ 匯入JSON<input id="importJsonFile" type="file" accept="application/json" style="display:none;">
+        </label>
+        <button id="btnExportMd">⬇ 匯出Markdown</button>
+        <button id="btnExportPdf">⬇ 匯出PDF</button>
+      </div>
 
-  <div id="toolbar" style="margin-top:0.4rem;">
-    <select id="queryMember" style="width:8rem;"></select>
-    <select id="queryMode" style="width:8rem;">
-      <option value="relative">相對位置 0~1</option>
-      <option value="absolute">絕對距離(m)</option>
-    </select>
-    <input id="queryValue" type="number" step="any" value="0.5" style="width:6rem;">
-    <button id="btnQueryPoint" style="background:#0891b2;color:white;">🔎 查詢該點</button>
-    <span id="queryResult" style="font-size:0.85rem;"></span>
+      <div class="menuGroup" data-group="model">
+        <button id="btnAddNode">➕ 節點</button>
+        <button id="btnAddMember">➕ 桿件</button>
+        <span class="sep"></span>
+        <label class="snapLabel"><input type="checkbox" id="snapGrid" checked>格線鎖定</label>
+        <label class="snapLabel"><input type="checkbox" id="snapNode" checked>節點鎖定</label>
+        <label class="snapLabel"><input type="checkbox" id="snapOrtho">正交鎖定(0°/45°/90°)</label>
+      </div>
+
+      <div class="menuGroup" data-group="query">
+        <select id="queryMember" style="width:8rem;"></select>
+        <select id="queryMode" style="width:8rem;">
+          <option value="relative">相對位置 0~1</option>
+          <option value="absolute">絕對距離(m)</option>
+        </select>
+        <input id="queryValue" type="number" step="any" value="0.5" style="width:6rem;">
+        <button id="btnQueryPoint" style="background:#0891b2;color:white;">🔎 查詢該點</button>
+        <span id="queryResult" style="font-size:0.85rem;width:auto;"></span>
+      </div>
+
+      <div class="menuGroup" data-group="view">
+        <button id="btnZoomIn">🔍+</button>
+        <button id="btnZoomOut">🔍-</button>
+        <button id="btnZoomReset">⟲ 原大小</button>
+        <span class="sep"></span>
+        <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
+      </div>
+    </div>
+
+    <div id="quickbar">
+      <button data-view="structure" class="viewBtn active">結構/荷載</button>
+      <button data-view="deformed" class="viewBtn">變形</button>
+      <button data-view="N" class="viewBtn">N 圖(軸力)</button>
+      <button data-view="V" class="viewBtn">V 圖(剪力)</button>
+      <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
+    </div>
+    <div id="status"></div>
   </div>
-  <div id="status"></div>
 
   <div id="canvasWrap">
     <svg id="svg" viewBox="0 0 800 500">
@@ -122,6 +158,24 @@
 </div>
 
 <script>
+// ---------- 選單列展開/收合 ----------
+document.querySelectorAll('.menuBtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const name = btn.dataset.menu;
+    const panel = document.getElementById('menuPanel');
+    const alreadyOpen = btn.classList.contains('open');
+    document.querySelectorAll('.menuBtn').forEach(b => b.classList.remove('open'));
+    document.querySelectorAll('.menuGroup').forEach(g => g.classList.remove('active'));
+    if (alreadyOpen) {
+      panel.classList.remove('open');
+    } else {
+      btn.classList.add('open');
+      document.querySelector(`.menuGroup[data-group="${name}"]`).classList.add('active');
+      panel.classList.add('open');
+    }
+  });
+});
+
 // ---------- 初始模型: Case-08 純點載重版本 ----------
 let model = {
   nodes: [
@@ -274,7 +328,7 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   const t = computeTransform();
-  drawGrid(t);
+  if (document.getElementById('showGridToggle').checked) drawGrid(t);
 
   if (viewMode === 'structure') {
     drawMembers(t, false);
@@ -776,6 +830,52 @@ function splitMemberAtInternalPin(m, mode, value) {
   render();
 }
 
+// ---------- 鎖定(Snap): 節點鎖定 > 正交鎖定 > 格線鎖定, 依序套用 ----------
+let lastActiveNodeId = null;
+
+function currentGridStep() {
+  const xs = model.nodes.length ? model.nodes.map(n => n.x) : [-5, 5];
+  const ys = model.nodes.length ? model.nodes.map(n => n.y) : [-5, 5];
+  const w = (Math.max(...xs) - Math.min(...xs)) || 1, h = (Math.max(...ys) - Math.min(...ys)) || 1;
+  return niceStep(Math.max(w, h) / 8);
+}
+
+function snapPoint(pt, opts) {
+  opts = opts || {};
+  let {x, y} = pt;
+
+  if (document.getElementById('snapNode').checked) {
+    const step = currentGridStep();
+    const tol = step * 0.25;
+    let best = null, bestD = tol;
+    for (const n of model.nodes) {
+      if (opts.excludeId === n.id) continue;
+      const d = Math.hypot(n.x - x, n.y - y);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (best) return {x: best.x, y: best.y, snappedToNode: best.id};
+  }
+
+  if (document.getElementById('snapOrtho').checked && opts.orthoRef) {
+    const rx = opts.orthoRef.x, ry = opts.orthoRef.y;
+    const dx = x - rx, dy = y - ry;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 1e-6) {
+      const step45 = Math.PI / 4;
+      const ang = Math.round(Math.atan2(dy, dx) / step45) * step45;
+      x = rx + dist * Math.cos(ang);
+      y = ry + dist * Math.sin(ang);
+    }
+  }
+
+  if (document.getElementById('snapGrid').checked) {
+    const step = currentGridStep();
+    x = Math.round(x / step) * step;
+    y = Math.round(y / step) * step;
+  }
+  return {x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000};
+}
+
 // ---------- 畫布事件(節點拖曳 / 新增 / 平移) ----------
 svg.addEventListener('pointerdown', (e) => {
   if (activePointers.size >= 2) return;
@@ -783,8 +883,16 @@ svg.addEventListener('pointerdown', (e) => {
   const t = computeTransform();
   if (addMode === 'node') {
     const [wx, wy] = clientToWorld(e, t);
+    const orthoRef = (selected && selected.type === 'node') ? nodeById(selected.id)
+                      : (lastActiveNodeId !== null ? nodeById(lastActiveNodeId) : null);
+    const snapped = snapPoint({x: wx, y: wy}, {orthoRef});
+    if (snapped.snappedToNode !== undefined) {
+      setStatus('該位置已經有節點 N' + snapped.snappedToNode + ', 沒有新增(避免重複節點)');
+      return;
+    }
     const newId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
-    model.nodes.push({id: newId, x: Math.round(wx * 100) / 100, y: Math.round(wy * 100) / 100});
+    model.nodes.push({id: newId, x: snapped.x, y: snapped.y});
+    lastActiveNodeId = newId;
     setStatus('新增節點 N' + newId);
     render();
     return;
@@ -799,7 +907,10 @@ svg.addEventListener('pointermove', (e) => {
     const t = computeTransform();
     const [wx, wy] = clientToWorld(e, t);
     const n = nodeById(dragNodeId);
-    n.x = Math.round(wx * 100) / 100; n.y = Math.round(wy * 100) / 100;
+    const conn = model.members.find(m => m.node_i === dragNodeId || m.node_j === dragNodeId);
+    const orthoRef = conn ? nodeById(conn.node_i === dragNodeId ? conn.node_j : conn.node_i) : null;
+    const snapped = snapPoint({x: wx, y: wy}, {excludeId: dragNodeId, orthoRef});
+    n.x = snapped.x; n.y = snapped.y;
     render();
     return;
   }
@@ -817,6 +928,7 @@ svg.addEventListener('pointerup', () => {
   if (dragNodeId !== null) {
     const id = dragNodeId;
     dragNodeId = null;
+    lastActiveNodeId = id;
     if (!dragMoved) selectNode(id); else { selected = {type: 'node', id}; renderPropPanel(); }
     render();
     return;
@@ -826,6 +938,8 @@ svg.addEventListener('pointerup', () => {
     panState = null;
   }
 });
+
+document.getElementById('showGridToggle').addEventListener('change', render);
 
 document.querySelectorAll('.viewBtn').forEach(btn => {
   btn.addEventListener('click', () => {
