@@ -320,6 +320,12 @@ document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt({x: 
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1/1.3));
 document.getElementById('btnZoomReset').addEventListener('click', () => { camera = {x:0,y:0,k:1}; applyCameraTransform(); scheduleRender(); });
 svg.addEventListener('wheel', (e) => {
+  // 只認「有按著 Ctrl 鍵」的滾輪事件(桌機觸控板雙指縮放的標準訊號)。
+  // 這件事很重要: 有些手機瀏覽器在觸控元素設了 touch-action:none 時,
+  // 會把單指滑動偽造成一般 wheel 事件送出來, 之前沒有分辨的話,
+  // 單指滑動畫布就會被誤判成縮放, 手感會很奇怪。純滑鼠滾輪(沒按
+  // Ctrl)現在不會縮放, 桌機請改用 🔍+/🔍- 按鈕。
+  if (!e.ctrlKey) return;
   e.preventDefault();
   zoomAt(clientToCameraSpace(e), e.deltaY < 0 ? 1.15 : 1/1.15);
 }, {passive: false});
@@ -658,7 +664,7 @@ function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
 
 function drawDeformed(t) {
   // 固定在畫面角落的疊加圖層(跟格線刻度同一套機制): 不會隨縮放跑掉/變大變小
-  const lbl = el('text', {x: 42, y: 58, style: 'font-size:15px;font-weight:bold;fill:#ea580c;'});
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#ea580c;`});
   lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
   putOverlay(lbl);
   for (const mid in lastResult.deformed) {
@@ -702,7 +708,7 @@ function drawDiagram(t, kind) {
   const valueToWorld = (worldDiag * 0.15) / maxAbs;
   const unit = kind === 'M' ? 'kN·m' : 'kN';
 
-  const lbl = el('text', {x: 42, y: 58, style: `font-size:15px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
   lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${unit})` + (kind === 'M' ? ' — 畫在拉力側' : '');
   putOverlay(lbl);
 
@@ -973,6 +979,7 @@ function snapPoint(pt, opts) {
 svg.addEventListener('pointerdown', (e) => {
   if (activePointers.size >= 2) return;
   if (dragNodeId !== null) return;
+  e.preventDefault();
   const t = computeTransform();
   if (addMode === 'node') {
     const [wx, wy] = clientToWorld(e, t);
