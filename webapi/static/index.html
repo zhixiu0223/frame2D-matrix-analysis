@@ -412,17 +412,17 @@ svg.addEventListener('pointermove', (e) => {
       x: (pinchState.startMid.x - pinchState.startCam.x) / pinchState.startCam.k,
       y: (pinchState.startMid.y - pinchState.startCam.y) / pinchState.startCam.k,
     };
-    const newX = mid.x - canonicalAtStart.x * newK;
-    const newY = mid.y - canonicalAtStart.y * newK;
-    // 再一層保險: 算出來的值不是有效數字就整個跳過這一幀, 不套用
-    // (寧可這一瞬間畫面沒反應, 也不要把camera狀態寫壞導致之後永遠卡住)。
-    if (Number.isFinite(newK) && Number.isFinite(newX) && Number.isFinite(newY)) {
-      camera.k = newK;
-      camera.x = newX;
-      camera.y = newY;
-      applyCameraTransform();
-      scheduleRender();
-    }
+    // 這裡不再額外檢查數值有效性就跳過整幀不套用了 —— 上一版加了這層
+    // 檢查之後雙指縮放完全沒反應, 代表這層檢查太保守, 把正常的縮放
+    // 計算也一起擋掉了。現在直接套用, 真的算壞的話靠
+    // applyCameraTransform() 裡那層保險自動修復(已經單獨測試過壞值
+    // 會被修回原點), 兩者算是不同層次的防呆: 這裡負責讓縮放正常
+    // 運作, applyCameraTransform() 負責兜底避免真的卡死。
+    camera.k = newK;
+    camera.x = mid.x - canonicalAtStart.x * newK;
+    camera.y = mid.y - canonicalAtStart.y * newK;
+    applyCameraTransform();
+    scheduleRender();
   }
 }, {capture: true});
 function releasePointer(e) {
