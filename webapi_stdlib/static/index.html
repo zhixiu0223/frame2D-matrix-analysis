@@ -242,6 +242,7 @@ let addMode = null;         // null | 'node' | 'member'
 let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選取模式
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
 let multiSelection = null;  // {nodeIds:[...], memberIds:[...]} -- 批次選取的結果
+let pendingBatchAction = null; // null | 'support' | 'load' -- 從快捷按鈕觸發選取時, 選完要直接跳哪個表單
 let memberFirstNode = null;
 let dragNodeId = null;
 let dragMoved = false;
@@ -983,11 +984,11 @@ function renderBatchSupportForm(nodeIds) {
   panel.innerHTML = `<fieldset><legend>批次設定支承(${nodeIds.length} 個節點)</legend>
     <label>支承類型(取代這些節點原本的支承設定)</label>
     <select id="bs_type">
-      <option value="free">自由(移除支承)</option>
-      <option value="pin">鉸支承(ux=uy=0)</option>
-      <option value="fixed">固定支承(ux=uy=rot=0)</option>
-      <option value="roller_y">滾支承-擋垂直(uy=0)</option>
-      <option value="roller_x">滾支承-擋水平(ux=0)</option>
+      <option value="free">○ 自由(移除支承)</option>
+      <option value="pin">△ 鉸支承(ux=uy=0)</option>
+      <option value="fixed">▦ 固定支承(ux=uy=rot=0)</option>
+      <option value="roller_y">◎↕ 滾支承-擋垂直(uy=0)</option>
+      <option value="roller_x">◎↔ 滾支承-擋水平(ux=0)</option>
     </select>
     <div class="row2"><button id="bs_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bs_back">返回</button></div>
   </fieldset>`;
@@ -1103,11 +1104,11 @@ function renderPropPanel() {
         </div>
         <label>支承</label>
         <select id="p_sup">
-          <option value="free" ${kind==='free'?'selected':''}>自由(無支承)</option>
-          <option value="pin" ${kind==='pin'?'selected':''}>鉸支承(ux=uy=0)</option>
-          <option value="fixed" ${kind==='fixed'?'selected':''}>固定支承(ux=uy=rot=0)</option>
-          <option value="roller_y" ${kind==='roller_y'?'selected':''}>滾支承-擋垂直(uy=0)</option>
-          <option value="roller_x" ${kind==='roller_x'?'selected':''}>滾支承-擋水平(ux=0)</option>
+          <option value="free" ${kind==='free'?'selected':''}>○ 自由(無支承)</option>
+          <option value="pin" ${kind==='pin'?'selected':''}>△ 鉸支承(ux=uy=0)</option>
+          <option value="fixed" ${kind==='fixed'?'selected':''}>▦ 固定支承(ux=uy=rot=0)</option>
+          <option value="roller_y" ${kind==='roller_y'?'selected':''}>◎↕ 滾支承-擋垂直(uy=0)</option>
+          <option value="roller_x" ${kind==='roller_x'?'selected':''}>◎↔ 滾支承-擋水平(ux=0)</option>
         </select>
         <label>集中力 fx / fy (N) / m (N·m)</label>
         <div class="row3">
@@ -1526,12 +1527,24 @@ svg.addEventListener('pointerup', () => {
       : lineSelect(startWorld, curWorld);
     if (result.nodeIds.length === 0 && result.memberIds.length === 0) {
       setStatus('這個範圍內沒有選到任何東西');
+      pendingBatchAction = null;
       render();
       return;
     }
     selected = null;
     multiSelection = result;
-    renderMultiSelectPanel();
+    // 如果是從「支承(選取套用)」/「施加外力(選取套用)」快捷按鈕
+    // 觸發的選取, 選完直接跳對應的表單, 跳過中間那層「批次選取」
+    // 摘要畫面, 省一次點擊。
+    if (pendingBatchAction === 'support' && result.nodeIds.length > 0) {
+      renderBatchSupportForm(result.nodeIds);
+    } else if (pendingBatchAction === 'load') {
+      if (result.nodeIds.length > 0) renderBatchNodeLoadForm(result.nodeIds);
+      else renderBatchDistLoadForm(result.memberIds);
+    } else {
+      renderMultiSelectPanel();
+    }
+    pendingBatchAction = null;
     render();
     return;
   }
@@ -1584,6 +1597,7 @@ function clearAllModes() {
   Object.values(MODE_BUTTONS).forEach(id => document.getElementById(id).classList.remove('active'));
 }
 function toggleMode(kind) {
+  pendingBatchAction = null; // 任何時候手動切換模式, 之前快捷按鈕留下的「待處理動作」都作廢
   const wasActive = document.getElementById(MODE_BUTTONS[kind]).classList.contains('active');
   clearAllModes();
   if (wasActive) { setStatus(''); render(); return; }
@@ -1605,21 +1619,27 @@ document.getElementById('btnSelectRect').addEventListener('click', () => toggleM
 document.getElementById('btnSelectLine').addEventListener('click', () => toggleMode('line'));
 
 document.getElementById('btnBatchSupport').addEventListener('click', () => {
-  if (!multiSelection || multiSelection.nodeIds.length === 0) {
-    setStatus('請先用「方框選取」選一些節點, 才能批次設定支承');
+  if (multiSelection && multiSelection.nodeIds.length > 0) {
+    renderBatchSupportForm(multiSelection.nodeIds);
     return;
   }
-  renderBatchSupportForm(multiSelection.nodeIds);
+  // 還沒選東西的話, 這顆按鈕直接幫你切換成方框選取模式, 框完會
+  // 自動跳出支承設定表單(跳過中間那層「批次選取」摘要畫面),
+  // 不用先點「方框選取」再回頭點這裡, 省一次點擊。
+  pendingBatchAction = 'support';
+  if (selectMode !== 'rect') toggleMode('rect');
+  pendingBatchAction = 'support';
+  setStatus('先框選要設定支承的節點, 框完會直接跳出支承設定表單');
 });
 document.getElementById('btnBatchLoad').addEventListener('click', () => {
-  if (!multiSelection || (multiSelection.nodeIds.length === 0 && multiSelection.memberIds.length === 0)) {
-    setStatus('請先用「方框選取」或「直線選取」選一些節點/桿件, 才能批次施加外力');
+  if (multiSelection && (multiSelection.nodeIds.length > 0 || multiSelection.memberIds.length > 0)) {
+    renderMultiSelectPanel();
     return;
   }
-  // 不猜你要對節點還是桿件施加外力(方框選到桿件時, 它兩端的節點也會
-  // 一起出現在 nodeIds 裡, 之前這裡猜錯就一律跳節點表單), 直接打開
-  // 選取面板讓你自己選「節點集中力」還是「桿件均佈載重」。
-  renderMultiSelectPanel();
+  pendingBatchAction = 'load';
+  if (selectMode !== 'rect') toggleMode('rect');
+  pendingBatchAction = 'load';
+  setStatus('先框選要施加外力的節點/桿件, 框完會直接跳出設定表單(選到桿件的話用「直線選取」也可以)');
 });
 
 document.getElementById('btnSolve').addEventListener('click', async () => {
