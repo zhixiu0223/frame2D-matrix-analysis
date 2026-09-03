@@ -267,7 +267,8 @@
 
   <div id="debugPanel" style="display:none;">
     <button id="debugCopyBtn" style="width:100%;margin-bottom:0.3rem;">📋 複製除錯訊息</button>
-    <pre id="debugLog" style="background:#111;color:#0f0;font-size:11px;padding:0.5rem;max-height:260px;overflow-y:auto;white-space:pre-wrap;margin:0;border-radius:6px;"></pre>
+    <p class="hint" style="margin:0 0 0.3rem;">如果按上面的按鈕自動複製沒反應(常見於非HTTPS環境, 瀏覽器的剪貼簿API會被擋掉), 直接點下面這個文字框, 用手機原生的長按選取全部+複製就一定能用, 這是標準表單元件不是自己刻的選取邏輯。</p>
+    <textarea id="debugLog" readonly style="width:100%;background:#111;color:#0f0;font-size:11px;padding:0.5rem;height:260px;box-sizing:border-box;border-radius:6px;border:none;white-space:pre;"></textarea>
   </div>
 
   <details>
@@ -563,10 +564,15 @@ function debugLog(msg) {
   if (!toggle || !toggle.checked) return;
   document.getElementById('debugPanel').style.display = 'block';
   const el = document.getElementById('debugLog');
-  const line = document.createElement('div');
-  line.textContent = msg;
-  el.appendChild(line);
-  while (el.childNodes.length > 300) el.removeChild(el.firstChild);
+  // textarea用.value(純文字)累加, 不是像<pre>那樣塞子節點——textarea
+  // 是原生表單元件, 手機上長按一定會跳出標準的選取/複製選單, 不會
+  // 再有「JS硬選取一段文字, 但手機瀏覽器不理會、使用者連手動複製
+  // 都做不到」的問題(這是之前用<pre>+Range/Selection API的做法
+  // 實際發生過的狀況)。
+  const lines = el.value ? el.value.split('\n') : [];
+  lines.push(msg);
+  while (lines.length > 300) lines.shift();
+  el.value = lines.join('\n');
   el.scrollTop = el.scrollHeight;
 }
 function pruneStalePointers() {
@@ -2712,19 +2718,21 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
   });
 });
 document.getElementById('debugCopyBtn').addEventListener('click', async () => {
-  const text = document.getElementById('debugLog').innerText;
+  const textarea = document.getElementById('debugLog');
+  const text = textarea.value;
   try {
     await navigator.clipboard.writeText(text);
     setStatus('除錯訊息已複製到剪貼簿(' + text.split('\n').length + ' 行)');
   } catch (e) {
-    // 部分手機瀏覽器 clipboard API 權限不給用, 退而求其次: 選取文字
-    // 讓使用者自己長按複製。
-    const range = document.createRange();
-    range.selectNodeContents(document.getElementById('debugLog'));
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    setStatus('自動複製失敗, 已幫你選取文字, 請長按選取範圍手動複製');
+    // Clipboard API 常常在非HTTPS環境(例如純IP+port的區網位址)被
+    // 瀏覽器直接擋掉, 這裡失敗很正常。退而求其次: 對textarea呼叫
+    // .select() —— 這是原生表單元件的標準方法, 在幾乎所有手機
+    // 瀏覽器上都會正確選取全部內容並跳出長按複製選單, 不像之前
+    // 對<pre>用Range/Selection API硬選取, 手機瀏覽器常常不理會、
+    // 使用者連手動複製都做不到。
+    textarea.focus();
+    textarea.select();
+    setStatus('自動複製失敗(常見於非HTTPS環境), 已幫你選取好文字框內容, 長按選取範圍應該就能看到複製選項');
   }
 });
 document.getElementById('gridLabelSizeInput').addEventListener('input', (e) => {
