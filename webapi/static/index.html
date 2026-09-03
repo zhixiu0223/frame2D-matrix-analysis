@@ -1051,6 +1051,29 @@ function drawLoads(t) {
 // 支承反力視覺化: Solve過後在每個有支承的節點畫反力箭頭(方向+大小),
 // 顏色跟外力箭頭(紅色)區分開來用綠色, 這樣疊加在N/V/M/變形圖上時
 // 才看得出「這個內力/變形是靠哪些反力撐住的」, 不是只看得到外力。
+// 彎矩旋轉方向弧線: 跟 frame2d/plotting.py 的 _draw_moment_arc() 同一套
+// 慣例(m>0逆時針CCW畫↺, m<0順時針CW畫↻, 270度弧線+箭頭在末端)。這裡
+// 刻意先在「世界座標」用跟Python完全相同的角度公式算出弧線上的取樣點,
+// 再逐點丟給toScreen()轉成畫面座標——不要自己在畫面座標系裡重新推導
+// 順逆時針的公式, 因為畫面y軸是往下的(跟世界座標的y往上相反), 同一個
+// 角度增加方向在兩種座標系裡視覺上的旋轉方向會相反, 直接在世界座標算
+// 完再統一轉換, 才能保證跟Python那邊的視覺結果一致, 不用自己再判斷一次
+// 正負號怎麼補償這個座標系翻轉。
+function drawMomentArc(t, wx, wy, mValue, worldRadius, color) {
+  const [theta1, theta2] = mValue > 0 ? [-60, 210] : [210, -60];
+  const nPts = 24;
+  const pts = [];
+  for (let i = 0; i < nPts; i++) {
+    const theta = (theta1 + (theta2 - theta1) * i / (nPts - 1)) * Math.PI / 180;
+    pts.push(toScreen(wx + worldRadius * Math.cos(theta), wy + worldRadius * Math.sin(theta), t));
+  }
+  const d = 'M' + pts.map(p => p.join(',')).join(' L');
+  put(el('path', {d, fill: 'none', stroke: color, 'stroke-width': 1.5}));
+  const [tipX, tipY] = pts[pts.length - 1], [prevX, prevY] = pts[pts.length - 2];
+  const ang = Math.atan2(tipY - prevY, tipX - prevX) * 180 / Math.PI;
+  put(el('path', {d: 'M-6,-3.5 L0,0 L-6,3.5', transform: `translate(${tipX},${tipY}) rotate(${ang})`, fill: 'none', stroke: color, 'stroke-width': 1.5}));
+}
+
 function drawReactions(t) {
   if (!lastResult) return;
   const defs = el('defs', {});
@@ -1059,28 +1082,44 @@ function drawReactions(t) {
   defs.appendChild(marker);
   put(defs);
 
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  const momentRadius = worldDiag * 0.035;
+
   for (const nr of lastResult.nodes) {
-    const mag = Math.hypot(nr.Rx, nr.Ry);
+    const hasRx = Math.abs(nr.Rx) > 1e-6;
+    const hasRy = Math.abs(nr.Ry) > 1e-6;
     const hasM = Math.abs(nr.M) > 1e-6;
-    if (mag < 1e-6 && !hasM) continue;
+    if (!hasRx && !hasRy && !hasM) continue;
     const n = nodeById(nr.node);
     if (!n) continue;
     const [x, y] = toScreen(n.x, n.y, t);
-    if (mag > 1e-6) {
-      // 跟集中力箭頭同一套screen-space慣例: 箭頭指向反力實際作用的
-      // 方向, 箭頭尾巴在對面, 這樣兩種箭頭放在一起看方向的意義才
-      // 一致, 不會一種箭頭指著力的方向、另一種指著相反方向讓人混淆。
-      const ux = nr.Rx / mag, uy = -nr.Ry / mag;
-      const len = 42;
-      const x1 = x - ux * len, y1 = y - uy * len;
+    const len = 40;
+    // Rx/Ry 各自畫成獨立的水平/垂直分量箭頭(不合成單一斜向箭頭), 這樣
+    // 才是「大小+方向」的完整分量表示法, 不用另外標角度就能直接跟手算
+    // 對照;如果之後真的要疊一個合力向量, 那個合力箭頭本身還需要額外
+    // 標角度才算是完整向量, 不能只有大小。跟集中力箭頭同一套screen-
+    // space正負號慣例: 世界+x/+y方向的力, 箭頭尾巴在對面、箭頭指向
+    // 節點(力實際作用的方向)。
+    if (hasRx) {
+      const x1 = x - Math.sign(nr.Rx) * len, y1 = y;
       put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-      const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#059669', 'text-anchor': 'end'});
-      lbl.textContent = 'R=' + forceStr(mag, 1);
+      const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': 10, fill: '#059669', 'text-anchor': nr.Rx > 0 ? 'end' : 'start'});
+      lbl.textContent = 'Rx=' + forceStr(nr.Rx, 1);
+      put(lbl);
+    }
+    if (hasRy) {
+      const x1 = x, y1 = y + Math.sign(nr.Ry) * len;
+      put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
+      const lbl = el('text', {x: x1 + 6, y: y1 + (nr.Ry > 0 ? 3 : -3), 'font-size': 10, fill: '#059669', 'text-anchor': 'start'});
+      lbl.textContent = 'Ry=' + forceStr(nr.Ry, 1);
       put(lbl);
     }
     if (hasM) {
-      const lbl2 = el('text', {x: x + 10, y: y + 22, 'font-size': 9, fill: '#059669'});
-      lbl2.textContent = 'M=' + momentStr(nr.M, 1);
+      drawMomentArc(t, n.x, n.y, nr.M, momentRadius, '#059669');
+      const [mx, my] = toScreen(n.x + momentRadius * 1.4, n.y - momentRadius * 1.4, t);
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#059669'});
+      lbl2.textContent = 'M=' + momentStr(nr.M, 1) + (nr.M > 0 ? '↺' : '↻');
       put(lbl2);
     }
   }
@@ -1293,34 +1332,38 @@ function renderSectionManager() {
   const rows = model.sections.map((s, i) => {
     const useCount = model.members.filter(m => m.section === s.name).length;
     return `
-      <div style="border:1px solid #e5e7eb;border-radius:6px;padding:0.6rem;margin-bottom:0.6rem;">
-        <div class="row2">
+      <details class="dropdownSection">
+        <summary>${s.name} <span class="hint" style="margin:0;">(${useCount} 根桿件在用)</span></summary>
+        <div class="dropdownBody" style="display:block;">
+          <label>斷面名稱</label>
           <input id="sm_name_${i}" type="text" value="${s.name}">
-          <span class="hint" style="align-self:center;margin:0;">${useCount} 根桿件在用</span>
+          <div class="row3">
+            <div><label>E(${eu})</label><input id="sm_E_${i}" type="number" step="any" value="${fromSI('E', s.E)}"></div>
+            <div><label>I(${iu})</label><input id="sm_I_${i}" type="number" step="any" value="${fromSI('I', s.I)}"></div>
+            <div><label>A(${au})</label><input id="sm_A_${i}" type="number" step="any" value="${fromSI('A', s.A)}"></div>
+          </div>
+          <div class="row2" style="margin-top:0.3rem;">
+            <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
+            <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
+          </div>
         </div>
-        <div class="row3">
-          <div><label>E(${eu})</label><input id="sm_E_${i}" type="number" step="any" value="${fromSI('E', s.E)}"></div>
-          <div><label>I(${iu})</label><input id="sm_I_${i}" type="number" step="any" value="${fromSI('I', s.I)}"></div>
-          <div><label>A(${au})</label><input id="sm_A_${i}" type="number" step="any" value="${fromSI('A', s.A)}"></div>
-        </div>
-        <div class="row2" style="margin-top:0.3rem;">
-          <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
-          <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
-        </div>
-      </div>`;
+      </details>`;
   }).join('');
   panel.innerHTML = `<fieldset><legend>斷面管理(${model.sections.length} 個斷面)</legend>
-    <p class="hint">改名字或E/I/A之後要按「套用這個斷面的修改」才會生效; 改名字會自動把所有正在用這個斷面的桿件一起更新, 不用一根一根改。刪除只能刪「目前沒有任何桿件在用」的斷面, 避免刪掉正在用的斷面讓模型壞掉。</p>
+    <p class="hint">點開一個斷面才會看到它的內容。改名字或E/I/A之後要按「套用這個斷面的修改」才會生效; 改名字會自動把所有正在用這個斷面的桿件一起更新, 不用一根一根改。刪除只能刪「目前沒有任何桿件在用」的斷面, 避免刪掉正在用的斷面讓模型壞掉。</p>
     ${rows}
-    <hr>
-    <label>新增斷面</label>
-    <input id="sm_new_name" type="text" placeholder="新斷面名稱">
-    <div class="row3">
-      <input id="sm_new_E" type="number" step="any" placeholder="E(${eu})">
-      <input id="sm_new_I" type="number" step="any" placeholder="I(${iu})">
-      <input id="sm_new_A" type="number" step="any" placeholder="A(${au})">
-    </div>
-    <button id="sm_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面</button>
+    <details class="dropdownSection" style="margin-top:0.6rem;">
+      <summary>➕ 新增斷面</summary>
+      <div class="dropdownBody" style="display:block;">
+        <input id="sm_new_name" type="text" placeholder="新斷面名稱">
+        <div class="row3">
+          <input id="sm_new_E" type="number" step="any" placeholder="E(${eu})">
+          <input id="sm_new_I" type="number" step="any" placeholder="I(${iu})">
+          <input id="sm_new_A" type="number" step="any" placeholder="A(${au})">
+        </div>
+        <button id="sm_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面</button>
+      </div>
+    </details>
     <button id="sm_back" style="width:100%;margin-top:0.6rem;">返回</button>
   </fieldset>`;
 
@@ -1716,14 +1759,20 @@ function renderPropPanel() {
             <button id="p_sec_switch">套用這個斷面</button>
           </div>
 
-          <label>新增一個斷面(例如梁跟柱分開)</label>
-          <input id="p_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
-          <div class="row3">
-            <input id="p_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
-            <input id="p_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
-            <input id="p_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
-          </div>
-          <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
+          <button id="p_apply" style="width:100%;margin-top:0.6rem;background:#16a34a;color:white;">套用「基本設定」的修改(元素類型/釋放/斷面E,I,A)</button>
+
+          <details class="dropdownSection" style="margin-top:0.6rem;">
+            <summary>新增一個斷面(例如梁跟柱分開)</summary>
+            <div class="dropdownBody" style="display:block;">
+              <input id="p_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
+              <div class="row3">
+                <input id="p_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
+                <input id="p_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
+                <input id="p_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
+              </div>
+              <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
+            </div>
+          </details>
         </div>
       </details>
 
@@ -1812,8 +1861,7 @@ function renderPropPanel() {
         </div>
       </details>
 
-      <button id="p_apply" style="width:100%;margin-top:0.8rem;background:#16a34a;color:white;">套用「基本設定」的修改(元素類型/釋放/斷面E,I,A)</button>
-      <p class="hint" style="margin-top:0.2rem;">均佈載重跟集中力/彎矩已經各自用「新增」按鈕即時生效, 不用再按這裡。</p>
+      <p class="hint" style="margin-top:0.2rem;">均佈載重跟集中力/彎矩已經各自用「新增」按鈕即時生效, 「套用『基本設定』的修改」按鈕在最上面那個收合區塊裡。</p>
       <div class="row2" style="margin-top:0.4rem;">
         <button id="p_delete" style="background:#dc2626;color:white;">刪除桿件</button>
         <button id="p_cancel">取消</button>
