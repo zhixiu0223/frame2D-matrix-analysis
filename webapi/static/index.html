@@ -399,9 +399,17 @@ function getTransform(pad) {
     const outOfRange = cur.minX < cachedBBox.minX - marginX || cur.maxX > cachedBBox.maxX + marginX ||
                         cur.minY < cachedBBox.minY - marginY || cur.maxY > cachedBBox.maxY + marginY;
     if (outOfRange) {
-      // 注意: 這裡刻意不重置camera —— 使用者當下平移縮放到哪裡是
-      // 他自己的選擇, 只是重新配合底層的基準轉換, 不用強制把畫面
-      // 跳回原點。
+      // 這裡要重置camera回到原點/原倍率——上一版沒加這行, 結果如果
+      // 使用者之前已經手動平移縮放過畫面, 新節點加進去後底層的基準
+      // 轉換雖然重新配合了, 但camera還停在舊的平移縮放狀態、疊在
+      // 新的基準轉換上面, 兩者對不起來, 新節點可能還是不在畫面上
+      // ——這就是「畫面上說新增節點了, 卻完全看不到」的原因。
+      // 現在這裡的觸發條件已經改成只看model.nodes本身的座標範圍
+      // (currentNodeBBox), 完全不會被使用者平移畫面誤觸發, 所以
+      // 在這個分支重置camera是安全的, 不會又變回「一平移就跳回去」
+      // 那個問題。
+      camera = {x: 0, y: 0, k: 1};
+      applyCameraTransform();
       cachedTransform = computeTransform(pad);
       cachedTransformPad = pad;
       cachedBBox = cur;
