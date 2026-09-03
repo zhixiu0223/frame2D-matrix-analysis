@@ -196,6 +196,10 @@
           <div class="dropdownBody">
             <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
             <label class="snapLabel"><input type="checkbox" id="avoidLabelOverlapToggle" checked>避免數字重疊</label>
+            <label class="snapLabel">M圖畫在<select id="mDiagramSide" style="width:5.5rem;">
+              <option value="tension" selected>拉力側</option>
+              <option value="compression">壓力側</option>
+            </select></label>
             <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
             <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
           </div>
@@ -344,7 +348,15 @@ let camera = {x: 0, y: 0, k: 1};
 function computeTransform(pad) {
   if (pad === undefined) pad = 0.16;
   if (model.nodes.length === 0) {
-    return { scale: 40, cx: 0, cy: 0, sx: VB_W / 2, sy: VB_H / 2 };
+    // 空白模型(剛新建)的預設畫面: 原點(0,0)在左下角、留一點邊,
+    // 預設先看得到(10,10)這個範圍 —— 用跟一般結構一樣的「配合可視
+    // 範圍」算法, 只是套用一個虛擬的0~10邊界(外加1個單位當邊界的
+    // margin), 不用另外寫一套asymmetric的算法。
+    const minX = -1, maxX = 11, minY = -1, maxY = 11;
+    const w = maxX - minX, h = maxY - minY;
+    const availW = VB_W * (1 - 2 * pad), availH = VB_H * (1 - 2 * pad);
+    const scale = Math.min(availW / w, availH / h);
+    return { scale, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, sx: VB_W / 2, sy: VB_H / 2 };
   }
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -573,14 +585,14 @@ function render() {
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
-      drawSupports(t); drawLoads(t);
+      drawSupports(t); drawLoads(t); drawReactions(t);
       if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     }
     if (lastResult) drawDeformed(t); else drawNeedSolveMsg();
   } else {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
-      drawSupports(t); drawLoads(t);
+      drawSupports(t); drawLoads(t); drawReactions(t);
       if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     }
     if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
@@ -1031,6 +1043,44 @@ function drawLoads(t) {
 // 有寫進 model 但畫面上看不到任何東西, 讓人以為「沒有真的放上去」。
 // 用跟N/V/M圖同樣的畫法(沿桿件偏移一個跟強度成正比的量), 但偏移
 // 幅度比內力圖保守(0.08 vs 0.15), 避免跟結構線搶視覺焦點。
+// 支承反力視覺化: Solve過後在每個有支承的節點畫反力箭頭(方向+大小),
+// 顏色跟外力箭頭(紅色)區分開來用綠色, 這樣疊加在N/V/M/變形圖上時
+// 才看得出「這個內力/變形是靠哪些反力撐住的」, 不是只看得到外力。
+function drawReactions(t) {
+  if (!lastResult) return;
+  const defs = el('defs', {});
+  const marker = el('marker', {id: 'arrowhead-reaction', markerWidth: 8, markerHeight: 8, refX: 6, refY: 3, orient: 'auto'});
+  marker.appendChild(el('path', {d: 'M0,0 L6,3 L0,6 Z', fill: '#059669'}));
+  defs.appendChild(marker);
+  put(defs);
+
+  for (const nr of lastResult.nodes) {
+    const mag = Math.hypot(nr.Rx, nr.Ry);
+    const hasM = Math.abs(nr.M) > 1e-6;
+    if (mag < 1e-6 && !hasM) continue;
+    const n = nodeById(nr.node);
+    if (!n) continue;
+    const [x, y] = toScreen(n.x, n.y, t);
+    if (mag > 1e-6) {
+      // 跟集中力箭頭同一套screen-space慣例: 箭頭指向反力實際作用的
+      // 方向, 箭頭尾巴在對面, 這樣兩種箭頭放在一起看方向的意義才
+      // 一致, 不會一種箭頭指著力的方向、另一種指著相反方向讓人混淆。
+      const ux = nr.Rx / mag, uy = -nr.Ry / mag;
+      const len = 42;
+      const x1 = x - ux * len, y1 = y - uy * len;
+      put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
+      const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#059669', 'text-anchor': 'end'});
+      lbl.textContent = 'R=' + forceStr(mag, 1);
+      put(lbl);
+    }
+    if (hasM) {
+      const lbl2 = el('text', {x: x + 10, y: y + 22, 'font-size': 9, fill: '#059669'});
+      lbl2.textContent = 'M=' + momentStr(nr.M, 1);
+      put(lbl2);
+    }
+  }
+}
+
 function drawDistributedLoadIndicators(t) {
   if (!model.distributed_loads.length) return;
   let maxAbs = 1e-9;
@@ -1062,7 +1112,10 @@ function drawDistributedLoadIndicators(t) {
       const xi = x0 + (x1 - x0) * i / nSeg;
       const wi = w0 + (w1 - w0) * i / nSeg;
       const bx = ni.x + xi * c, by = ni.y + xi * s;
-      const off = wi * valueToWorld;
+      const off = -wi * valueToWorld; // 負號: 跟集中力箭頭同一套慣例(箭頭尾巴/散開區域在
+                                       // 力的方向"對面", 箭頭本身指向力實際作用的方向) ——
+                                       // 之前這裡沒加負號, 導致向下的均佈載重(w負值)畫出來
+                                       // 散開區域在梁下方、箭頭往上指, 方向整個反了。
       basePts.push(toScreen(bx, by, t));
       loadPts.push(toScreen(bx + perp[0] * off, by + perp[1] * off, t));
     }
@@ -1075,7 +1128,7 @@ function drawDistributedLoadIndicators(t) {
     }
     const [mx, my] = toScreen(ni.x + (x0 + x1) / 2 * c, ni.y + (x0 + x1) / 2 * s, t);
     const lbl = el('text', {x: mx, y: my - 6, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'middle'});
-    lbl.textContent = (w0 === w1 ? w0 : `${w0}~${w1}`) + 'N/m';
+    lbl.textContent = (w0 === w1 ? forceStr(w0) : `${fromSI('force', w0).toFixed(2)}~${fromSI('force', w1).toFixed(2)}${unitOf('force')}`) + '/m';
     put(lbl);
   }
 }
@@ -1177,7 +1230,7 @@ function drawDiagram(t, kind) {
   const tryPlace = makeLabelPlacer(24);
 
   const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
-  lbl.textContent = `${kind} 圖 (最大值 ${strFn(maxAbs)})` + (kind === 'M' ? ' — 畫在拉力側' : '');
+  lbl.textContent = `${kind} 圖 (最大值 ${strFn(maxAbs)})` + (kind === 'M' ? (document.getElementById('mDiagramSide').value === 'compression' ? ' — 畫在壓力側' : ' — 畫在拉力側') : '');
   putOverlay(lbl);
 
   for (const m of model.members) {
@@ -1192,8 +1245,11 @@ function drawDiagram(t, kind) {
       const bx = ni.x + d.x[i] * c;
       const by = ni.y + d.x[i] * s;
       // 跟 plotting.py 的 plot_diagram() 同一套偏移方向(- perp * value),
-      // 已經跟 SW FEA 對照驗證過; M 圖此慣例下會畫在拉力側。
-      const val = d[kind][i] * valueToWorld;
+      // 已經跟 SW FEA 對照驗證過; M 圖此慣例下預設會畫在拉力側。
+      // 如果「M圖畫在」設定選壓力側, 這裡整個符號反過來(只影響M圖,
+      // N圖/V圖不受影響)。
+      const flip = (kind === 'M' && document.getElementById('mDiagramSide').value === 'compression') ? -1 : 1;
+      const val = d[kind][i] * valueToWorld * flip;
       const ox = bx - perp[0] * val, oy = by - perp[1] * val;
       basePts.push(toScreen(bx, by, t));
       diagPts.push(toScreen(ox, oy, t));
@@ -1868,10 +1924,38 @@ function renderPropPanel() {
     model.distributed_loads.filter(d => d.member === m.id).forEach((d, i) => {
       const btn = document.getElementById('dl_del_' + i);
       if (btn) btn.onclick = () => { model.distributed_loads = model.distributed_loads.filter(x => x !== d); renderPropPanel(); render(); };
+      const editBtn = document.getElementById('dl_edit_' + i);
+      if (editBtn) editBtn.onclick = () => {
+        // 「編輯」= 把這筆資料的值填回上面的新增表單、同時移除這筆
+        // 舊資料 —— 改完再按一次「新增均佈載重」就等於更新, 不用
+        // 另外做一套獨立的編輯/儲存流程。
+        document.getElementById('dl_x0').value = d.x_start ?? '';
+        document.getElementById('dl_x1').value = d.x_end ?? '';
+        document.getElementById('dl_w0').value = fromSI('force', d.w_start);
+        document.getElementById('dl_w1').value = (d.w_end !== undefined && d.w_end !== null) ? fromSI('force', d.w_end) : '';
+        document.getElementById('dl_dir').value = (d.direction === 'local') ? 'local' : 'vertical';
+        model.distributed_loads = model.distributed_loads.filter(x => x !== d);
+        renderPropPanel();
+        render();
+        setStatus('已載入這筆均佈載重到下面的表單, 改完按「新增均佈載重」套用');
+      };
     });
     model.member_point_loads.filter(p => p.member === m.id).forEach((p, i) => {
       const btn = document.getElementById('mp_del_' + i);
       if (btn) btn.onclick = () => { model.member_point_loads = model.member_point_loads.filter(x => x !== p); renderPropPanel(); render(); };
+      const editBtn = document.getElementById('mp_edit_' + i);
+      if (editBtn) editBtn.onclick = () => {
+        const [fx, fy] = memberPointLoadFxFy(p);
+        document.getElementById('mp_mode').value = 'absolute';
+        document.getElementById('mp_value').value = p.a;
+        document.getElementById('mp_fx').value = fromSI('force', fx);
+        document.getElementById('mp_fy').value = fromSI('force', fy);
+        document.getElementById('mp_m').value = fromSI('moment', p.m || 0);
+        model.member_point_loads = model.member_point_loads.filter(x => x !== p);
+        renderPropPanel();
+        render();
+        setStatus('已載入這筆集中力/彎矩到下面的表單, 改完按「新增集中力/彎矩」套用');
+      };
     });
   }
 }
@@ -1885,8 +1969,9 @@ function renderDistLoadList(memberId) {
   const list = model.distributed_loads.filter(d => d.member === memberId);
   if (!list.length) return '<p class="hint">目前沒有均佈載重。</p>';
   const fu = unitOf('force');
-  return `<table><thead><tr><th>範圍</th><th>w1(${fu}/m)</th><th>w2(${fu}/m)</th><th>方向</th><th></th></tr></thead><tbody>` +
+  return `<table><thead><tr><th>範圍</th><th>w1(${fu}/m)</th><th>w2(${fu}/m)</th><th>方向</th><th></th><th></th></tr></thead><tbody>` +
     list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${fromSI('force', d.w_start).toFixed(2)}</td><td>${fromSI('force', d.w_end ?? d.w_start).toFixed(2)}</td><td>${distLoadDirLabel(d)}</td>
+      <td><button id="dl_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
       <td><button id="dl_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
     '</tbody></table>';
 }
@@ -1894,10 +1979,11 @@ function renderMemberPointLoadList(memberId) {
   const list = model.member_point_loads.filter(p => p.member === memberId);
   if (!list.length) return '<p class="hint">目前沒有桿件集中力/彎矩。</p>';
   const fu = unitOf('force'), mu = unitOf('moment');
-  return `<table><thead><tr><th>位置x</th><th>fx(${fu})</th><th>fy(${fu})</th><th>m(${mu})</th><th></th></tr></thead><tbody>` +
+  return `<table><thead><tr><th>位置x</th><th>fx(${fu})</th><th>fy(${fu})</th><th>m(${mu})</th><th></th><th></th></tr></thead><tbody>` +
     list.map((p, i) => {
       const [fx, fy] = memberPointLoadFxFy(p);
       return `<tr><td>${p.a.toFixed(2)}</td><td>${fromSI('force', fx).toFixed(2)}</td><td>${fromSI('force', fy).toFixed(2)}</td><td>${fromSI('moment', p.m||0).toFixed(2)}</td>
+      <td><button id="mp_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
       <td><button id="mp_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`;
     }).join('') +
     '</tbody></table>';
@@ -2015,8 +2101,8 @@ function splitMemberAtInternalPin(m, mode, value) {
 let lastActiveNodeId = null;
 
 function currentGridStep() {
-  const xs = model.nodes.length ? model.nodes.map(n => n.x) : [-5, 5];
-  const ys = model.nodes.length ? model.nodes.map(n => n.y) : [-5, 5];
+  const xs = model.nodes.length ? model.nodes.map(n => n.x) : [0, 10];
+  const ys = model.nodes.length ? model.nodes.map(n => n.y) : [0, 10];
   const w = (Math.max(...xs) - Math.min(...xs)) || 1, h = (Math.max(...ys) - Math.min(...ys)) || 1;
   return niceStep(Math.max(w, h) / 8);
 }
@@ -2275,6 +2361,7 @@ document.getElementById('showGridToggle').addEventListener('change', render);
 document.getElementById('overlayLoadsToggle').addEventListener('change', render);
 document.getElementById('overlayDimsToggle').addEventListener('change', render);
 document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
+document.getElementById('mDiagramSide').addEventListener('change', render);
 ['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
