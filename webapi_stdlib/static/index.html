@@ -202,6 +202,15 @@
             </select></label>
             <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
             <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
+            <label class="snapLabel" style="width:100%;">集中力圖示大小<input type="range" id="pointLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="pointLoadScaleVal">1.0x</span></label>
+            <label class="snapLabel" style="width:100%;">均佈載重圖示大小<input type="range" id="distLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="distLoadScaleVal">1.0x</span></label>
+            <div class="row2" style="width:100%;margin-top:0.4rem;">
+              <button id="btnExportSettings" style="width:auto;">⬇ 匯出顯示設定</button>
+              <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;width:auto;margin:0;">
+                ⬆ 匯入顯示設定<input id="importSettingsFile" type="file" accept="application/json" style="display:none;">
+              </label>
+            </div>
+            <p class="hint" style="width:100%;">所有顯示設定(格線/單位/圖示大小等)會自動存在這個瀏覽器裡, 下次打開不用重調; 換裝置或清瀏覽器資料前, 記得先匯出備份, 之後可以匯入回來。</p>
           </div>
         </details>
         <details class="dropdownSection">
@@ -1018,6 +1027,97 @@ function drawSupports(t) {
   }
 }
 
+// 集中力/均佈載重的視覺縮放係數: 從「顯示設定」裡的兩條滑桿讀取,
+// 各自獨立(集中力箭頭長度 vs 均佈載重的鼓出量用不同的滑桿控制),
+// 預設都是1.0倍(跟原本沒加這個功能之前的視覺大小完全一樣)。
+// ---------- 顯示設定持久化: 自動存在瀏覽器本機(localStorage), 下次
+// 打開不用重調; 同時提供匯出/匯入JSON, 換裝置或想備份的時候可以用
+// (兩種方式同時具備, 不是二選一) ----------
+const DISPLAY_SETTING_IDS = [
+  {id: 'showGridToggle', kind: 'checkbox'},
+  {id: 'avoidLabelOverlapToggle', kind: 'checkbox'},
+  {id: 'mDiagramSide', kind: 'value'},
+  {id: 'gridLabelSizeInput', kind: 'value'},
+  {id: 'pointLoadScale', kind: 'value'},
+  {id: 'distLoadScale', kind: 'value'},
+  {id: 'overlayLoadsToggle', kind: 'checkbox'},
+  {id: 'overlayDimsToggle', kind: 'checkbox'},
+  {id: 'unitE', kind: 'value'},
+  {id: 'unitI', kind: 'value'},
+  {id: 'unitA', kind: 'value'},
+  {id: 'unitDisp', kind: 'value'},
+  {id: 'unitForce', kind: 'value'},
+  {id: 'unitMoment', kind: 'value'},
+];
+function collectDisplaySettings() {
+  const out = {};
+  for (const {id, kind} of DISPLAY_SETTING_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    out[id] = kind === 'checkbox' ? el.checked : el.value;
+  }
+  return out;
+}
+function applyDisplaySettings(settings) {
+  for (const {id, kind} of DISPLAY_SETTING_IDS) {
+    const el = document.getElementById(id);
+    if (!el || !(id in settings)) continue;
+    if (kind === 'checkbox') el.checked = settings[id];
+    else el.value = settings[id];
+  }
+  // 滑桿旁邊顯示倍率的文字是連動的, 套用完設定後要手動同步一次,
+  // 不然滑桿位置換了但旁邊的文字還停在舊數字。
+  document.getElementById('pointLoadScaleVal').textContent = parseFloat(document.getElementById('pointLoadScale').value).toFixed(1) + 'x';
+  document.getElementById('distLoadScaleVal').textContent = parseFloat(document.getElementById('distLoadScale').value).toFixed(1) + 'x';
+}
+const DISPLAY_SETTINGS_KEY = 'frame2d_display_settings';
+function saveDisplaySettingsToLocalStorage() {
+  try { localStorage.setItem(DISPLAY_SETTINGS_KEY, JSON.stringify(collectDisplaySettings())); }
+  catch (e) { /* localStorage不可用(例如無痕模式關掉了)時靜默失敗, 不影響其他功能正常運作 */ }
+}
+function loadDisplaySettingsFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem(DISPLAY_SETTINGS_KEY);
+    if (raw) applyDisplaySettings(JSON.parse(raw));
+  } catch (e) { /* 忽略讀取失敗或壞掉的資料, 直接用預設值 */ }
+}
+// 每個設定控制項變動時, 除了原本各自的render()監聽器(已經存在,
+// 這裡不重複加), 統一再多加一個「存進localStorage」的監聽, 不用去
+// 每個既有的監聽器裡塞這行。range滑桿用input事件(拖曳中就即時存),
+// 其他用change事件。
+DISPLAY_SETTING_IDS.forEach(({id}) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener(el.type === 'range' ? 'input' : 'change', saveDisplaySettingsToLocalStorage);
+});
+document.getElementById('btnExportSettings').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(collectDisplaySettings(), null, 2)], {type: 'application/json'});
+  downloadBlob(blob, 'frame2d_display_settings.json');
+});
+document.getElementById('importSettingsFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const settings = JSON.parse(reader.result);
+      applyDisplaySettings(settings);
+      saveDisplaySettingsToLocalStorage();
+      render();
+      setStatus('已匯入顯示設定');
+    } catch (err) {
+      setStatus('匯入失敗: 檔案不是有效的JSON格式');
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+loadDisplaySettingsFromLocalStorage(); // 頁面一打開就先套用上次存的設定, 要在第一次render()之前
+
+function loadIconScale(kind) {
+  const id = kind === 'point' ? 'pointLoadScale' : 'distLoadScale';
+  return parseFloat(document.getElementById(id).value) || 1;
+}
 function drawLoads(t) {
   const defs = el('defs', {});
   const marker = el('marker', {id: 'arrowhead', markerWidth: 8, markerHeight: 8, refX: 6, refY: 3, orient: 'auto'});
@@ -1032,7 +1132,7 @@ function drawLoads(t) {
     if (mag < 1e-9) continue;
     const [x, y] = toScreen(n.x, n.y, t);
     const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
-    const len = 42;
+    const len = 42 * loadIconScale('point');
     const x1 = x - ux * len, y1 = y - uy * len;
     put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
@@ -1133,7 +1233,7 @@ function drawDistributedLoadIndicators(t) {
   }
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
-  const valueToWorld = (worldDiag * 0.08) / maxAbs;
+  const valueToWorld = (worldDiag * 0.08 * loadIconScale('dist')) / maxAbs;
 
   for (const d of model.distributed_loads) {
     const m = model.members.find(mm => mm.id === d.member);
@@ -1199,7 +1299,7 @@ function drawMemberPointLoadIndicators(t) {
       continue;
     }
     const ux = pfx / mag, uy = -pfy / mag;
-    const len = 36;
+    const len = 36 * loadIconScale('point');
     put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
     lbl.textContent = forceStr(mag, 1);
@@ -1500,14 +1600,18 @@ function renderBatchMemberEditForm(memberIds) {
     </select>
     <div class="row2"><button id="be_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="be_back">返回</button></div>
 
-    <label style="margin-top:0.8rem;">或者新增一個斷面直接套用到這批桿件(例如選一排柱子, 一次建立col_sec)</label>
-    <input id="be_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
-    <div class="row3">
-      <input id="be_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
-      <input id="be_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
-      <input id="be_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
-    </div>
-    <button id="be_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這批桿件</button>
+    <details class="dropdownSection" style="margin-top:0.6rem;">
+      <summary>或者新增一個斷面直接套用到這批桿件(例如選一排柱子, 一次建立col_sec)</summary>
+      <div class="dropdownBody" style="display:block;">
+        <input id="be_sec_new_name" type="text" placeholder="新斷面名稱, 例如 col_sec">
+        <div class="row3">
+          <input id="be_sec_new_E" type="number" step="any" placeholder="E(${unitOf('E')})">
+          <input id="be_sec_new_I" type="number" step="any" placeholder="I(${unitOf('I')})">
+          <input id="be_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
+        </div>
+        <button id="be_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這批桿件</button>
+      </div>
+    </details>
   </fieldset>`;
   document.getElementById('be_back').onclick = renderMultiSelectPanel;
   document.getElementById('be_sec_new_add').onclick = () => {
@@ -2415,6 +2519,14 @@ document.getElementById('overlayLoadsToggle').addEventListener('change', render)
 document.getElementById('overlayDimsToggle').addEventListener('change', render);
 document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
 document.getElementById('mDiagramSide').addEventListener('change', render);
+document.getElementById('pointLoadScale').addEventListener('input', () => {
+  document.getElementById('pointLoadScaleVal').textContent = parseFloat(document.getElementById('pointLoadScale').value).toFixed(1) + 'x';
+  render();
+});
+document.getElementById('distLoadScale').addEventListener('input', () => {
+  document.getElementById('distLoadScaleVal').textContent = parseFloat(document.getElementById('distLoadScale').value).toFixed(1) + 'x';
+  render();
+});
 ['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
