@@ -200,14 +200,18 @@
               <option value="tension" selected>拉力側</option>
               <option value="compression">壓力側</option>
             </select></label>
+            <label class="snapLabel">支承反力顯示<select id="reactionDisplayMode" style="width:7rem;">
+              <option value="components" selected>分量(Rx/Ry分開)</option>
+              <option value="resultant">合量+角度</option>
+            </select></label>
             <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
             <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
             <label class="snapLabel" style="width:100%;">集中力圖示大小<input type="range" id="pointLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="pointLoadScaleVal">1.0x</span></label>
             <label class="snapLabel" style="width:100%;">均佈載重圖示大小<input type="range" id="distLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="distLoadScaleVal">1.0x</span></label>
             <div class="row2" style="width:100%;margin-top:0.4rem;">
-              <button id="btnExportSettings" style="width:auto;">⬇ 匯出顯示設定</button>
+              <button id="btnExportSettings" style="width:auto;">⬇ Export 顯示設定</button>
               <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;width:auto;margin:0;">
-                ⬆ 匯入顯示設定<input id="importSettingsFile" type="file" accept="application/json" style="display:none;">
+                ⬆ Import 顯示設定<input id="importSettingsFile" type="file" accept="application/json" style="display:none;">
               </label>
             </div>
             <p class="hint" style="width:100%;">所有顯示設定(格線/單位/圖示大小等)會自動存在這個瀏覽器裡, 下次打開不用重調; 換裝置或清瀏覽器資料前, 記得先匯出備份, 之後可以匯入回來。</p>
@@ -1037,6 +1041,7 @@ const DISPLAY_SETTING_IDS = [
   {id: 'showGridToggle', kind: 'checkbox'},
   {id: 'avoidLabelOverlapToggle', kind: 'checkbox'},
   {id: 'mDiagramSide', kind: 'value'},
+  {id: 'reactionDisplayMode', kind: 'value'},
   {id: 'gridLabelSizeInput', kind: 'value'},
   {id: 'pointLoadScale', kind: 'value'},
   {id: 'distLoadScale', kind: 'value'},
@@ -1195,25 +1200,41 @@ function drawReactions(t) {
     if (!n) continue;
     const [x, y] = toScreen(n.x, n.y, t);
     const len = 40;
-    // Rx/Ry 各自畫成獨立的水平/垂直分量箭頭(不合成單一斜向箭頭), 這樣
-    // 才是「大小+方向」的完整分量表示法, 不用另外標角度就能直接跟手算
-    // 對照;如果之後真的要疊一個合力向量, 那個合力箭頭本身還需要額外
-    // 標角度才算是完整向量, 不能只有大小。跟集中力箭頭同一套screen-
-    // space正負號慣例: 世界+x/+y方向的力, 箭頭尾巴在對面、箭頭指向
-    // 節點(力實際作用的方向)。
-    if (hasRx) {
-      const x1 = x - Math.sign(nr.Rx) * len, y1 = y;
-      put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-      const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': 10, fill: '#059669', 'text-anchor': nr.Rx > 0 ? 'end' : 'start'});
-      lbl.textContent = 'Rx=' + forceStr(nr.Rx, 1);
-      put(lbl);
-    }
-    if (hasRy) {
-      const x1 = x, y1 = y + Math.sign(nr.Ry) * len;
-      put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-      const lbl = el('text', {x: x1 + 6, y: y1 + (nr.Ry > 0 ? 3 : -3), 'font-size': 10, fill: '#059669', 'text-anchor': 'start'});
-      lbl.textContent = 'Ry=' + forceStr(nr.Ry, 1);
-      put(lbl);
+    const reactionMode = document.getElementById('reactionDisplayMode').value;
+    if (reactionMode === 'resultant') {
+      // 合量+角度: 疊成單一斜向箭頭, 這樣才算「完整向量」(大小+角度),
+      // 角度用跟frame2d其他angle_deg參數同一套慣例(標準數學慣例,
+      // 0度=+x方向, 逆時針為正)。
+      if (hasRx || hasRy) {
+        const mag = Math.hypot(nr.Rx, nr.Ry);
+        const angleDeg = Math.atan2(nr.Ry, nr.Rx) * 180 / Math.PI;
+        const ux = nr.Rx / mag, uy = -nr.Ry / mag;
+        const x1 = x - ux * len, y1 = y - uy * len;
+        put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
+        const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#059669', 'text-anchor': 'end'});
+        lbl.textContent = 'R=' + forceStr(mag, 1) + ' ∠' + angleDeg.toFixed(1) + '°';
+        put(lbl);
+      }
+    } else {
+      // 分量(預設): Rx/Ry 各自畫成獨立的水平/垂直分量箭頭(不合成單一
+      // 斜向箭頭), 這樣才是「大小+方向」的完整分量表示法, 不用另外
+      // 標角度就能直接跟手算對照。跟集中力箭頭同一套screen-space
+      // 正負號慣例: 世界+x/+y方向的力, 箭頭尾巴在對面、箭頭指向節點
+      // (力實際作用的方向)。
+      if (hasRx) {
+        const x1 = x - Math.sign(nr.Rx) * len, y1 = y;
+        put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
+        const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': 10, fill: '#059669', 'text-anchor': nr.Rx > 0 ? 'end' : 'start'});
+        lbl.textContent = 'Rx=' + forceStr(nr.Rx, 1);
+        put(lbl);
+      }
+      if (hasRy) {
+        const x1 = x, y1 = y + Math.sign(nr.Ry) * len;
+        put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
+        const lbl = el('text', {x: x1 + 6, y: y1 + (nr.Ry > 0 ? 3 : -3), 'font-size': 10, fill: '#059669', 'text-anchor': 'start'});
+        lbl.textContent = 'Ry=' + forceStr(nr.Ry, 1);
+        put(lbl);
+      }
     }
     if (hasM) {
       drawMomentArc(t, n.x, n.y, nr.M, momentRadius, '#059669');
@@ -2530,6 +2551,7 @@ document.getElementById('overlayLoadsToggle').addEventListener('change', render)
 document.getElementById('overlayDimsToggle').addEventListener('change', render);
 document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
 document.getElementById('mDiagramSide').addEventListener('change', render);
+document.getElementById('reactionDisplayMode').addEventListener('change', render);
 document.getElementById('pointLoadScale').addEventListener('input', () => {
   document.getElementById('pointLoadScaleVal').textContent = parseFloat(document.getElementById('pointLoadScale').value).toFixed(1) + 'x';
   render();
