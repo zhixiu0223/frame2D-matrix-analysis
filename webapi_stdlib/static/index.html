@@ -1244,12 +1244,23 @@ function drawDistributedLoadIndicators(t) {
     const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
     const c = Math.cos(angle), s = Math.sin(angle);
     let perp;
-    if (d.direction === 'global_y') perp = [0, 1];
+    // signFlip: 'global_y' 這個方向類型在後端(frame2d/dofmanager.py)固定用
+    // (0, -w) 當實際力向量, 也就是「w正值=向下」; 而'global'+angle_deg跟
+    // 'local'這兩種是直接用 w*perp 當力向量, 「w正值=沿perp方向」——兩者
+    // 對「w正值」的意義剛好相反。這裡統一先把signFlip吃掉這個差異, 讓
+    // 後面「off = -w*valueToWorld」這條偏移公式對三種方向類型都能套用
+    // 同一套, 不用每種方向各自寫一套偏移公式。
+    let signFlip = 1;
+    if (d.direction === 'global_y') { perp = [0, 1]; signFlip = -1; }
     else if (d.direction === 'global') { const a = (d.angle_deg || 0) * Math.PI / 180; perp = [Math.cos(a), Math.sin(a)]; }
     else perp = [-s, c]; // local: 垂直於桿件本身
     const x0 = (d.x_start !== undefined && d.x_start !== null) ? d.x_start : 0;
     const x1 = (d.x_end !== undefined && d.x_end !== null) ? d.x_end : L;
-    const w0 = d.w_start, w1 = (d.w_end !== undefined && d.w_end !== null) ? d.w_end : d.w_start;
+    // rawW0/rawW1: 使用者實際輸入的值(給標籤文字用, 不能被signFlip影響,
+    // 不然畫面上顯示的數字會跟使用者輸入的對不上); w0/w1: 套過signFlip
+    // 之後、真正拿去算幾何偏移方向用的值。
+    const rawW0 = d.w_start, rawW1 = (d.w_end !== undefined && d.w_end !== null) ? d.w_end : d.w_start;
+    const w0 = rawW0 * signFlip, w1 = rawW1 * signFlip;
     const nSeg = 6;
     let basePts = [], loadPts = [];
     for (let i = 0; i <= nSeg; i++) {
@@ -1272,7 +1283,7 @@ function drawDistributedLoadIndicators(t) {
     }
     const [mx, my] = toScreen(ni.x + (x0 + x1) / 2 * c, ni.y + (x0 + x1) / 2 * s, t);
     const lbl = el('text', {x: mx, y: my - 6, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'middle'});
-    lbl.textContent = (w0 === w1 ? forceStr(w0) : `${fromSI('force', w0).toFixed(2)}~${fromSI('force', w1).toFixed(2)}${unitOf('force')}`) + '/m';
+    lbl.textContent = (rawW0 === rawW1 ? forceStr(rawW0) : `${fromSI('force', rawW0).toFixed(2)}~${fromSI('force', rawW1).toFixed(2)}${unitOf('force')}`) + '/m';
     put(lbl);
   }
 }
