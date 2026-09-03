@@ -911,7 +911,14 @@ function drawNodes(t) {
     const sel = selected && selected.type === 'node' && selected.id === n.id;
     const inMulti = multiSelection && multiSelection.nodeIds.includes(n.id);
     const c = el('circle', {cx: x, cy: y, r: 6, class: 'node-circle' + (sel ? ' selected' : '') + (inMulti ? ' multi-selected' : '')});
-    c.addEventListener('pointerdown', (e) => {
+    put(c);
+    // 真正看得到的圓點半徑只有6px, 手機上等於米粒大小, 縮小一點的
+    // 結構圖幾乎點不到。這裡疊一個看不見(fill:transparent, 不是
+    // fill:none —— none不會接收觸控事件)但範圍大很多的熱區圓
+    // (半徑18px)在上層接收所有觸控, 不用把畫面放到很大才點得到
+    // 節點, 視覺上還是看到原本那個小圓點, 不會變醜。
+    const hit = el('circle', {cx: x, cy: y, r: 18, fill: 'transparent', style: 'cursor:pointer;'});
+    hit.addEventListener('pointerdown', (e) => {
       if (selectMode) return; // 選取模式下, 節點自己的拖曳/點擊都讓給背景的方框/直線選取處理
       e.stopPropagation();
       // 兩段式互動, 避免點擊跟拖曳互相衝突: 第一下點擊「永遠」只負責
@@ -935,7 +942,7 @@ function drawNodes(t) {
       dragStartScreen = clientToCameraSpace(e);
       svg.setPointerCapture(e.pointerId);
     });
-    put(c);
+    put(hit);
     const lbl = el('text', {x: x + 9, y: y - 9, class: 'node-label'});
     lbl.textContent = 'N' + n.id;
     put(lbl);
