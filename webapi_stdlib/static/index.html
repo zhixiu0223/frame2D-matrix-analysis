@@ -657,6 +657,7 @@ function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
   const t = getTransform(PAD_BY_VIEW[viewMode]);
+  debugLog(`RENDER nodes=${model.nodes.length} ${model.nodes.map(n=>`N${n.id}(${n.x},${n.y})`).join(',')} | t={scale:${t.scale.toFixed(2)},cx:${t.cx.toFixed(2)},cy:${t.cy.toFixed(2)}} | camera={x:${camera.x.toFixed(1)},y:${camera.y.toFixed(1)},k:${camera.k.toFixed(2)}}`);
   if (document.getElementById('showGridToggle').checked) drawGrid(t);
 
   if (viewMode === 'structure') {
@@ -2529,6 +2530,7 @@ svg.addEventListener('pointerdown', (e) => {
     const newId = Math.max(-1, ...model.nodes.map(n => n.id)) + 1;
     model.nodes.push({id: newId, x: snapped.x, y: snapped.y});
     lastActiveNodeId = newId;
+    debugLog(`ADDNODE tap-world=(${wx.toFixed(2)},${wy.toFixed(2)}) snapped=(${snapped.x},${snapped.y}) t={scale:${t.scale.toFixed(2)},cx:${t.cx.toFixed(2)},cy:${t.cy.toFixed(2)}}`);
     setStatus('新增節點 N' + newId);
     render();
     return;
