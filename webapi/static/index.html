@@ -347,11 +347,16 @@ let camera = {x: 0, y: 0, k: 1};
 // ---------- 世界座標 <-> 畫布座標(computeTransform) ----------
 function computeTransform(pad) {
   if (pad === undefined) pad = 0.16;
-  if (model.nodes.length === 0) {
-    // 空白模型(剛新建)的預設畫面: 原點(0,0)在左下角、留一點邊,
-    // 預設先看得到(10,10)這個範圍 —— 用跟一般結構一樣的「配合可視
-    // 範圍」算法, 只是套用一個虛擬的0~10邊界(外加1個單位當邊界的
-    // margin), 不用另外寫一套asymmetric的算法。
+  if (model.nodes.length <= 1) {
+    // 0個節點(空白模型)或剛好1個節點時, 統一用同一套固定的虛擬
+    // 0~10範圍當基準(原點在左下角留一點邊, 預設看得到10,10)——
+    // 兩種情況共用完全相同的算法跟結果, 是刻意的: 如果只有1個節點
+    // 時改成「配合這一個點」重新計算範圍, 這個點會變成一個只有
+    // 1x1大小的極小基準(單一點沒有寬高), 導致放下第一個節點的
+    // 瞬間畫面基準從「虛擬0~10大範圍」突然跳到「緊貼這一點的超小
+        // 範圍」, 造成使用者形容的「畫面突然移動、要滑回來」的不穩定感。
+    // 統一維持同一個基準, 直到第2個節點出現、有真正的結構範圍可以
+    // 依據時, 才開始正常的自動配合可視範圍。
     const minX = -1, maxX = 11, minY = -1, maxY = 11;
     const w = maxX - minX, h = maxY - minY;
     const availW = VB_W * (1 - 2 * pad), availH = VB_H * (1 - 2 * pad);
@@ -2101,8 +2106,8 @@ function splitMemberAtInternalPin(m, mode, value) {
 let lastActiveNodeId = null;
 
 function currentGridStep() {
-  const xs = model.nodes.length ? model.nodes.map(n => n.x) : [0, 10];
-  const ys = model.nodes.length ? model.nodes.map(n => n.y) : [0, 10];
+  const xs = model.nodes.length > 1 ? model.nodes.map(n => n.x) : [0, 10];
+  const ys = model.nodes.length > 1 ? model.nodes.map(n => n.y) : [0, 10];
   const w = (Math.max(...xs) - Math.min(...xs)) || 1, h = (Math.max(...ys) - Math.min(...ys)) || 1;
   return niceStep(Math.max(w, h) / 8);
 }

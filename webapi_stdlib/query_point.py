@@ -33,8 +33,17 @@ def query_point(f, result, member_id: int, mode: str, value: float, n_sample: in
     M_q = float(np.interp(x_query, x, M))
 
     X, Y = member_deformed_shape(f, result, member_id, scale=1.0, n=n_sample)
-    Xd = float(np.interp(x_query, x, X))
-    Yd = float(np.interp(x_query, x, Y))
+    # 注意: member_deformed_shape() 內部固定用 np.linspace(0, L, n_sample)
+    # 這個均勻網格回傳X/Y(見postprocess.py內的實作, 它自己會把可能疏密不均
+    # 的計算過程對齊回這個均勻網格)。不能拿上面那個x(來自
+    # member_internal_forces, 為了讓局部段載重/桿件集中力邊界的跳躍能畫成
+    # 真正的垂直線, 會在邊界附近多插入取樣點, 長度可能超過n_sample)去對
+    # X/Y做內插——兩個陣列長度對不上, numpy會直接丟
+    # "fp and xp are not of the same length" 這種很難懂的錯誤。改用
+    # 跟member_deformed_shape內部同一份均勻網格。
+    x_uniform = np.linspace(0.0, L, n_sample)
+    Xd = float(np.interp(x_query, x_uniform, X))
+    Yd = float(np.interp(x_query, x_uniform, Y))
 
     angle = math.atan2(nj.y - ni.y, nj.x - ni.x)
     ox = ni.x + x_query * math.cos(angle)
