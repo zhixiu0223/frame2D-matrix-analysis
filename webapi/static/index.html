@@ -378,36 +378,43 @@ let camera = {x: 0, y: 0, k: 1};
 // 重算, 建模過程中新增/移動節點不會再讓畫面自己亂動。
 let cachedTransform = null;
 let cachedTransformPad = null;
+let cachedBBox = null; // 上次配合可視範圍時, 結構本身的節點座標範圍(不受camera平移縮放影響)
 function getTransform(pad) {
   if (!cachedTransform || cachedTransformPad !== pad) {
     cachedTransform = computeTransform(pad);
     cachedTransformPad = pad;
-  } else if (model.nodes.length > 0) {
-    // 上一輪為了解決「建模時畫面一直亂跳」, 改成快取轉換、平常不會
-    // 自動重算——但這樣完全凍結之後, 如果新增/拖動的節點剛好落在
-    // 目前快取視角的範圍外面, 會變成「東西畫了, 但完全看不到」,
-    // 使用者以為新增失敗。這裡在兩者之間抓平衡: 每次要用快取轉換
-    // 之前, 先用「目前這份快取轉換算出來的實際可視世界範圍」
-    // (visibleWorldRect已經有把camera平移縮放算進去)檢查現在
-        // 所有節點是不是都還在範圍內, 只有「真的超出範圍」才重算,
-    // 平常穩定不動的一般編輯操作(在可視範圍內新增/移動節點)不受
-    // 影響, 不會又變回一直亂跳。
-    const vis = visibleWorldRect(cachedTransform);
-    const marginX = (vis.maxX - vis.minX) * 0.05, marginY = (vis.maxY - vis.minY) * 0.05;
-    const outOfRange = model.nodes.some(n =>
-      n.x < vis.minX - marginX || n.x > vis.maxX + marginX ||
-      n.y < vis.minY - marginY || n.y > vis.maxY + marginY
-    );
+    cachedBBox = currentNodeBBox();
+  } else if (model.nodes.length > 0 && cachedBBox) {
+    // 上一版這裡拿「目前camera平移縮放後的可視範圍」去檢查有沒有
+    // 節點跑到外面——結果使用者自己刻意把畫面平移到別的地方局部
+    // 觀看時, 也會被當成「內容跑到範圍外」直接跳回去, 完全沒辦法
+    // 平移。這裡改成只比對「結構本身的節點範圍(currentNodeBBox,
+    // 不受camera影響)」有沒有比上次配合時(cachedBBox)變大——只有
+    // 真的新增/拖動節點讓結構範圍變大, 才重新配合; 使用者自己平移
+    // 縮放畫面完全不會觸發這裡, 因為那只是改camera, 不會動到
+    // model.nodes本身的座標範圍。
+    const cur = currentNodeBBox();
+    const spanX = (cachedBBox.maxX - cachedBBox.minX) || 1, spanY = (cachedBBox.maxY - cachedBBox.minY) || 1;
+    const marginX = spanX * 0.1, marginY = spanY * 0.1;
+    const outOfRange = cur.minX < cachedBBox.minX - marginX || cur.maxX > cachedBBox.maxX + marginX ||
+                        cur.minY < cachedBBox.minY - marginY || cur.maxY > cachedBBox.maxY + marginY;
     if (outOfRange) {
-      camera = {x: 0, y: 0, k: 1};
-      applyCameraTransform();
+      // 注意: 這裡刻意不重置camera —— 使用者當下平移縮放到哪裡是
+      // 他自己的選擇, 只是重新配合底層的基準轉換, 不用強制把畫面
+      // 跳回原點。
       cachedTransform = computeTransform(pad);
       cachedTransformPad = pad;
+      cachedBBox = cur;
     }
   }
   return cachedTransform;
 }
-function resetTransform() { cachedTransform = null; cachedTransformPad = null; }
+function resetTransform() { cachedTransform = null; cachedTransformPad = null; cachedBBox = null; }
+function currentNodeBBox() {
+  if (!model.nodes.length) return {minX: -1, maxX: 11, minY: -1, maxY: 11};
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  return {minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys)};
+}
 
 function computeTransform(pad) {
   if (pad === undefined) pad = 0.16;
