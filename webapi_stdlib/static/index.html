@@ -161,12 +161,14 @@
         <button data-view="N" class="viewBtn">N 圖(軸力)</button>
         <button data-view="V" class="viewBtn">V 圖(剪力)</button>
         <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
+        <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle">疊加原始結構外力</label>
         <span class="sep"></span>
         <button id="btnZoomIn">🔍+</button>
         <button id="btnZoomOut">🔍-</button>
         <button id="btnZoomReset">⟲ 原大小</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
+        <label class="snapLabel"><input type="checkbox" id="avoidLabelOverlapToggle" checked>避免數字重疊</label>
         <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
         <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
         <span class="sep"></span>
@@ -536,9 +538,11 @@ function render() {
     drawNodes(t);
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
+    if (document.getElementById('overlayLoadsToggle').checked) { drawSupports(t); drawLoads(t); }
     if (lastResult) drawDeformed(t); else drawNeedSolveMsg();
   } else {
     drawMembers(t, true);
+    if (document.getElementById('overlayLoadsToggle').checked) { drawSupports(t); drawLoads(t); }
     if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
   }
   drawQueryMarker(t);
@@ -1029,12 +1033,14 @@ function drawDeformed(t) {
     put(el('polyline', {points: pts.trim(), class: 'deformed-line'}));
   }
   // 在每個節點標實際位移量(mm),不是放大後的畫面尺寸
+  const tryPlace = makeLabelPlacer(24);
   for (const n of lastResult.nodes) {
     const disp = Math.hypot(n.ux, n.uy);
     if (disp < 1e-9) continue;
     const nn = nodeById(n.node);
     if (!nn) continue;
     const [x, y] = toScreen(nn.x, nn.y, t);
+    if (!tryPlace(x + 8, y + 14)) continue; // 跟已經放的標籤太近, 跳過避免重疊
     const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c'});
     lbl2.textContent = `Δ=${dispStr(disp, 1)}`;
     put(lbl2);
@@ -1050,6 +1056,22 @@ function labelIndices(vals) {
   return [...idxs].sort((a, b) => a - b);
 }
 
+// 標籤避讓小工具: 「避免數字重疊」開著的話, 新標籤跟已經放過的標籤
+// 太近(畫面像素距離)就跳過不畫, 沒開的話一律允許(照舊)。每次呼叫
+// 都建立新的一份, 不同視圖(N圖/V圖/M圖/變形圖)各自獨立不互相影響。
+function makeLabelPlacer(minDist) {
+  const placed = [];
+  const avoid = document.getElementById('avoidLabelOverlapToggle').checked;
+  return function tryPlace(x, y) {
+    if (!avoid) return true;
+    for (const p of placed) {
+      if (Math.hypot(p.x - x, p.y - y) < minDist) return false;
+    }
+    placed.push({x, y});
+    return true;
+  };
+}
+
 function drawDiagram(t, kind) {
   let maxAbs = 1e-9;
   for (const mid in lastResult.diagrams) {
@@ -1059,6 +1081,7 @@ function drawDiagram(t, kind) {
   const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
   const valueToWorld = (worldDiag * 0.15) / maxAbs;
   const strFn = kind === 'M' ? momentStr : forceStr;
+  const tryPlace = makeLabelPlacer(24);
 
   const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
   lbl.textContent = `${kind} 圖 (最大值 ${strFn(maxAbs)})` + (kind === 'M' ? ' — 畫在拉力側' : '');
@@ -1090,6 +1113,7 @@ function drawDiagram(t, kind) {
       const val = d[kind][i];
       if (Math.abs(val) < maxAbs * 0.02) continue; // 太小的值不標, 避免畫面太亂
       const [lx, ly] = diagPts[i];
+      if (!tryPlace(lx, ly)) continue; // 跟已經放的標籤太近, 跳過避免重疊
       const t2 = el('text', {x: lx, y: ly, class: 'value-label', fill: kind === 'M' ? '#dc2626' : '#2563eb', 'text-anchor': 'middle'});
       t2.textContent = fromSI(kind === 'M' ? 'moment' : 'force', val).toFixed(2);
       put(t2);
@@ -2155,6 +2179,8 @@ svg.addEventListener('pointercancel', () => {
 });
 
 document.getElementById('showGridToggle').addEventListener('change', render);
+document.getElementById('overlayLoadsToggle').addEventListener('change', render);
+document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
 ['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
