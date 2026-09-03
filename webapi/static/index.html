@@ -1134,15 +1134,28 @@ function drawLoads(t) {
     const n = nodeById(p.node);
     if (!n) continue;
     const mag = Math.hypot(p.fx || 0, p.fy || 0);
-    if (mag < 1e-9) continue;
     const [x, y] = toScreen(n.x, n.y, t);
-    const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
-    const len = 42 * loadIconScale('point');
-    const x1 = x - ux * len, y1 = y - uy * len;
-    put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
-    const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
-    lbl.textContent = forceStr(mag, 1);
-    put(lbl);
+    if (mag >= 1e-9) {
+      const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
+      const len = 42 * loadIconScale('point');
+      const x1 = x - ux * len, y1 = y - uy * len;
+      put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+      const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
+      lbl.textContent = forceStr(mag, 1);
+      put(lbl);
+    }
+    // 之前這裡只處理fx/fy(力的部分), 如果一個節點載重只有集中彎矩m
+    // (fx=fy=0), mag<1e-9直接continue跳過, 畫面上完全看不到這個彎矩
+    // ——不是「符號很小看不到」, 是根本沒畫。跟反力彎矩用同一套旋轉
+    // 方向弧線畫法, 不管有沒有力的分量, 只要m不是0就畫。
+    if (p.m) {
+      const momentRadius = structureWorldDiag() * 0.03;
+      drawMomentArc(t, n.x, n.y, p.m, momentRadius, '#dc2626');
+      const [mx, my] = toScreen(n.x + momentRadius * 1.4, n.y + momentRadius * 1.4, t);
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#dc2626'});
+      lbl2.textContent = momentStr(p.m, 1) + (p.m > 0 ? '↺' : '↻');
+      put(lbl2);
+    }
   }
 
   drawDistributedLoadIndicators(t);
@@ -1179,6 +1192,13 @@ function drawMomentArc(t, wx, wy, mValue, worldRadius, color) {
   put(el('path', {d: 'M-6,-3.5 L0,0 L-6,3.5', transform: `translate(${tipX},${tipY}) rotate(${ang})`, fill: 'none', stroke: color, 'stroke-width': 1.5}));
 }
 
+// 結構整體對角線長度(世界座標), 拿來當各種標記(彎矩弧線半徑等)的
+// 縮放基準, 三個地方(反力彎矩、節點集中彎矩、桿件集中彎矩)共用
+// 同一個算法, 不要各自重複算一次。
+function structureWorldDiag() {
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+}
 function drawReactions(t) {
   if (!lastResult) return;
   const defs = el('defs', {});
@@ -1187,9 +1207,7 @@ function drawReactions(t) {
   defs.appendChild(marker);
   put(defs);
 
-  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
-  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
-  const momentRadius = worldDiag * 0.035;
+  const momentRadius = structureWorldDiag() * 0.035;
 
   for (const nr of lastResult.nodes) {
     const hasRx = Math.abs(nr.Rx) > 1e-6;
@@ -1252,9 +1270,7 @@ function drawDistributedLoadIndicators(t) {
   for (const d of model.distributed_loads) {
     maxAbs = Math.max(maxAbs, Math.abs(d.w_start), Math.abs(d.w_end !== undefined && d.w_end !== null ? d.w_end : d.w_start));
   }
-  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
-  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
-  const valueToWorld = (worldDiag * 0.08 * loadIconScale('dist')) / maxAbs;
+  const valueToWorld = (structureWorldDiag() * 0.08 * loadIconScale('dist')) / maxAbs;
 
   for (const d of model.distributed_loads) {
     const m = model.members.find(mm => mm.id === d.member);
@@ -1321,21 +1337,26 @@ function drawMemberPointLoadIndicators(t) {
     const [x, y] = toScreen(bx, by, t);
     const [pfx, pfy] = memberPointLoadFxFy(p);
     const mag = Math.hypot(pfx, pfy);
-    if (mag < 1e-9) {
-      if (p.m) {
-        put(el('circle', {cx: x, cy: y, r: 6, fill: 'none', stroke: '#dc2626', 'stroke-width': 2}));
-        const lbl = el('text', {x: x + 9, y: y + 3, 'font-size': 9, fill: '#dc2626'});
-        lbl.textContent = momentStr(p.m, 1);
-        put(lbl);
-      }
-      continue;
+    if (mag >= 1e-9) {
+      const ux = pfx / mag, uy = -pfy / mag;
+      const len = 36 * loadIconScale('point');
+      put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+      const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
+      lbl.textContent = forceStr(mag, 1);
+      put(lbl);
     }
-    const ux = pfx / mag, uy = -pfy / mag;
-    const len = 36 * loadIconScale('point');
-    put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
-    const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
-    lbl.textContent = forceStr(mag, 1);
-    put(lbl);
+    // 之前這裡用空心圓圈表示彎矩(沒有方向), 而且只有在「這筆載重沒有
+    // 力的分量」的時候才會畫——如果同一筆桿件集中力同時有fx/fy又有m,
+    // 彎矩部分整個被跳過完全沒畫。改成跟反力彎矩/節點集中彎矩同一套
+    // 旋轉方向弧線畫法, 而且不管有沒有力的分量, 只要m不是0就畫。
+    if (p.m) {
+      const momentRadius = structureWorldDiag() * 0.025;
+      drawMomentArc(t, bx, by, p.m, momentRadius, '#dc2626');
+      const [mx, my] = toScreen(bx + momentRadius * 1.4, by + momentRadius * 1.4, t);
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#dc2626'});
+      lbl2.textContent = momentStr(p.m, 1) + (p.m > 0 ? '↺' : '↻');
+      put(lbl2);
+    }
   }
 }
 function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
@@ -1399,9 +1420,7 @@ function drawDiagram(t, kind) {
   for (const mid in lastResult.diagrams) {
     for (const v of lastResult.diagrams[mid][kind]) maxAbs = Math.max(maxAbs, Math.abs(v));
   }
-  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
-  const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
-  const valueToWorld = (worldDiag * 0.15) / maxAbs;
+  const valueToWorld = (structureWorldDiag() * 0.15) / maxAbs;
   const strFn = kind === 'M' ? momentStr : forceStr;
   const tryPlace = makeLabelPlacer(24);
 
