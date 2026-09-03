@@ -180,9 +180,15 @@
           <option value="m2" selected>m²</option><option value="mm2">mm²</option><option value="cm2">cm²</option>
         </select></label>
         <label class="snapLabel">位移單位<select id="unitDisp" style="width:5rem;">
-          <option value="m">m</option><option value="mm" selected>mm</option>
+          <option value="m">m</option><option value="cm">cm</option><option value="mm" selected>mm</option>
         </select></label>
-        <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
+        <label class="snapLabel">力單位<select id="unitForce" style="width:5rem;">
+          <option value="N">N</option><option value="kN" selected>kN</option>
+        </select></label>
+        <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:5.5rem;">
+          <option value="N·m">N·m</option><option value="kN·m" selected>kN·m</option>
+        </select></label>
+        <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
       </div>
     </div>
 
@@ -562,8 +568,8 @@ function drawQueryMarker(t) {
   put(el('line', {x1: x - 9, y1: y, x2: x + 9, y2: y, stroke: '#0891b2', 'stroke-width': 1.5}));
   put(el('line', {x1: x, y1: y - 9, x2: x, y2: y + 9, stroke: '#0891b2', 'stroke-width': 1.5}));
   const lines = [
-    `N=${(queryMarker.N/1000).toFixed(2)}kN V=${(queryMarker.V/1000).toFixed(2)}kN`,
-    `M=${(queryMarker.M/1000).toFixed(2)}kN·m Δ=${(queryMarker.disp*1000).toFixed(2)}mm`,
+    `N=${forceStr(queryMarker.N)} V=${forceStr(queryMarker.V)}`,
+    `M=${momentStr(queryMarker.M)} Δ=${dispStr(queryMarker.disp)}`,
   ];
   lines.forEach((s, i) => {
     const lbl = el('text', {x: x + 11, y: y - 6 + i * 12, class: 'value-label', fill: '#0891b2'});
@@ -614,7 +620,7 @@ document.getElementById('btnQueryPoint').addEventListener('click', async () => {
     });
     if (!res.ok) { resultEl.textContent = '查詢失敗: ' + await res.text(); queryMarker = null; render(); return; }
     queryMarker = await res.json();
-    resultEl.textContent = `x=${queryMarker.x.toFixed(3)}m(L=${queryMarker.L.toFixed(3)}m): N=${(queryMarker.N/1000).toFixed(3)}kN V=${(queryMarker.V/1000).toFixed(3)}kN M=${(queryMarker.M/1000).toFixed(3)}kN·m Δ=${(queryMarker.disp*1000).toFixed(2)}mm`;
+    resultEl.textContent = `x=${queryMarker.x.toFixed(3)}m(L=${queryMarker.L.toFixed(3)}m): N=${forceStr(queryMarker.N)} V=${forceStr(queryMarker.V)} M=${momentStr(queryMarker.M)} Δ=${dispStr(queryMarker.disp)}`;
     render();
   } catch (e) { resultEl.textContent = '查詢失敗: ' + e.message; }
 });
@@ -663,14 +669,25 @@ const UNIT_FACTORS = {
   E: {Pa: 1, MPa: 1e6, GPa: 1e9},
   I: {m4: 1, mm4: 1e-12, cm4: 1e-8},
   A: {m2: 1, mm2: 1e-6, cm2: 1e-4},
-  disp: {m: 1, mm: 1e-3},
+  disp: {m: 1, cm: 1e-2, mm: 1e-3},
+  force: {N: 1, kN: 1e3},
+  moment: {'N·m': 1, 'kN·m': 1e3},
 };
 function unitOf(kind) {
-  const ids = {E: 'unitE', I: 'unitI', A: 'unitA', disp: 'unitDisp'};
+  const ids = {E: 'unitE', I: 'unitI', A: 'unitA', disp: 'unitDisp', force: 'unitForce', moment: 'unitMoment'};
   return document.getElementById(ids[kind]).value;
 }
 function toSI(kind, displayVal) { return displayVal * UNIT_FACTORS[kind][unitOf(kind)]; }
 function fromSI(kind, siVal) { return siVal / UNIT_FACTORS[kind][unitOf(kind)]; }
+// 統一的格式化小工具, 換算+補單位文字一起做, 避免每個顯示的地方都要
+// 自己重複寫fromSI+toFixed+接單位字串這三步, 也比較不會漏改到某個角落。
+function forceStr(valSI, digits = 2) { return fromSI('force', valSI).toFixed(digits) + unitOf('force'); }
+function momentStr(valSI, digits = 2) { return fromSI('moment', valSI).toFixed(digits) + unitOf('moment'); }
+function dispStr(valSI, digits = 3) {
+  const u = unitOf('disp');
+  const v = fromSI('disp', valSI);
+  return (u === 'm' ? v.toExponential(digits) : v.toFixed(digits)) + u;
+}
 
 function gridLabelStyle() { return `font-size:${gridLabelSize}px;font-weight:600;fill:#475569;`; }
 
@@ -905,7 +922,7 @@ function drawLoads(t) {
     const x1 = x - ux * len, y1 = y - uy * len;
     put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
-    lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
+    lbl.textContent = forceStr(mag, 1);
     put(lbl);
   }
 
@@ -982,7 +999,7 @@ function drawMemberPointLoadIndicators(t) {
       if (p.m) {
         put(el('circle', {cx: x, cy: y, r: 6, fill: 'none', stroke: '#dc2626', 'stroke-width': 2}));
         const lbl = el('text', {x: x + 9, y: y + 3, 'font-size': 9, fill: '#dc2626'});
-        lbl.textContent = (p.m / 1000).toFixed(1) + 'kN·m';
+        lbl.textContent = momentStr(p.m, 1);
         put(lbl);
       }
       continue;
@@ -991,11 +1008,10 @@ function drawMemberPointLoadIndicators(t) {
     const len = 36;
     put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
     const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
-    lbl.textContent = (mag / 1000).toFixed(1) + 'kN';
+    lbl.textContent = forceStr(mag, 1);
     put(lbl);
   }
 }
-
 function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
 
 function drawDeformed(t) {
@@ -1020,7 +1036,7 @@ function drawDeformed(t) {
     if (!nn) continue;
     const [x, y] = toScreen(nn.x, nn.y, t);
     const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c'});
-    lbl2.textContent = `Δ=${(disp * 1000).toFixed(1)}mm`;
+    lbl2.textContent = `Δ=${dispStr(disp, 1)}`;
     put(lbl2);
   }
 }
@@ -1042,10 +1058,10 @@ function drawDiagram(t, kind) {
   const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
   const worldDiag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
   const valueToWorld = (worldDiag * 0.15) / maxAbs;
-  const unit = kind === 'M' ? 'kN·m' : 'kN';
+  const strFn = kind === 'M' ? momentStr : forceStr;
 
   const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
-  lbl.textContent = `${kind} 圖 (最大值 ${(maxAbs/1000).toFixed(2)} ${unit})` + (kind === 'M' ? ' — 畫在拉力側' : '');
+  lbl.textContent = `${kind} 圖 (最大值 ${strFn(maxAbs)})` + (kind === 'M' ? ' — 畫在拉力側' : '');
   putOverlay(lbl);
 
   for (const m of model.members) {
@@ -1075,7 +1091,7 @@ function drawDiagram(t, kind) {
       if (Math.abs(val) < maxAbs * 0.02) continue; // 太小的值不標, 避免畫面太亂
       const [lx, ly] = diagPts[i];
       const t2 = el('text', {x: lx, y: ly, class: 'value-label', fill: kind === 'M' ? '#dc2626' : '#2563eb', 'text-anchor': 'middle'});
-      t2.textContent = (val / 1000).toFixed(2);
+      t2.textContent = fromSI(kind === 'M' ? 'moment' : 'force', val).toFixed(2);
       put(t2);
     }
   }
@@ -1430,8 +1446,8 @@ function renderPropPanel() {
     const solvedInfo = nr ? `
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:0.5rem;margin-bottom:0.6rem;font-size:0.8rem;">
         <b>Solve 結果(唯讀)</b><br>
-        Rx=${(nr.Rx/1000).toFixed(3)}kN Ry=${(nr.Ry/1000).toFixed(3)}kN M=${(nr.M/1000).toFixed(3)}kN·m<br>
-        ux=${fromSI('disp', nr.ux).toExponential(3)}${unitOf('disp')} uy=${fromSI('disp', nr.uy).toExponential(3)}${unitOf('disp')} rot=${nr.rot.toExponential(3)}rad
+        Rx=${forceStr(nr.Rx, 3)} Ry=${forceStr(nr.Ry, 3)} M=${momentStr(nr.M, 3)}<br>
+        ux=${dispStr(nr.ux)} uy=${dispStr(nr.uy)} rot=${nr.rot.toExponential(3)}rad
       </div>` : `<p class="hint">還沒 Solve 過, 沒有反力/位移數值可以顯示。</p>`;
     panel.innerHTML = `
       <fieldset><legend>節點 N${n.id}</legend>
@@ -1449,11 +1465,11 @@ function renderPropPanel() {
           <option value="roller_y" ${kind==='roller_y'?'selected':''}>◎↕ 滾支承-擋垂直(uy=0)</option>
           <option value="roller_x" ${kind==='roller_x'?'selected':''}>◎↔ 滾支承-擋水平(ux=0)</option>
         </select>
-        <label>集中力 fx / fy (N) / m (N·m)</label>
+        <label>集中力 fx / fy (${unitOf('force')}) / m (${unitOf('moment')})</label>
         <div class="row3">
-          <input id="p_fx" type="number" step="any" value="${pl ? pl.fx : 0}">
-          <input id="p_fy" type="number" step="any" value="${pl ? pl.fy : 0}">
-          <input id="p_fm" type="number" step="any" value="${pl ? pl.m : 0}">
+          <input id="p_fx" type="number" step="any" value="${pl ? fromSI('force', pl.fx) : 0}">
+          <input id="p_fy" type="number" step="any" value="${pl ? fromSI('force', pl.fy) : 0}">
+          <input id="p_fm" type="number" step="any" value="${pl ? fromSI('moment', pl.m) : 0}">
         </div>
         <button id="p_apply" style="width:100%;background:#16a34a;color:white;">套用</button>
         <div class="row2" style="margin-top:0.4rem;">
@@ -1471,9 +1487,9 @@ function renderPropPanel() {
       if (supVal === 'fixed') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: 0.0});
       if (supVal === 'roller_y') model.supports.push({node: n.id, ux: null, uy: 0.0, rot: null});
       if (supVal === 'roller_x') model.supports.push({node: n.id, ux: 0.0, uy: null, rot: null});
-      const fx = parseFloat(document.getElementById('p_fx').value) || 0;
-      const fy = parseFloat(document.getElementById('p_fy').value) || 0;
-      const fm = parseFloat(document.getElementById('p_fm').value) || 0;
+      const fx = toSI('force', parseFloat(document.getElementById('p_fx').value) || 0);
+      const fy = toSI('force', parseFloat(document.getElementById('p_fy').value) || 0);
+      const fm = toSI('moment', parseFloat(document.getElementById('p_fm').value) || 0);
       model.point_loads = model.point_loads.filter(p => p.node !== n.id);
       if (fx !== 0 || fy !== 0 || fm !== 0) model.point_loads.push({node: n.id, fx, fy, m: fm});
       render();
@@ -1583,7 +1599,7 @@ function renderPropPanel() {
             <input id="dl_x0" type="number" step="any" placeholder="起點x(m)">
             <input id="dl_x1" type="number" step="any" placeholder="終點x(m)">
           </div>
-          <label>強度(N/m): w1(起點) / w2(終點, 留空=均佈)</label>
+          <label>強度(${unitOf('force')}/m): w1(起點) / w2(終點, 留空=均佈)</label>
           <div class="row2">
             <input id="dl_w0" type="number" step="any" value="0">
             <input id="dl_w1" type="number" step="any" placeholder="留空同w1">
@@ -1608,7 +1624,7 @@ function renderPropPanel() {
           </select>
           <label>數值</label>
           <input id="mp_value" type="number" step="any" value="0.5">
-          <label>fx / fy (N) / 集中彎矩 m (N·m)</label>
+          <label>fx / fy (${unitOf('force')}) / 集中彎矩 m (${unitOf('moment')})</label>
           <div class="row3">
             <input id="mp_fx" type="number" step="any" value="0">
             <input id="mp_fy" type="number" step="any" value="0">
@@ -1688,7 +1704,7 @@ function renderPropPanel() {
     };
     document.getElementById('dl_add').onclick = () => {
       const x0raw = document.getElementById('dl_x0').value, x1raw = document.getElementById('dl_x1').value;
-      const w0 = parseFloat(document.getElementById('dl_w0').value) || 0;
+      const w0 = toSI('force', parseFloat(document.getElementById('dl_w0').value) || 0);
       const w1raw = document.getElementById('dl_w1').value;
       const dirChoice = document.getElementById('dl_dir').value;
       // 'global_y' 這個後端模式只支援整根桿件, 局部區段(x_start/x_end)
@@ -1700,7 +1716,7 @@ function renderPropPanel() {
       else entry.direction = 'local';
       if (x0raw !== '') entry.x_start = parseFloat(x0raw);
       if (x1raw !== '') entry.x_end = parseFloat(x1raw);
-      if (w1raw !== '') entry.w_end = parseFloat(w1raw);
+      if (w1raw !== '') entry.w_end = toSI('force', parseFloat(w1raw));
       model.distributed_loads.push(entry);
       renderPropPanel();
       render();
@@ -1712,9 +1728,9 @@ function renderPropPanel() {
       const L = Math.hypot(nj.x - ni.x, nj.y - ni.y);
       const a = mode === 'relative' ? value * L : value;
       if (!(a >= 0 && a <= L)) { setStatus('位置必須在 0~' + L.toFixed(3) + 'm 之間'); return; }
-      const fx = parseFloat(document.getElementById('mp_fx').value) || 0;
-      const fy = parseFloat(document.getElementById('mp_fy').value) || 0;
-      const mm = parseFloat(document.getElementById('mp_m').value) || 0;
+      const fx = toSI('force', parseFloat(document.getElementById('mp_fx').value) || 0);
+      const fy = toSI('force', parseFloat(document.getElementById('mp_fy').value) || 0);
+      const mm = toSI('moment', parseFloat(document.getElementById('mp_m').value) || 0);
       // 你輸入的 fx/fy 是全域座標分量(跟節點集中力一樣的習慣), 但
       // frame2d 的 member_point_load() 在 direction='global' 模式下
       // 要的是 F(大小)+angle_deg(全域角度), 不是fx/fy —— 這裡自動轉換,
@@ -1751,18 +1767,20 @@ function distLoadDirLabel(d) {
 function renderDistLoadList(memberId) {
   const list = model.distributed_loads.filter(d => d.member === memberId);
   if (!list.length) return '<p class="hint">目前沒有均佈載重。</p>';
-  return '<table><thead><tr><th>範圍</th><th>w1</th><th>w2</th><th>方向</th><th></th></tr></thead><tbody>' +
-    list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${d.w_start}</td><td>${d.w_end ?? d.w_start}</td><td>${distLoadDirLabel(d)}</td>
+  const fu = unitOf('force');
+  return `<table><thead><tr><th>範圍</th><th>w1(${fu}/m)</th><th>w2(${fu}/m)</th><th>方向</th><th></th></tr></thead><tbody>` +
+    list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${fromSI('force', d.w_start).toFixed(2)}</td><td>${fromSI('force', d.w_end ?? d.w_start).toFixed(2)}</td><td>${distLoadDirLabel(d)}</td>
       <td><button id="dl_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
     '</tbody></table>';
 }
 function renderMemberPointLoadList(memberId) {
   const list = model.member_point_loads.filter(p => p.member === memberId);
   if (!list.length) return '<p class="hint">目前沒有桿件集中力/彎矩。</p>';
-  return '<table><thead><tr><th>位置x</th><th>fx</th><th>fy</th><th>m</th><th></th></tr></thead><tbody>' +
+  const fu = unitOf('force'), mu = unitOf('moment');
+  return `<table><thead><tr><th>位置x</th><th>fx(${fu})</th><th>fy(${fu})</th><th>m(${mu})</th><th></th></tr></thead><tbody>` +
     list.map((p, i) => {
       const [fx, fy] = memberPointLoadFxFy(p);
-      return `<tr><td>${p.a.toFixed(2)}</td><td>${fx.toFixed(1)}</td><td>${fy.toFixed(1)}</td><td>${p.m||0}</td>
+      return `<tr><td>${p.a.toFixed(2)}</td><td>${fromSI('force', fx).toFixed(2)}</td><td>${fromSI('force', fy).toFixed(2)}</td><td>${fromSI('moment', p.m||0).toFixed(2)}</td>
       <td><button id="mp_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`;
     }).join('') +
     '</tbody></table>';
@@ -2281,22 +2299,24 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
 function setStatus(s) { document.getElementById('status').textContent = s; }
 
 function renderTables() {
-  const dispUnit = unitOf('disp');
+  const dispUnit = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
   const nodeThead = document.querySelector('#nodeTable thead tr');
-  nodeThead.innerHTML = `<th>node</th><th>ux(${dispUnit})</th><th>uy(${dispUnit})</th><th>rot</th><th>Rx(kN)</th><th>Ry(kN)</th><th>M(kN·m)</th>`;
+  nodeThead.innerHTML = `<th>node</th><th>ux(${dispUnit})</th><th>uy(${dispUnit})</th><th>rot</th><th>Rx(${fu})</th><th>Ry(${fu})</th><th>M(${mu})</th>`;
   const nb = document.querySelector('#nodeTable tbody'); nb.innerHTML = '';
   for (const n of lastResult.nodes) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${n.node}</td><td>${fromSI('disp', n.ux).toExponential(3)}</td><td>${fromSI('disp', n.uy).toExponential(3)}</td>
-      <td>${n.rot.toExponential(3)}</td><td>${(n.Rx/1000).toFixed(3)}</td><td>${(n.Ry/1000).toFixed(3)}</td><td>${(n.M/1000).toFixed(3)}</td>`;
+      <td>${n.rot.toExponential(3)}</td><td>${fromSI('force', n.Rx).toFixed(3)}</td><td>${fromSI('force', n.Ry).toFixed(3)}</td><td>${fromSI('moment', n.M).toFixed(3)}</td>`;
     nb.appendChild(tr);
   }
+  const memberThead = document.querySelector('#memberTable thead tr');
+  memberThead.innerHTML = `<th>member</th><th>L</th><th>角度</th><th>N1(${fu})</th><th>V1(${fu})</th><th>M1(${mu})</th><th>N2(${fu})</th><th>V2(${fu})</th><th>M2(${mu})</th>`;
   const mb = document.querySelector('#memberTable tbody'); mb.innerHTML = '';
   for (const m of lastResult.members) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${m.member_id}</td><td>${m.L.toFixed(3)}</td><td>${m.angle_deg.toFixed(1)}</td>
-      <td>${(m.N1/1000).toFixed(3)}</td><td>${(m.V1/1000).toFixed(3)}</td><td>${(m.M1/1000).toFixed(3)}</td>
-      <td>${(m.N2/1000).toFixed(3)}</td><td>${(m.V2/1000).toFixed(3)}</td><td>${(m.M2/1000).toFixed(3)}</td>`;
+      <td>${fromSI('force', m.N1).toFixed(3)}</td><td>${fromSI('force', m.V1).toFixed(3)}</td><td>${fromSI('moment', m.M1).toFixed(3)}</td>
+      <td>${fromSI('force', m.N2).toFixed(3)}</td><td>${fromSI('force', m.V2).toFixed(3)}</td><td>${fromSI('moment', m.M2).toFixed(3)}</td>`;
     mb.appendChild(tr);
   }
 }
@@ -2413,18 +2433,19 @@ document.getElementById('importJsonFile').addEventListener('change', (e) => {
 
 document.getElementById('btnExportMd').addEventListener('click', () => {
   if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
+  const du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
   let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
   md += `## 節點結果\n\n`;
-  md += `| node | ux (m) | uy (m) | rot (rad) | Rx (kN) | Ry (kN) | M (kN·m) |\n`;
+  md += `| node | ux (${du}) | uy (${du}) | rot (rad) | Rx (${fu}) | Ry (${fu}) | M (${mu}) |\n`;
   md += `|---|---|---|---|---|---|---|\n`;
   for (const n of lastResult.nodes) {
-    md += `| ${n.node} | ${n.ux.toExponential(3)} | ${n.uy.toExponential(3)} | ${n.rot.toExponential(3)} | ${(n.Rx/1000).toFixed(3)} | ${(n.Ry/1000).toFixed(3)} | ${(n.M/1000).toFixed(3)} |\n`;
+    md += `| ${n.node} | ${fromSI('disp', n.ux).toExponential(3)} | ${fromSI('disp', n.uy).toExponential(3)} | ${n.rot.toExponential(3)} | ${fromSI('force', n.Rx).toFixed(3)} | ${fromSI('force', n.Ry).toFixed(3)} | ${fromSI('moment', n.M).toFixed(3)} |\n`;
   }
   md += `\n## 桿件端內力\n\n`;
-  md += `| member | L (m) | 角度(度) | N1 (kN) | V1 (kN) | M1 (kN·m) | N2 (kN) | V2 (kN) | M2 (kN·m) |\n`;
+  md += `| member | L (m) | 角度(度) | N1 (${fu}) | V1 (${fu}) | M1 (${mu}) | N2 (${fu}) | V2 (${fu}) | M2 (${mu}) |\n`;
   md += `|---|---|---|---|---|---|---|---|---|\n`;
   for (const m of lastResult.members) {
-    md += `| ${m.member_id} | ${m.L.toFixed(3)} | ${m.angle_deg.toFixed(1)} | ${(m.N1/1000).toFixed(3)} | ${(m.V1/1000).toFixed(3)} | ${(m.M1/1000).toFixed(3)} | ${(m.N2/1000).toFixed(3)} | ${(m.V2/1000).toFixed(3)} | ${(m.M2/1000).toFixed(3)} |\n`;
+    md += `| ${m.member_id} | ${m.L.toFixed(3)} | ${m.angle_deg.toFixed(1)} | ${fromSI('force', m.N1).toFixed(3)} | ${fromSI('force', m.V1).toFixed(3)} | ${fromSI('moment', m.M1).toFixed(3)} | ${fromSI('force', m.N2).toFixed(3)} | ${fromSI('force', m.V2).toFixed(3)} | ${fromSI('moment', m.M2).toFixed(3)} |\n`;
   }
   const blob = new Blob([md], {type: 'text/markdown'});
   downloadBlob(blob, (currentName || 'frame2d_result') + '.md');
