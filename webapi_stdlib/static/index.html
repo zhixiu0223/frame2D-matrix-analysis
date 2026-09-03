@@ -46,6 +46,18 @@
   #topbar .sep { flex-basis: 100%; height: 0; }
   #topbar label.snapLabel { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; margin: 0; width: auto; white-space: nowrap; }
   #topbar label.snapLabel input { width: auto; }
+  /* 視圖切換+疊加外力+縮放常駐列: 永遠顯示(不是選單面板的一部分),
+     切視圖/開關疊加比較的時候不用先打開選單、也不會被選單擋住畫布。 */
+  #viewBar { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; padding: 0.4rem 0; border-top: 1px solid #eee; }
+  #viewBar button { padding: 0.35rem 0.6rem; font-size: 0.82rem; }
+  /* 選單裡的分類下拉區塊(格線/單位設定): 預設收合, 只露出標題,
+     點開才展開內容, 這樣選單打開時不會一次塞一大片選項擋住畫布。 */
+  .dropdownSection { border: 1px solid #e5e7eb; border-radius: 6px; width: 100%; margin-bottom: 0.3rem; }
+  .dropdownSection summary { padding: 0.4rem 0.6rem; font-size: 0.84rem; font-weight: 600; cursor: pointer; list-style: none; }
+  .dropdownSection summary::-webkit-details-marker { display: none; }
+  .dropdownSection summary::before { content: '▸ '; color: #6b7280; }
+  .dropdownSection[open] summary::before { content: '▾ '; }
+  .dropdownBody { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; padding: 0 0.6rem 0.5rem; }
 
   #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; }
   svg { width: 100%; height: auto; display: block; touch-action: none; }
@@ -70,6 +82,9 @@
   .support-symbol { fill: #374151; stroke: #374151; }
   .support-hatch { stroke: #374151; stroke-width: 1.2; }
   .value-label { font-size: 9px; }
+  .section-tag { font-size: 8px; fill: #7c3aed; font-style: italic; }
+  .dim-line { stroke: #9ca3af; stroke-width: 1; }
+  .dim-text { font-size: 10px; fill: #6b7280; }
   .grid-line { stroke: #cbd5e1; stroke-width: 1; }
   #status { font-size: 0.8rem; margin: 0.25rem 0 0; min-height: 1.1em; color: #0891b2; }
   fieldset { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 0.8rem; padding: 0.6rem; }
@@ -103,9 +118,29 @@
       <button class="menuBtn" data-menu="file">📁 檔案</button>
       <button class="menuBtn" data-menu="model">✏️ 建模</button>
       <button class="menuBtn" data-menu="query">🔎 查詢</button>
-      <button class="menuBtn" data-menu="view">👁 檢視</button>
+      <button class="menuBtn" data-menu="view">👁 顯示設定</button>
       <span class="sep-v"></span>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
+    </div>
+
+    <!-- 視圖切換+疊加外力+縮放: 永遠顯示, 不放進上面那個會蓋住畫布的
+         下拉選單裡 —— 這幾個是看圖的時候會一直反覆點的東西(切結構/
+         變形/N/V/M圖、開關疊加外力比較), 之前放在選單裡的話, 每次
+         點都要先打開選單(蓋住畫布)才點得到, 點完還要關掉選單才看得
+         到效果, 完全沒辦法流暢連續操作。 -->
+    <div id="viewBar">
+      <button data-view="structure" class="viewBtn active">結構/荷載</button>
+      <button data-view="deformed" class="viewBtn">變形</button>
+      <button data-view="N" class="viewBtn">N 圖(軸力)</button>
+      <button data-view="V" class="viewBtn">V 圖(剪力)</button>
+      <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
+      <span class="sep-v"></span>
+      <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
+      <label class="snapLabel"><input type="checkbox" id="overlayDimsToggle" checked>顯示尺寸/斷面</label>
+      <span class="sep-v"></span>
+      <button id="btnZoomIn">🔍+</button>
+      <button id="btnZoomOut">🔍-</button>
+      <button id="btnZoomReset">⟲ 原大小</button>
     </div>
 
     <div id="menuPanel">
@@ -156,41 +191,39 @@
       </div>
 
       <div class="menuGroup" data-group="view">
-        <button data-view="structure" class="viewBtn active">結構/荷載</button>
-        <button data-view="deformed" class="viewBtn">變形</button>
-        <button data-view="N" class="viewBtn">N 圖(軸力)</button>
-        <button data-view="V" class="viewBtn">V 圖(剪力)</button>
-        <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
-        <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle">疊加原始結構外力</label>
-        <span class="sep"></span>
-        <button id="btnZoomIn">🔍+</button>
-        <button id="btnZoomOut">🔍-</button>
-        <button id="btnZoomReset">⟲ 原大小</button>
-        <span class="sep"></span>
-        <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
-        <label class="snapLabel"><input type="checkbox" id="avoidLabelOverlapToggle" checked>避免數字重疊</label>
-        <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
-        <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
-        <span class="sep"></span>
-        <label class="snapLabel">E單位<select id="unitE" style="width:5rem;">
-          <option value="Pa">Pa</option><option value="MPa">MPa</option><option value="GPa" selected>GPa</option>
-        </select></label>
-        <label class="snapLabel">I單位<select id="unitI" style="width:5rem;">
-          <option value="m4">m⁴</option><option value="mm4" selected>mm⁴</option><option value="cm4">cm⁴</option>
-        </select></label>
-        <label class="snapLabel">A單位<select id="unitA" style="width:5rem;">
-          <option value="m2" selected>m²</option><option value="mm2">mm²</option><option value="cm2">cm²</option>
-        </select></label>
-        <label class="snapLabel">位移單位<select id="unitDisp" style="width:5rem;">
-          <option value="m">m</option><option value="cm">cm</option><option value="mm" selected>mm</option>
-        </select></label>
-        <label class="snapLabel">力單位<select id="unitForce" style="width:5rem;">
-          <option value="N">N</option><option value="kN" selected>kN</option>
-        </select></label>
-        <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:5.5rem;">
-          <option value="N·m">N·m</option><option value="kN·m" selected>kN·m</option>
-        </select></label>
-        <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
+        <details class="dropdownSection">
+          <summary>顯示設定(格線/標籤)</summary>
+          <div class="dropdownBody">
+            <label class="snapLabel"><input type="checkbox" id="showGridToggle" checked>顯示格線</label>
+            <label class="snapLabel"><input type="checkbox" id="avoidLabelOverlapToggle" checked>避免數字重疊</label>
+            <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
+            <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
+          </div>
+        </details>
+        <details class="dropdownSection">
+          <summary>單位設定</summary>
+          <div class="dropdownBody">
+            <label class="snapLabel">E單位<select id="unitE" style="width:5rem;">
+              <option value="Pa">Pa</option><option value="MPa">MPa</option><option value="GPa" selected>GPa</option>
+            </select></label>
+            <label class="snapLabel">I單位<select id="unitI" style="width:5rem;">
+              <option value="m4">m⁴</option><option value="mm4" selected>mm⁴</option><option value="cm4">cm⁴</option>
+            </select></label>
+            <label class="snapLabel">A單位<select id="unitA" style="width:5rem;">
+              <option value="m2" selected>m²</option><option value="mm2">mm²</option><option value="cm2">cm²</option>
+            </select></label>
+            <label class="snapLabel">位移單位<select id="unitDisp" style="width:5rem;">
+              <option value="m">m</option><option value="cm">cm</option><option value="mm" selected>mm</option>
+            </select></label>
+            <label class="snapLabel">力單位<select id="unitForce" style="width:5rem;">
+              <option value="N">N</option><option value="kN" selected>kN</option>
+            </select></label>
+            <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:5.5rem;">
+              <option value="N·m">N·m</option><option value="kN·m" selected>kN·m</option>
+            </select></label>
+            <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -536,18 +569,71 @@ function render() {
     drawSupports(t);
     drawLoads(t);
     drawNodes(t);
+    if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
-    if (document.getElementById('overlayLoadsToggle').checked) { drawSupports(t); drawLoads(t); }
+    if (document.getElementById('overlayLoadsToggle').checked) {
+      drawSupports(t); drawLoads(t);
+      if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
+    }
     if (lastResult) drawDeformed(t); else drawNeedSolveMsg();
   } else {
     drawMembers(t, true);
-    if (document.getElementById('overlayLoadsToggle').checked) { drawSupports(t); drawLoads(t); }
+    if (document.getElementById('overlayLoadsToggle').checked) {
+      drawSupports(t); drawLoads(t);
+      if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
+    }
     if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
   }
   drawQueryMarker(t);
   drawMarquee(t);
   refreshQueryMemberOptions();
+}
+
+// 結構尺寸標註 + 斷面符號: 整體外框寬/高的標註線(建築圖常見的畫法,
+// 兩端有小垂直/水平止線+置中的尺寸文字), 加上每根桿件旁邊標示目前
+// 用的斷面名稱 —— 這樣疊加在N/V/M/變形圖上時, 不用切回結構視圖也
+// 能看出整體大小跟每根桿件的斷面配置。
+function drawDimensionsAndSections(t) {
+  for (const m of model.members) {
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const [x1, y1] = toScreen(ni.x, ni.y, t);
+    const [x2, y2] = toScreen(nj.x, nj.y, t);
+    const lbl = el('text', {x: (x1 + x2) / 2 + 4, y: (y1 + y2) / 2 + 14, class: 'section-tag'});
+    lbl.textContent = `[${m.section}]`;
+    put(lbl);
+  }
+
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  if (xs.length < 2) return;
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const width = maxX - minX, height = maxY - minY;
+  const gap = Math.max(width, height, 1) * 0.1 + 0.4; // 標註線跟結構本體之間留一點距離, 不要黏在一起
+
+  if (width > 1e-6) {
+    const dimY = minY - gap;
+    const [dx1, dy1] = toScreen(minX, dimY, t);
+    const [dx2, dy2] = toScreen(maxX, dimY, t);
+    put(el('line', {x1: dx1, y1: dy1, x2: dx2, y2: dy2, class: 'dim-line'}));
+    put(el('line', {x1: dx1, y1: dy1 - 5, x2: dx1, y2: dy1 + 5, class: 'dim-line'}));
+    put(el('line', {x1: dx2, y1: dy2 - 5, x2: dx2, y2: dy2 + 5, class: 'dim-line'}));
+    const lbl = el('text', {x: (dx1 + dx2) / 2, y: dy1 - 6, 'text-anchor': 'middle', class: 'dim-text'});
+    lbl.textContent = `${width.toFixed(2)}m`;
+    put(lbl);
+  }
+  if (height > 1e-6) {
+    const dimX = minX - gap;
+    const [dx1, dy1] = toScreen(dimX, minY, t);
+    const [dx2, dy2] = toScreen(dimX, maxY, t);
+    put(el('line', {x1: dx1, y1: dy1, x2: dx2, y2: dy2, class: 'dim-line'}));
+    put(el('line', {x1: dx1 - 5, y1: dy1, x2: dx1 + 5, y2: dy1, class: 'dim-line'}));
+    put(el('line', {x1: dx2 - 5, y1: dy2, x2: dx2 + 5, y2: dy2, class: 'dim-line'}));
+    const lbl = el('text', {x: dx1 - 8, y: (dy1 + dy2) / 2, 'text-anchor': 'end', class: 'dim-text'});
+    lbl.textContent = `${height.toFixed(2)}m`;
+    put(lbl);
+  }
 }
 
 function drawMarquee(t) {
@@ -2180,6 +2266,7 @@ svg.addEventListener('pointercancel', () => {
 
 document.getElementById('showGridToggle').addEventListener('change', render);
 document.getElementById('overlayLoadsToggle').addEventListener('change', render);
+document.getElementById('overlayDimsToggle').addEventListener('change', render);
 document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
 ['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
