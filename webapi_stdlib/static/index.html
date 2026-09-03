@@ -204,10 +204,17 @@
               <option value="components" selected>分量(Rx/Ry分開)</option>
               <option value="resultant">合量+角度</option>
             </select></label>
+            <label class="snapLabel">外力顯示<select id="loadDisplayMode" style="width:7rem;">
+              <option value="components" selected>分量(fx/fy分開)</option>
+              <option value="resultant">合成</option>
+            </select></label>
             <label class="snapLabel">刻度字體<input type="number" id="gridLabelSizeInput" value="24" min="8" max="36" style="width:3.6rem;"></label>
             <label class="snapLabel"><input type="checkbox" id="debugToggle">觸控除錯訊息</label>
             <label class="snapLabel" style="width:100%;">集中力圖示大小<input type="range" id="pointLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="pointLoadScaleVal">1.0x</span></label>
             <label class="snapLabel" style="width:100%;">均佈載重圖示大小<input type="range" id="distLoadScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="distLoadScaleVal">1.0x</span></label>
+            <label class="snapLabel" style="width:100%;">集中彎矩圖示大小<input type="range" id="momentArcScale" min="0.3" max="3" step="0.1" value="1" style="width:8rem;vertical-align:middle;"><span id="momentArcScaleVal">1.0x</span></label>
+            <label class="snapLabel">外力/彎矩字體<input type="number" id="loadLabelFontSize" value="10" min="6" max="20" style="width:3.6rem;"></label>
+            <label class="snapLabel">內力/變形/反力字體<input type="number" id="valueLabelFontSize" value="9" min="6" max="20" style="width:3.6rem;"></label>
             <div class="row2" style="width:100%;margin-top:0.4rem;">
               <button id="btnExportSettings" style="width:auto;">⬇ Export 顯示設定</button>
               <label style="display:inline-block;padding:0.4rem 0.7rem;border:1px solid #ccc;border-radius:4px;cursor:pointer;font-size:0.85rem;width:auto;margin:0;">
@@ -358,6 +365,24 @@ const VB_W = 800, VB_H = 1100;
 let camera = {x: 0, y: 0, k: 1};
 
 // ---------- 世界座標 <-> 畫布座標(computeTransform) ----------
+// 之前這裡每次render()都會重新呼叫computeTransform(), 也就是每次
+// 畫面重畫都會重新「配合結構目前的範圍」自動抓一次縮放/置中——建模
+// 過程中每加一個節點、拖一次桿件, 都會讓整體範圍變一點點, 畫面就
+// 跟著重新配合一次, 造成使用者形容的「畫面一直亂跳」。改成快取:
+// 平常render()都直接用快取的轉換, 只有在「原大小」按鈕、新建、
+// 載入模型這幾個使用者明確想要「重新配合可視範圍」的時機才真的
+// 重算, 建模過程中新增/移動節點不會再讓畫面自己亂動。
+let cachedTransform = null;
+let cachedTransformPad = null;
+function getTransform(pad) {
+  if (!cachedTransform || cachedTransformPad !== pad) {
+    cachedTransform = computeTransform(pad);
+    cachedTransformPad = pad;
+  }
+  return cachedTransform;
+}
+function resetTransform() { cachedTransform = null; cachedTransformPad = null; }
+
 function computeTransform(pad) {
   if (pad === undefined) pad = 0.16;
   if (model.nodes.length <= 1) {
@@ -465,7 +490,7 @@ function zoomAt(p, factor) {
 }
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1.3));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1/1.3));
-document.getElementById('btnZoomReset').addEventListener('click', () => { camera = {x:0,y:0,k:1}; applyCameraTransform(); scheduleRender(); });
+document.getElementById('btnZoomReset').addEventListener('click', () => { camera = {x:0,y:0,k:1}; resetTransform(); applyCameraTransform(); scheduleRender(); });
 svg.addEventListener('wheel', (e) => {
   // 只認「有按著 Ctrl 鍵」的滾輪事件(桌機觸控板雙指縮放的標準訊號)。
   // 這件事很重要: 有些手機瀏覽器在觸控元素設了 touch-action:none 時,
@@ -590,7 +615,7 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
-  const t = computeTransform(PAD_BY_VIEW[viewMode]);
+  const t = getTransform(PAD_BY_VIEW[viewMode]);
   if (document.getElementById('showGridToggle').checked) drawGrid(t);
 
   if (viewMode === 'structure') {
@@ -692,7 +717,7 @@ function drawQueryMarker(t) {
     `M=${momentStr(queryMarker.M)} Δ=${dispStr(queryMarker.disp)}`,
   ];
   lines.forEach((s, i) => {
-    const lbl = el('text', {x: x + 11, y: y - 6 + i * 12, class: 'value-label', fill: '#0891b2'});
+    const lbl = el('text', {x: x + 11, y: y - 6 + i * 12, class: 'value-label', fill: '#0891b2', style: `font-size:${valueFontSize()}px`});
     lbl.textContent = s;
     put(lbl);
   });
@@ -1042,9 +1067,13 @@ const DISPLAY_SETTING_IDS = [
   {id: 'avoidLabelOverlapToggle', kind: 'checkbox'},
   {id: 'mDiagramSide', kind: 'value'},
   {id: 'reactionDisplayMode', kind: 'value'},
+  {id: 'loadDisplayMode', kind: 'value'},
   {id: 'gridLabelSizeInput', kind: 'value'},
   {id: 'pointLoadScale', kind: 'value'},
   {id: 'distLoadScale', kind: 'value'},
+  {id: 'momentArcScale', kind: 'value'},
+  {id: 'loadLabelFontSize', kind: 'value'},
+  {id: 'valueLabelFontSize', kind: 'value'},
   {id: 'overlayLoadsToggle', kind: 'checkbox'},
   {id: 'overlayDimsToggle', kind: 'checkbox'},
   {id: 'unitE', kind: 'value'},
@@ -1074,6 +1103,7 @@ function applyDisplaySettings(settings) {
   // 不然滑桿位置換了但旁邊的文字還停在舊數字。
   document.getElementById('pointLoadScaleVal').textContent = parseFloat(document.getElementById('pointLoadScale').value).toFixed(1) + 'x';
   document.getElementById('distLoadScaleVal').textContent = parseFloat(document.getElementById('distLoadScale').value).toFixed(1) + 'x';
+  document.getElementById('momentArcScaleVal').textContent = parseFloat(document.getElementById('momentArcScale').value).toFixed(1) + 'x';
 }
 const DISPLAY_SETTINGS_KEY = 'frame2d_display_settings';
 function saveDisplaySettingsToLocalStorage() {
@@ -1123,6 +1153,9 @@ function loadIconScale(kind) {
   const id = kind === 'point' ? 'pointLoadScale' : 'distLoadScale';
   return parseFloat(document.getElementById(id).value) || 1;
 }
+function momentArcScale() { return parseFloat(document.getElementById('momentArcScale').value) || 1; }
+function loadFontSize() { return parseFloat(document.getElementById('loadLabelFontSize').value) || 10; }
+function valueFontSize() { return parseFloat(document.getElementById('valueLabelFontSize').value) || 9; }
 function drawLoads(t) {
   const defs = el('defs', {});
   const marker = el('marker', {id: 'arrowhead', markerWidth: 8, markerHeight: 8, refX: 6, refY: 3, orient: 'auto'});
@@ -1133,26 +1166,48 @@ function drawLoads(t) {
   for (const p of model.point_loads) {
     const n = nodeById(p.node);
     if (!n) continue;
-    const mag = Math.hypot(p.fx || 0, p.fy || 0);
+    const fx = p.fx || 0, fy = p.fy || 0;
+    const mag = Math.hypot(fx, fy);
     const [x, y] = toScreen(n.x, n.y, t);
+    const loadMode = document.getElementById('loadDisplayMode').value;
     if (mag >= 1e-9) {
-      const ux = (p.fx || 0) / mag, uy = -(p.fy || 0) / mag;
-      const len = 42 * loadIconScale('point');
-      const x1 = x - ux * len, y1 = y - uy * len;
-      put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
-      const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#dc2626', 'text-anchor': 'end'});
-      lbl.textContent = forceStr(mag, 1);
-      put(lbl);
+      if (loadMode === 'components') {
+        // 分量(預設): fx/fy各自畫成獨立的水平/垂直箭頭, 跟反力的分量
+        // 畫法同一套邏輯, 不用另外標角度就能直接跟手算對照。
+        const len = 42 * loadIconScale('point');
+        if (Math.abs(fx) > 1e-9) {
+          const x1 = x - Math.sign(fx) * len, y1 = y;
+          put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+          const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': fx > 0 ? 'end' : 'start'});
+          lbl.textContent = 'fx=' + forceStr(fx, 1);
+          put(lbl);
+        }
+        if (Math.abs(fy) > 1e-9) {
+          const x1 = x, y1 = y + Math.sign(fy) * len;
+          put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+          const lbl = el('text', {x: x1 + 6, y: y1 + (fy > 0 ? 3 : -3), 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'start'});
+          lbl.textContent = 'fy=' + forceStr(fy, 1);
+          put(lbl);
+        }
+      } else {
+        const ux = fx / mag, uy = -fy / mag;
+        const len = 42 * loadIconScale('point');
+        const x1 = x - ux * len, y1 = y - uy * len;
+        put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+        const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'end'});
+        lbl.textContent = forceStr(mag, 1);
+        put(lbl);
+      }
     }
     // 之前這裡只處理fx/fy(力的部分), 如果一個節點載重只有集中彎矩m
     // (fx=fy=0), mag<1e-9直接continue跳過, 畫面上完全看不到這個彎矩
     // ——不是「符號很小看不到」, 是根本沒畫。跟反力彎矩用同一套旋轉
     // 方向弧線畫法, 不管有沒有力的分量, 只要m不是0就畫。
     if (p.m) {
-      const momentRadius = structureWorldDiag() * 0.03;
+      const momentRadius = structureWorldDiag() * 0.03 * momentArcScale();
       drawMomentArc(t, n.x, n.y, p.m, momentRadius, '#dc2626');
       const [mx, my] = toScreen(n.x + momentRadius * 1.4, n.y + momentRadius * 1.4, t);
-      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#dc2626'});
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626'});
       lbl2.textContent = momentStr(p.m, 1) + (p.m > 0 ? '↺' : '↻');
       put(lbl2);
     }
@@ -1207,7 +1262,7 @@ function drawReactions(t) {
   defs.appendChild(marker);
   put(defs);
 
-  const momentRadius = structureWorldDiag() * 0.035;
+  const momentRadius = structureWorldDiag() * 0.035 * momentArcScale();
 
   for (const nr of lastResult.nodes) {
     const hasRx = Math.abs(nr.Rx) > 1e-6;
@@ -1229,7 +1284,7 @@ function drawReactions(t) {
         const ux = nr.Rx / mag, uy = -nr.Ry / mag;
         const x1 = x - ux * len, y1 = y - uy * len;
         put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-        const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': 10, fill: '#059669', 'text-anchor': 'end'});
+        const lbl = el('text', {x: x1 - 4, y: y1 - 4, 'font-size': valueFontSize(), fill: '#059669', 'text-anchor': 'end'});
         lbl.textContent = 'R=' + forceStr(mag, 1) + ' ∠' + angleDeg.toFixed(1) + '°';
         put(lbl);
       }
@@ -1242,14 +1297,14 @@ function drawReactions(t) {
       if (hasRx) {
         const x1 = x - Math.sign(nr.Rx) * len, y1 = y;
         put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-        const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': 10, fill: '#059669', 'text-anchor': nr.Rx > 0 ? 'end' : 'start'});
+        const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': valueFontSize(), fill: '#059669', 'text-anchor': nr.Rx > 0 ? 'end' : 'start'});
         lbl.textContent = 'Rx=' + forceStr(nr.Rx, 1);
         put(lbl);
       }
       if (hasRy) {
         const x1 = x, y1 = y + Math.sign(nr.Ry) * len;
         put(el('line', {x1, y1, x2: x, y2: y, stroke: '#059669', 'stroke-width': 2, 'marker-end': 'url(#arrowhead-reaction)'}));
-        const lbl = el('text', {x: x1 + 6, y: y1 + (nr.Ry > 0 ? 3 : -3), 'font-size': 10, fill: '#059669', 'text-anchor': 'start'});
+        const lbl = el('text', {x: x1 + 6, y: y1 + (nr.Ry > 0 ? 3 : -3), 'font-size': valueFontSize(), fill: '#059669', 'text-anchor': 'start'});
         lbl.textContent = 'Ry=' + forceStr(nr.Ry, 1);
         put(lbl);
       }
@@ -1257,7 +1312,7 @@ function drawReactions(t) {
     if (hasM) {
       drawMomentArc(t, n.x, n.y, nr.M, momentRadius, '#059669');
       const [mx, my] = toScreen(n.x + momentRadius * 1.4, n.y - momentRadius * 1.4, t);
-      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#059669'});
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': valueFontSize(), fill: '#059669'});
       lbl2.textContent = 'M=' + momentStr(nr.M, 1) + (nr.M > 0 ? '↺' : '↻');
       put(lbl2);
     }
@@ -1319,7 +1374,7 @@ function drawDistributedLoadIndicators(t) {
       put(el('line', {x1: lx1, y1: ly1, x2: bx1, y2: by1, stroke: '#dc2626', 'stroke-width': 1.5, 'marker-end': 'url(#arrowhead)'}));
     }
     const [mx, my] = toScreen(ni.x + (x0 + x1) / 2 * c, ni.y + (x0 + x1) / 2 * s, t);
-    const lbl = el('text', {x: mx, y: my - 6, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'middle'});
+    const lbl = el('text', {x: mx, y: my - 6, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
     lbl.textContent = (rawW0 === rawW1 ? forceStr(rawW0) : `${fromSI('force', rawW0).toFixed(2)}~${fromSI('force', rawW1).toFixed(2)}${unitOf('force')}`) + '/m';
     put(lbl);
   }
@@ -1337,23 +1392,42 @@ function drawMemberPointLoadIndicators(t) {
     const [x, y] = toScreen(bx, by, t);
     const [pfx, pfy] = memberPointLoadFxFy(p);
     const mag = Math.hypot(pfx, pfy);
+    const loadMode = document.getElementById('loadDisplayMode').value;
     if (mag >= 1e-9) {
-      const ux = pfx / mag, uy = -pfy / mag;
-      const len = 36 * loadIconScale('point');
-      put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
-      const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': 9, fill: '#dc2626', 'text-anchor': 'end'});
-      lbl.textContent = forceStr(mag, 1);
-      put(lbl);
+      if (loadMode === 'components') {
+        const len = 36 * loadIconScale('point');
+        if (Math.abs(pfx) > 1e-9) {
+          const x1 = x - Math.sign(pfx) * len, y1 = y;
+          put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+          const lbl = el('text', {x: x1, y: y1 - 6, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': pfx > 0 ? 'end' : 'start'});
+          lbl.textContent = 'fx=' + forceStr(pfx, 1);
+          put(lbl);
+        }
+        if (Math.abs(pfy) > 1e-9) {
+          const x1 = x, y1 = y + Math.sign(pfy) * len;
+          put(el('line', {x1, y1, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+          const lbl = el('text', {x: x1 + 6, y: y1 + (pfy > 0 ? 3 : -3), 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'start'});
+          lbl.textContent = 'fy=' + forceStr(pfy, 1);
+          put(lbl);
+        }
+      } else {
+        const ux = pfx / mag, uy = -pfy / mag;
+        const len = 36 * loadIconScale('point');
+        put(el('line', {x1: x - ux * len, y1: y - uy * len, x2: x, y2: y, class: 'load-arrow', 'marker-end': 'url(#arrowhead)'}));
+        const lbl = el('text', {x: x - ux * len - 4, y: y - uy * len - 4, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'end'});
+        lbl.textContent = forceStr(mag, 1);
+        put(lbl);
+      }
     }
     // 之前這裡用空心圓圈表示彎矩(沒有方向), 而且只有在「這筆載重沒有
     // 力的分量」的時候才會畫——如果同一筆桿件集中力同時有fx/fy又有m,
     // 彎矩部分整個被跳過完全沒畫。改成跟反力彎矩/節點集中彎矩同一套
     // 旋轉方向弧線畫法, 而且不管有沒有力的分量, 只要m不是0就畫。
     if (p.m) {
-      const momentRadius = structureWorldDiag() * 0.025;
+      const momentRadius = structureWorldDiag() * 0.025 * momentArcScale();
       drawMomentArc(t, bx, by, p.m, momentRadius, '#dc2626');
       const [mx, my] = toScreen(bx + momentRadius * 1.4, by + momentRadius * 1.4, t);
-      const lbl2 = el('text', {x: mx, y: my, 'font-size': 9, fill: '#dc2626'});
+      const lbl2 = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626'});
       lbl2.textContent = momentStr(p.m, 1) + (p.m > 0 ? '↺' : '↻');
       put(lbl2);
     }
@@ -1384,7 +1458,7 @@ function drawDeformed(t) {
     if (!nn) continue;
     const [x, y] = toScreen(nn.x, nn.y, t);
     if (!tryPlace(x + 8, y + 14)) continue; // 跟已經放的標籤太近, 跳過避免重疊
-    const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c'});
+    const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c', style: `font-size:${valueFontSize()}px`});
     lbl2.textContent = `Δ=${dispStr(disp, 1)}`;
     put(lbl2);
   }
@@ -1458,7 +1532,7 @@ function drawDiagram(t, kind) {
       if (Math.abs(val) < maxAbs * 0.02) continue; // 太小的值不標, 避免畫面太亂
       const [lx, ly] = diagPts[i];
       if (!tryPlace(lx, ly)) continue; // 跟已經放的標籤太近, 跳過避免重疊
-      const t2 = el('text', {x: lx, y: ly, class: 'value-label', fill: kind === 'M' ? '#dc2626' : '#2563eb', 'text-anchor': 'middle'});
+      const t2 = el('text', {x: lx, y: ly, class: 'value-label', fill: kind === 'M' ? '#dc2626' : '#2563eb', 'text-anchor': 'middle', style: `font-size:${valueFontSize()}px`});
       t2.textContent = fromSI(kind === 'M' ? 'moment' : 'force', val).toFixed(2);
       put(t2);
     }
@@ -2393,7 +2467,7 @@ svg.addEventListener('pointerdown', (e) => {
   if (activePointers.size >= 2) return;
   if (dragNodeId !== null) return;
   e.preventDefault();
-  const t = computeTransform();
+  const t = getTransform(PAD_BY_VIEW[viewMode]);
   if (selectMode) {
     const [wx, wy] = clientToWorld(e, t);
     marqueeState = {mode: selectMode, startWorld: {x: wx, y: wy}, curWorld: {x: wx, y: wy}};
@@ -2422,7 +2496,7 @@ svg.addEventListener('pointerdown', (e) => {
 svg.addEventListener('pointermove', (e) => {
   if (activePointers.size >= 2) return;
   if (marqueeState) {
-    const t = computeTransform();
+    const t = getTransform(PAD_BY_VIEW[viewMode]);
     const [wx, wy] = clientToWorld(e, t);
     marqueeState.curWorld = {x: wx, y: wy};
     render();
@@ -2437,7 +2511,7 @@ svg.addEventListener('pointermove', (e) => {
     const pNow = clientToCameraSpace(e);
     if (!dragMoved && Math.hypot(pNow.x - dragStartScreen.x, pNow.y - dragStartScreen.y) < 6) return;
     dragMoved = true;
-    const t = computeTransform();
+    const t = getTransform(PAD_BY_VIEW[viewMode]);
     const [wx, wy] = clientToWorld(e, t);
     const n = nodeById(dragNodeId);
     const conn = model.members.find(m => m.node_i === dragNodeId || m.node_j === dragNodeId);
@@ -2571,6 +2645,7 @@ document.getElementById('overlayDimsToggle').addEventListener('change', render);
 document.getElementById('avoidLabelOverlapToggle').addEventListener('change', render);
 document.getElementById('mDiagramSide').addEventListener('change', render);
 document.getElementById('reactionDisplayMode').addEventListener('change', render);
+document.getElementById('loadDisplayMode').addEventListener('change', render);
 document.getElementById('pointLoadScale').addEventListener('input', () => {
   document.getElementById('pointLoadScaleVal').textContent = parseFloat(document.getElementById('pointLoadScale').value).toFixed(1) + 'x';
   render();
@@ -2579,6 +2654,12 @@ document.getElementById('distLoadScale').addEventListener('input', () => {
   document.getElementById('distLoadScaleVal').textContent = parseFloat(document.getElementById('distLoadScale').value).toFixed(1) + 'x';
   render();
 });
+document.getElementById('momentArcScale').addEventListener('input', () => {
+  document.getElementById('momentArcScaleVal').textContent = parseFloat(document.getElementById('momentArcScale').value).toFixed(1) + 'x';
+  render();
+});
+document.getElementById('loadLabelFontSize').addEventListener('change', render);
+document.getElementById('valueLabelFontSize').addEventListener('change', render);
 ['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
@@ -2786,6 +2867,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   currentName = null;
   document.getElementById('modelName').value = '';
   camera = {x: 0, y: 0, k: 1};
+  resetTransform();
   applyCameraTransform();
   clearSelection();
   setStatus('已新建空白專案');
@@ -2808,6 +2890,7 @@ document.getElementById('btnLoad').addEventListener('click', async () => {
     currentName = name;
     document.getElementById('modelName').value = name;
     lastResult = null;
+    resetTransform();
     clearSelection();
     setStatus('已載入 "' + name + '"(記得重新按 Solve)');
   } catch (e) { setStatus('載入失敗: ' + e.message); }
@@ -2847,6 +2930,7 @@ document.getElementById('importJsonFile').addEventListener('change', (e) => {
       model = JSON.parse(reader.result);
       lastResult = null;
       currentName = null;
+      resetTransform();
       clearSelection();
       setStatus('已匯入 ' + file.name + '(記得重新按 Solve)');
     } catch (err) { setStatus('匯入失敗,JSON 格式錯誤: ' + err.message); }
