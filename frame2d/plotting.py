@@ -527,17 +527,25 @@ def plot_member_fbd(frame, result, member_id, ax=None):
     Fx2_g = c_ang * Fx2 - s_ang * Fy2
     Fy2_g = s_ang * Fx2 + c_ang * Fy2
 
-    fmax = max(abs(Fx1_g), abs(Fy1_g), abs(Fx2_g), abs(Fy2_g), 1e-9)
     arrow_len = L * 0.28
 
     def _draw_end_force(x, y, fx, fy, mm, color):
-        mag = np.hypot(fx, fy)
-        if mag > 1e-6:
-            ux, uy = fx / mag, fy / mag
-            ax.annotate('', xy=(x, y), xytext=(x - ux * arrow_len, y - uy * arrow_len),
+        # 分量畫法(不合成單一斜向箭頭): Fx/Fy各自畫成獨立的水平/垂直
+        # 箭頭, 這樣才是「大小+方向」的完整分量表示, 直接就能跟手算
+        # 對照, 不用另外標角度; 跟webapi前端GUI裡反力/外力的「分量」
+        # 顯示模式是同一套設計理念。
+        if abs(fx) > 1e-6:
+            sign = 1 if fx > 0 else -1
+            ax.annotate('', xy=(x, y), xytext=(x - sign * arrow_len, y),
                         arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
-            ax.annotate(f'{mag:.4g}', (x - ux * arrow_len, y - uy * arrow_len), fontsize=8, color=color,
-                        xytext=(4, 4), textcoords='offset points')
+            ax.annotate(f'Fx={fx:.4g}', (x - sign * arrow_len, y), fontsize=7.5, color=color,
+                        xytext=(4, 6), textcoords='offset points')
+        if abs(fy) > 1e-6:
+            sign = 1 if fy > 0 else -1
+            ax.annotate('', xy=(x, y), xytext=(x, y - sign * arrow_len),
+                        arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
+            ax.annotate(f'Fy={fy:.4g}', (x, y - sign * arrow_len), fontsize=7.5, color=color,
+                        xytext=(4, -10), textcoords='offset points')
         if abs(mm) > 1e-6:
             _draw_moment_arc(ax, x, y, mm, L * 0.12, color)
             ax.annotate(f'M={mm:.4g}', (x, y), fontsize=8, color=color,

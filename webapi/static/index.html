@@ -24,6 +24,15 @@
                border-radius: 14px 14px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,0.25); z-index: 101; padding: 0.9rem; }
   #propModal.open { display: block; }
   #propModal button, #propModal input, #propModal select { }
+  #fbdPreviewBackdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; }
+  #fbdPreviewBackdrop.open { display: block; }
+  #fbdPreviewModal { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+               width: min(560px, 94vw); max-height: 88vh; overflow-y: auto; background: #fff;
+               border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 201; padding: 1rem; }
+  #fbdPreviewModal.open { display: block; }
+  .fbdPreviewCard { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 0.7rem; padding: 0.5rem; }
+  .fbdPreviewCard img { width: 100%; display: block; border-radius: 4px; }
+  .fbdPreviewCard.removed { opacity: 0.35; }
   h1 { font-size: 1.05rem; margin: 0; padding: 0.6rem 0 0.3rem; }
   .hint { font-size: 0.78rem; color: #666; margin-bottom: 0.6rem; }
 
@@ -200,7 +209,7 @@
             <label class="snapLabel"><input type="radio" name="fbdScope" value="current" checked>目前上面選到的那根桿件("查詢"用的那個下拉選單)</label>
             <label class="snapLabel"><input type="radio" name="fbdScope" value="selected">目前框選/畫線選取的桿件(批次選取)</label>
             <label class="snapLabel"><input type="radio" name="fbdScope" value="all">全部桿件</label>
-            <button id="btnExportFbd" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">匯出自由體圖 PDF</button>
+            <button id="btnExportFbd" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">👁 預覽自由體圖(匯出前可個別移除)</button>
           </div>
         </details>
       </div>
@@ -299,6 +308,17 @@
 </div>
 
 <div id="propModalBackdrop"></div>
+<div id="fbdPreviewBackdrop"></div>
+<div id="fbdPreviewModal">
+  <h3 style="margin-top:0;">自由體圖預覽</h3>
+  <p class="hint">確認每一張沒問題再按下面「確認匯出PDF」。不想要的桿件按「✕ 移除這根」, 只有還留著的桿件會真的匯出到PDF裡。</p>
+  <div id="fbdPreviewList"></div>
+  <div class="row2" style="margin-top:0.4rem;">
+    <button id="fbdPreviewConfirm" style="background:#16a34a;color:white;">✔ 確認匯出PDF</button>
+    <button id="fbdPreviewCancel">取消</button>
+  </div>
+</div>
+
 <div id="propModal">
   <div id="propPanel"><p class="hint">點節點或桿件看屬性。</p></div>
 </div>
@@ -3117,6 +3137,7 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
   downloadBlob(blob, (currentName || 'frame2d_result') + '.md');
 });
 
+let fbdPreviewMemberIds = []; // 目前預覽modal裡「還留著」(沒被移除)的桿件ID清單
 document.getElementById('btnExportFbd').addEventListener('click', async () => {
   const scope = document.querySelector('input[name="fbdScope"]:checked').value;
   let memberIds;
@@ -3135,9 +3156,59 @@ document.getElementById('btnExportFbd').addEventListener('click', async () => {
     if (!memberIds.length) { setStatus('目前模型沒有任何桿件'); return; }
   }
   sanitizeModel();
-  setStatus(`產生自由體圖PDF中(${memberIds.length} 根桿件, 每根附自由體圖+內力圖共2頁)...`);
+  setStatus(`產生自由體圖預覽中(${memberIds.length} 根桿件)...`);
   try {
-    const payload = {...model, member_ids: memberIds, units: {
+    const payload = {...model, member_ids: memberIds};
+    const res = await fetch('/preview/fbd', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    if (!res.ok) { setStatus('自由體圖預覽產生失敗: ' + await res.text()); return; }
+    const data = await res.json();
+    showFbdPreviewModal(data.previews);
+    setStatus('');
+  } catch (e) { setStatus('自由體圖預覽產生失敗: ' + e.message); }
+});
+
+function showFbdPreviewModal(previews) {
+  fbdPreviewMemberIds = previews.map(p => p.member_id);
+  const list = document.getElementById('fbdPreviewList');
+  list.innerHTML = previews.map(p => `
+    <div class="fbdPreviewCard" data-member-id="${p.member_id}">
+      <div class="row2" style="align-items:center;">
+        <strong>桿件 M${p.member_id}</strong>
+        <button class="fbdRemoveBtn" data-member-id="${p.member_id}" style="width:auto;background:#dc2626;color:white;">✕ 移除這根</button>
+      </div>
+      <img src="data:image/png;base64,${p.image_base64}" alt="M${p.member_id} 自由體圖">
+    </div>
+  `).join('');
+  list.querySelectorAll('.fbdRemoveBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = parseInt(btn.dataset.memberId, 10);
+      fbdPreviewMemberIds = fbdPreviewMemberIds.filter(mid => mid !== id);
+      const card = list.querySelector(`.fbdPreviewCard[data-member-id="${id}"]`);
+      card.classList.add('removed');
+      btn.disabled = true;
+      btn.textContent = '已移除';
+      document.getElementById('fbdPreviewConfirm').textContent =
+        `✔ 確認匯出PDF(${fbdPreviewMemberIds.length} 根桿件)`;
+    });
+  });
+  document.getElementById('fbdPreviewConfirm').textContent = `✔ 確認匯出PDF(${fbdPreviewMemberIds.length} 根桿件)`;
+  document.getElementById('fbdPreviewModal').classList.add('open');
+  document.getElementById('fbdPreviewBackdrop').classList.add('open');
+}
+function closeFbdPreviewModal() {
+  document.getElementById('fbdPreviewModal').classList.remove('open');
+  document.getElementById('fbdPreviewBackdrop').classList.remove('open');
+}
+document.getElementById('fbdPreviewCancel').addEventListener('click', closeFbdPreviewModal);
+document.getElementById('fbdPreviewBackdrop').addEventListener('click', closeFbdPreviewModal);
+document.getElementById('fbdPreviewConfirm').addEventListener('click', async () => {
+  if (!fbdPreviewMemberIds.length) { setStatus('已經把全部桿件都移除了, 沒有東西可以匯出'); return; }
+  closeFbdPreviewModal();
+  setStatus(`產生自由體圖PDF中(${fbdPreviewMemberIds.length} 根桿件, 每根附自由體圖+內力圖共2頁)...`);
+  try {
+    const payload = {...model, member_ids: fbdPreviewMemberIds, units: {
       E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
       disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
     }};
@@ -3147,7 +3218,7 @@ document.getElementById('btnExportFbd').addEventListener('click', async () => {
     if (!res.ok) { setStatus('自由體圖PDF產生失敗: ' + await res.text()); return; }
     const blob = await res.blob();
     downloadBlob(blob, (currentName || 'frame2d_report') + '_fbd.pdf');
-    setStatus(`自由體圖PDF已下載(${memberIds.length} 根桿件)`);
+    setStatus(`自由體圖PDF已下載(${fbdPreviewMemberIds.length} 根桿件)`);
   } catch (e) { setStatus('自由體圖PDF產生失敗: ' + e.message); }
 });
 document.getElementById('btnExportPdf').addEventListener('click', async () => {

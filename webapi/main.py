@@ -18,7 +18,7 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report
+from .pdf_export import build_pdf_report, build_fbd_previews
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -183,11 +183,35 @@ def export_pdf(payload: FrameIn):
                    f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
                    f"還留著指向舊桿件編號), 請檢查並移除",
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'},
     )
+
+
+@app.post("/preview/fbd")
+def preview_fbd(payload: FrameIn):
+    """匯出自由體圖PDF之前, 先讓前端秀出每根指定桿件的自由體圖預覽
+    (base64 PNG), 使用者可以看過之後個別移除不想要的桿件, 確認後
+    才真的呼叫/export/pdf。"""
+    f = _build_frame(payload)
+    if not payload.member_ids:
+        raise HTTPException(status_code=400, detail="沒有指定要預覽的桿件(member_ids)")
+    try:
+        previews = build_fbd_previews(f, payload.member_ids)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                   f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                   f"還留著指向舊桿件編號), 請檢查並移除",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"previews": previews}
 
 
 # ---------------- 查詢桿件內部任意位置的內力/位移 ----------------

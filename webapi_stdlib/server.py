@@ -21,7 +21,7 @@ from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report
+from .pdf_export import build_pdf_report, build_fbd_previews
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -181,6 +181,25 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 self._send_bytes(pdf_bytes, "application/pdf",
                                   extra_headers={"Content-Disposition": 'attachment; filename="frame2d_report.pdf"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/preview/fbd":
+            try:
+                payload = self._read_json_body()
+                f = _build_frame(payload)
+                member_ids = payload.get("member_ids")
+                if not member_ids:
+                    raise ValueError("沒有指定要預覽的桿件(member_ids)")
+                try:
+                    previews = build_fbd_previews(f, member_ids)
+                except KeyError as e:
+                    raise ValueError(
+                        f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                        f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                        f"還留著指向舊桿件編號), 請檢查並移除"
+                    )
+                self._send_json({"previews": previews})
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return

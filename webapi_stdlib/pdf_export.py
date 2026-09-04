@@ -12,6 +12,7 @@ matplotlib 用 Agg(非互動式)backend,在沒有顯示器的伺服器環境
 別的軟體重現同一個模型。這裡補上完整的表格頁, 用matplotlib的
 ax.table()畫, 跟結構圖用同一套PdfPages合併成一份多頁PDF。
 """
+import base64
 import io
 
 import matplotlib
@@ -22,6 +23,32 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from frame2d import solve
 from frame2d.plotting import plot_all, plot_member_fbd, plot_member_own_diagrams
+
+
+def _fig_to_png_base64(fig, dpi=110):
+    """把matplotlib figure轉成base64編碼的PNG字串, 用在「匯出前先在
+    瀏覽器預覽」這個功能——不用另外存檔案再回傳URL, 直接把圖片編碼
+    塞進JSON回應裡, 前端<img src="data:image/png;base64,...">就能
+    直接顯示, 不用額外的靜態檔案伺服流程。"""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def build_fbd_previews(f, member_ids):
+    """回傳每根指定桿件的自由體圖預覽(base64 PNG), 給前端在真正
+    匯出PDF之前先秀出來讓使用者確認、可以個別排除不想要的桿件。
+    回傳list of {"member_id":int, "image_base64":str}, 找不到的
+    member_id直接跳過(不報錯, 讓前端自己比對哪些真的有回傳)。"""
+    result = solve(f)
+    previews = []
+    for mid in member_ids:
+        if mid not in f.members:
+            continue
+        ax = plot_member_fbd(f, result, mid)
+        previews.append({"member_id": mid, "image_base64": _fig_to_png_base64(ax.figure)})
+        plt.close(ax.figure)
+    return previews
 
 
 def _table_page(title, blocks, figsize=(14, 9)):
