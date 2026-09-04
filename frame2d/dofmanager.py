@@ -109,6 +109,14 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
     for dl in frame.distributed_loads:
         m = frame.members[dl.member]
         L = member_L[dl.member]
+        if m.member_type in ('truss', 'cable'):
+            raise ValueError(
+                f"member {dl.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
+                " 不能承受分佈載重(fixed_end_forces_udl假設的是有彎曲能力的frame"
+                " 元素; truss/cable自己的桿端彎矩M1/M2永遠必須是0, 加了均佈載重會讓"
+                " 固定端彎矩項被靜默塞進求解, 得到錯誤但看起來合理的答案——這是"
+                " 2026-09開發過程中發現的真實bug, 已修正為明確報錯)。如果要模擬"
+                " 自重, 改成在兩端節點各加一半重量的point_load。")
         if dl.direction == 'global_y':
             # 全域垂直方向均佈/線性變化載重(大小以沿桿件長度量測, 例如
             # 屋頂重力/雪載重的標準表示方式): 依桿件角度分解成局部x(軸向)
@@ -160,6 +168,13 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
 
     # ---- 2b. 桿件內部集中力/力矩: 同樣用標準公式 ----
     for pl_m in frame.member_point_loads:
+        m = frame.members[pl_m.member]
+        if m.member_type in ('truss', 'cable'):
+            raise ValueError(
+                f"member {pl_m.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
+                " 不能承受桿件內部集中力/力矩(理由同distributed_load的檢查, 見"
+                " 該處註解)。如果要模擬桁架/纜線中間的集中力, 改成拆成兩段桿件、"
+                " 在新節點上用point_load。")
         L = member_L[pl_m.member]
         a = min(max(pl_m.a, 0.0), L)
         f_FE_local = np.zeros(6)

@@ -1,7 +1,7 @@
 # Benchmark Suite 索引
 
 frame2d 的正確性不是靠單一權威來源背書,是靠多種互相獨立的驗證方式
-交叉確認。這份文件把 `tests/` 底下 35 個驗證案例依「驗證對象」分類整理,
+交叉確認。這份文件把 `tests/` 底下 36 個驗證案例依「驗證對象」分類整理,
 方便快速找到「某個功能是用什麼方法驗證過的」,不用逐一打開每個檔案的
 docstring。
 
@@ -71,11 +71,12 @@ frame2d 使用四種互相獨立的驗證方式, 沒有任何一個功能只靠�
 | 27 | `test_a_over_L_sweep_boundary.py` | **精確定位a/L數值安全邊界**(懸崖在a/L≈4~5e-5) | 自我比對(雙桿件 vs 乾淨release, 20+點掃描) |
 | 28 | `test_a_over_L_1e1_to_1e4_vs_swfea.py` | a/L=1e-1~1e-4(安全區內)逐點對照 | SW FEA |
 
-### 其他功能(案例 29-30)
+### 其他功能(案例 29-30, 36)
 | 案例 | 檔案 | 驗證對象 | 方法 |
 |---|---|---|---|
 | 29 | `test_result_api.py` | Result API便利查詢介面(純介面整理) | 對照底層函式手動查詢+解析解 |
 | 30 | `test_sloped_roof_global_udl.py` | `distributed_load(direction='global_y')`(斜屋頂重力/雪載重, 整根桿件) | SW FEA(slop-roof案例, 4桿件x11點N/V/M) |
+| 36 | `test_truss_cable_load_guard.py` | **truss/cable桿件加桿件內部載重的靜默錯誤bug** | truss/cable定義(桿端彎矩必須=0)+ solve.py既有防護當對照 |
 
 ### 任意角度均佈載重系列(案例 31-35)
 
@@ -117,6 +118,20 @@ SW FEA 一個外部參照。
 桿件的局部段載重」改成「兩根桿件, 其中一根整段都有載重」, 繞開SW FEA
 不可靠的計算路徑, 走它可靠的full-member路徑。這不是理論推導, 是使用者
 實際在SW FEA app裡重新輸入驗證過的(案例35)。
+
+## 這套 benchmark suite 意外抓到的自己的問題
+
+不是每次都是 SW FEA 有問題——案例36是使用者直接提問「truss/cable 上加
+桿件內部載重, 是不是真實的bug」逼出來的, 抓到 `dofmanager.py`(主要
+求解器)本身缺少 `solve.py`(靜力凝縮版本)早就有的防護。truss/cable
+桿件的定義是兩端絕對不能有彎矩(這是它們的剛度矩陣沒有旋轉項的直接
+後果), 但均佈載重/桿件內部集中力的固定端反力公式假設的是有彎曲勁度
+的frame元素, 會產生非零的固定端彎矩項。如果truss/cable桿件的兩端剛好
+都是外部支承(旋轉自由度整個懸空), 一個通用的「自由度沒有勁度卻被
+施加外力」安全網會意外攔下來; 但只要truss/cable的兩端有任一端接到
+其他frame桿件(旋轉自由度被"借用", 不再懸空), 這個安全網就不會觸發,
+載重會被靜默接受, 算出truss/cable桿端彎矩不等於0的錯誤答案。已在
+dofmanager.py補上跟solve.py同樣的明確ValueError檢查, 見案例36。
 
 ## 這套 benchmark suite 意外抓到的 SW FEA 問題
 
