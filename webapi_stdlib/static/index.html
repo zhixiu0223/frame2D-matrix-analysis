@@ -1857,17 +1857,17 @@ function renderBatchSupportForm(nodeIds) {
 function renderBatchNodeLoadForm(nodeIds) {
   const panel = document.getElementById('propPanel');
   panel.innerHTML = `<fieldset><legend>批次施加節點集中力(${nodeIds.length} 個節點)</legend>
-    <label>fx (N)</label><input id="bl_fx" type="number" step="any" value="0">
-    <label>fy (N)</label><input id="bl_fy" type="number" step="any" value="0">
-    <label>集中彎矩 m (N·m)</label><input id="bl_m" type="number" step="any" value="0">
+    <label>fx (${unitOf('force')})</label><input id="bl_fx" type="number" step="any" value="0">
+    <label>fy (${unitOf('force')})</label><input id="bl_fy" type="number" step="any" value="0">
+    <label>集中彎矩 m (${unitOf('moment')})</label><input id="bl_m" type="number" step="any" value="0">
     <p class="hint">會取代這些節點原本的集中力設定(全部設成0代表移除)。</p>
     <div class="row2"><button id="bl_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bl_back">返回</button></div>
   </fieldset>`;
   document.getElementById('bl_back').onclick = renderMultiSelectPanel;
   document.getElementById('bl_apply').onclick = () => {
-    const fx = parseFloat(document.getElementById('bl_fx').value) || 0;
-    const fy = parseFloat(document.getElementById('bl_fy').value) || 0;
-    const mm = parseFloat(document.getElementById('bl_m').value) || 0;
+    const fx = toSI('force', parseFloat(document.getElementById('bl_fx').value) || 0);
+    const fy = toSI('force', parseFloat(document.getElementById('bl_fy').value) || 0);
+    const mm = toSI('moment', parseFloat(document.getElementById('bl_m').value) || 0);
     model.point_loads = model.point_loads.filter(p => !nodeIds.includes(p.node));
     if (fx !== 0 || fy !== 0 || mm !== 0) {
       for (const id of nodeIds) model.point_loads.push({node: id, fx, fy, m: mm});
@@ -1885,9 +1885,9 @@ function renderBatchDistLoadForm(memberIds) {
       <option value="global_y">整體垂直向下(重力方向, 最常用)</option>
       <option value="local">局部y方向(垂直於桿件本身)</option>
     </select>
-    <label>w1 起點強度 (N/m, 正值方向依上面選的方向而定)</label>
+    <label>w1 起點強度 (${unitOf('force')}/m, 正值方向依上面選的方向而定)</label>
     <input id="bd_w1" type="number" step="any" value="0">
-    <label>w2 終點強度 (N/m, 留空 = 均佈載重跟w1一樣; 填不同值 = 梯形載重)</label>
+    <label>w2 終點強度 (${unitOf('force')}/m, 留空 = 均佈載重跟w1一樣; 填不同值 = 梯形載重)</label>
     <input id="bd_w2" type="number" step="any" placeholder="留空表示跟w1相同">
     <p class="hint">會取代這些桿件原本的均佈載重設定(這裡的批次功能只覆蓋全長, 局部範圍/桿件集中力請到單一桿件的屬性面板設定)。</p>
     <div class="row2"><button id="bd_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bd_back">返回</button></div>
@@ -1895,9 +1895,9 @@ function renderBatchDistLoadForm(memberIds) {
   document.getElementById('bd_back').onclick = renderMultiSelectPanel;
   document.getElementById('bd_apply').onclick = () => {
     const dir = document.getElementById('bd_dir').value;
-    const w1 = parseFloat(document.getElementById('bd_w1').value) || 0;
+    const w1 = toSI('force', parseFloat(document.getElementById('bd_w1').value) || 0);
     const w2raw = document.getElementById('bd_w2').value;
-    const w2 = w2raw === '' ? undefined : parseFloat(w2raw);
+    const w2 = w2raw === '' ? undefined : toSI('force', parseFloat(w2raw));
     model.distributed_loads = model.distributed_loads.filter(d => !memberIds.includes(d.member));
     for (const id of memberIds) {
       const entry = {member: id, w_start: w1, direction: dir};
