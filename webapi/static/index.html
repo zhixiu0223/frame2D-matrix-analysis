@@ -887,7 +887,7 @@ function gridLabelStyle() { return `font-size:${gridLabelSize}px;font-weight:600
 function drawGrid(t) {
   const vis = visibleWorldRect(t);
   const w = (vis.maxX - vis.minX) || 1, h = (vis.maxY - vis.minY) || 1;
-  const step = niceStep(Math.max(w, h) / 8);
+  const step = currentGridStep(t);
   const padX = w * 0.15 + step, padY = h * 0.15 + step;
   const gx0 = Math.floor((vis.minX - padX) / step) * step, gx1 = Math.ceil((vis.maxX + padX) / step) * step;
   const gy0 = Math.floor((vis.minY - padY) / step) * step, gy1 = Math.ceil((vis.maxY + padY) / step) * step;
@@ -2440,10 +2440,18 @@ function splitMemberAtInternalPin(m, mode, value) {
 // ---------- 鎖定(Snap): 節點鎖定 > 正交鎖定 > 格線鎖定, 依序套用 ----------
 let lastActiveNodeId = null;
 
-function currentGridStep() {
-  const xs = model.nodes.length > 1 ? model.nodes.map(n => n.x) : [0, 10];
-  const ys = model.nodes.length > 1 ? model.nodes.map(n => n.y) : [0, 10];
-  const w = (Math.max(...xs) - Math.min(...xs)) || 1, h = (Math.max(...ys) - Math.min(...ys)) || 1;
+// 之前這裡是根據「結構本身節點的座標範圍」算格線間距, 但drawGrid()
+// (實際畫在畫面上的格線)是根據「目前縮放後實際看得到的世界範圍」
+// (visibleWorldRect)算——兩者平常剛好差不多所以看起來正常, 但只要
+// 使用者縮放過畫面、或結構範圍跟可視範圍對不上, 兩邊就會算出不同
+// 的間距, 造成「新節點吸附到跟畫面顯示的格線不一樣的位置」這種
+// 使用者形容的「有時候在格線上、有時候不在」的不穩定現象。改成
+// 跟drawGrid()用同一套公式(目前實際可視範圍), 兩者變成同一個計算
+// 結果, 不會再有這種不一致。
+function currentGridStep(t) {
+  if (!t) t = getTransform(PAD_BY_VIEW[viewMode]);
+  const vis = visibleWorldRect(t);
+  const w = (vis.maxX - vis.minX) || 1, h = (vis.maxY - vis.minY) || 1;
   return niceStep(Math.max(w, h) / 8);
 }
 
