@@ -256,6 +256,9 @@
     </div>
 
     <div id="status"></div>
+    <div id="statusCopyWrap" style="display:none;margin-top:0.3rem;">
+      <button id="statusCopyBtn" style="width:auto;">📋 複製這則訊息</button>
+    </div>
   </div>
 
   <div id="canvasWrap">
@@ -2733,6 +2736,33 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
   });
 });
+document.getElementById('statusCopyBtn').addEventListener('click', async () => {
+  const text = document.getElementById('status').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById('status').textContent = '已複製到剪貼簿: ' + text;
+  } catch (e) {
+    // 跟除錯面板同樣的邏輯: 非HTTPS環境clipboard API常常直接被擋掉,
+    // 這裡用一個暫時的textarea(原生表單元件, 手機長按一定會跳出
+    // 標準選取/複製選單)當備援, 不用像之前對<pre>用Range/Selection
+    // API那樣容易在手機瀏覽器上失效。
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '50%';
+    ta.style.left = '1rem';
+    ta.style.right = '1rem';
+    ta.style.width = 'calc(100% - 2rem)';
+    ta.style.height = '8rem';
+    ta.style.zIndex = '9999';
+    ta.readOnly = true;
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    setStatus('自動複製失敗(常見於非HTTPS環境), 已跳出一個文字框選好內容, 長按選取範圍應該就能看到複製選項(點畫面其他地方會關閉這個文字框)');
+    ta.addEventListener('blur', () => ta.remove(), {once: true});
+  }
+});
 document.getElementById('debugCopyBtn').addEventListener('click', async () => {
   const textarea = document.getElementById('debugLog');
   const text = textarea.value;
@@ -2883,7 +2913,13 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
   } catch (e) { setStatus('連線失敗: ' + e.message); }
 });
 
-function setStatus(s) { document.getElementById('status').textContent = s; }
+function setStatus(s) {
+  document.getElementById('status').textContent = s;
+  // 不只是錯誤訊息, 任何狀態列文字都可能想複製起來貼給別人問問題
+  // (不只是這次的truss/cable錯誤, 之後任何訊息都一樣), 所以不用
+  // 猜「這是不是錯誤」的判斷邏輯, 只要狀態列有文字就顯示複製按鈕。
+  document.getElementById('statusCopyWrap').style.display = s ? 'block' : 'none';
+}
 
 function renderTables() {
   const dispUnit = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
@@ -3025,7 +3061,34 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
   if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
   const du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
   let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
-  md += `## 節點結果\n\n`;
+
+  // 輸入資料: 讓這份報告本身就能完全重現模型或手算驗證, 不用另外
+  // 回頭翻建模畫面確認座標/斷面/載重數值。全部用SI單位(跟後端solver
+  // 內部一致), 不受目前顯示單位設定影響, 避免拿這份報告去跟別的
+  // 軟體/手算比對時, 還要先猜這裡是不是有經過單位換算。
+  md += `## 輸入資料(SI單位: m, Pa, m^4, m^2, N, N·m)\n\n`;
+  md += `### 節點座標\n\n| node | x (m) | y (m) |\n|---|---|---|\n`;
+  for (const n of model.nodes) md += `| ${n.id} | ${n.x} | ${n.y} |\n`;
+  md += `\n### 斷面性質\n\n| 名稱 | E (Pa) | I (m^4) | A (m^2) |\n|---|---|---|---|\n`;
+  for (const s of model.sections) md += `| ${s.name} | ${s.E} | ${s.I} | ${s.A} |\n`;
+  md += `\n### 桿件連接\n\n| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 |\n|---|---|---|---|---|---|---|\n`;
+  for (const m of model.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
+  md += `\n### 支承條件(空白=自由, 0=固定, 非0=強制位移)\n\n| node | ux | uy | rot |\n|---|---|---|---|\n`;
+  for (const s of model.supports) md += `| ${s.node} | ${s.ux ?? ''} | ${s.uy ?? ''} | ${s.rot ?? ''} |\n`;
+  if (model.point_loads.length) {
+    md += `\n### 節點集中力\n\n| node | fx (N) | fy (N) | m (N·m) |\n|---|---|---|---|\n`;
+    for (const p of model.point_loads) md += `| ${p.node} | ${p.fx} | ${p.fy} | ${p.m} |\n`;
+  }
+  if (model.distributed_loads.length) {
+    md += `\n### 桿件均佈載重\n\n| member | w1 | w2 | x起點 | x終點 | 方向 | 角度 |\n|---|---|---|---|---|---|---|\n`;
+    for (const d of model.distributed_loads) md += `| ${d.member} | ${d.w_start} | ${d.w_end ?? '=w1'} | ${d.x_start ?? 0} | ${d.x_end ?? '全長'} | ${d.direction} | ${d.angle_deg ?? '-'} |\n`;
+  }
+  if (model.member_point_loads.length) {
+    md += `\n### 桿件內部集中力/彎矩\n\n| member | a(m) | 方向 | fx | fy | F | 角度 | m |\n|---|---|---|---|---|---|---|---|\n`;
+    for (const p of model.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx ?? '-'} | ${p.fy ?? '-'} | ${p.F ?? '-'} | ${p.angle_deg ?? '-'} | ${p.m} |\n`;
+  }
+
+  md += `\n## 節點結果\n\n`;
   md += `| node | ux (${du}) | uy (${du}) | rot (rad) | Rx (${fu}) | Ry (${fu}) | M (${mu}) |\n`;
   md += `|---|---|---|---|---|---|---|\n`;
   for (const n of lastResult.nodes) {
