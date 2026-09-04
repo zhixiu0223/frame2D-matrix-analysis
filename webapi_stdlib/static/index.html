@@ -192,6 +192,17 @@
         <button id="btnQueryPoint" style="background:#0891b2;color:white;">🔎 查詢該點</button>
         <button id="btnClearQuery" style="width:auto;">✕ 清除標記</button>
         <span id="queryResult" style="font-size:0.85rem;width:auto;"></span>
+
+        <details class="dropdownSection" style="margin-top:0.6rem;width:100%;">
+          <summary>📄 匯出自由體圖(驗證Fx/Fy/M平衡, 附加桿件自己的N/V/M/變形圖)</summary>
+          <div class="dropdownBody" style="display:block;">
+            <p class="hint">自由體圖: 把指定桿件從結構裡「切」出來單獨看, 畫出兩端受到其餘結構/支承作用的力+力矩、以及桿件身上的均佈載重/集中力, 並在圖上算出ΣFx/ΣFy/ΣM(應該接近0, 驗證真的平衡), 方便針對特定桿件抓出來單獨檢查或設計。</p>
+            <label class="snapLabel"><input type="radio" name="fbdScope" value="current" checked>目前上面選到的那根桿件("查詢"用的那個下拉選單)</label>
+            <label class="snapLabel"><input type="radio" name="fbdScope" value="selected">目前框選/畫線選取的桿件(批次選取)</label>
+            <label class="snapLabel"><input type="radio" name="fbdScope" value="all">全部桿件</label>
+            <button id="btnExportFbd" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">匯出自由體圖 PDF</button>
+          </div>
+        </details>
       </div>
 
       <div class="menuGroup" data-group="view">
@@ -3060,32 +3071,34 @@ document.getElementById('importJsonFile').addEventListener('change', (e) => {
 document.getElementById('btnExportMd').addEventListener('click', () => {
   if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
   const du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
+  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A');
   let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
 
   // 輸入資料: 讓這份報告本身就能完全重現模型或手算驗證, 不用另外
-  // 回頭翻建模畫面確認座標/斷面/載重數值。全部用SI單位(跟後端solver
-  // 內部一致), 不受目前顯示單位設定影響, 避免拿這份報告去跟別的
-  // 軟體/手算比對時, 還要先猜這裡是不是有經過單位換算。
-  md += `## 輸入資料(SI單位: m, Pa, m^4, m^2, N, N·m)\n\n`;
+  // 回頭翻建模畫面確認座標/斷面/載重數值。改用目前「顯示設定」選的
+  // 單位(跟下面「結果」段落、跟PDF匯出一致), 不再固定用SI——之前
+  // 這裡固定SI、但下面的「結果」段落一直都是用顯示單位, 同一份
+  // 報告裡兩段用不同單位基準會讓人搞混, 現在統一。
+  md += `## 輸入資料(E:${eu}, I:${iu}, A:${au}, 力:${fu}, 彎矩:${mu}, 座標/長度固定用m)\n\n`;
   md += `### 節點座標\n\n| node | x (m) | y (m) |\n|---|---|---|\n`;
   for (const n of model.nodes) md += `| ${n.id} | ${n.x} | ${n.y} |\n`;
-  md += `\n### 斷面性質\n\n| 名稱 | E (Pa) | I (m^4) | A (m^2) |\n|---|---|---|---|\n`;
-  for (const s of model.sections) md += `| ${s.name} | ${s.E} | ${s.I} | ${s.A} |\n`;
+  md += `\n### 斷面性質\n\n| 名稱 | E (${eu}) | I (${iu}) | A (${au}) |\n|---|---|---|---|\n`;
+  for (const s of model.sections) md += `| ${s.name} | ${fromSI('E', s.E)} | ${fromSI('I', s.I)} | ${fromSI('A', s.A)} |\n`;
   md += `\n### 桿件連接\n\n| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 |\n|---|---|---|---|---|---|---|\n`;
   for (const m of model.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
-  md += `\n### 支承條件(空白=自由, 0=固定, 非0=強制位移)\n\n| node | ux | uy | rot |\n|---|---|---|---|\n`;
+  md += `\n### 支承條件(空白=自由, 0=固定, 非0=強制位移, m/rad)\n\n| node | ux | uy | rot |\n|---|---|---|---|\n`;
   for (const s of model.supports) md += `| ${s.node} | ${s.ux ?? ''} | ${s.uy ?? ''} | ${s.rot ?? ''} |\n`;
   if (model.point_loads.length) {
-    md += `\n### 節點集中力\n\n| node | fx (N) | fy (N) | m (N·m) |\n|---|---|---|---|\n`;
-    for (const p of model.point_loads) md += `| ${p.node} | ${p.fx} | ${p.fy} | ${p.m} |\n`;
+    md += `\n### 節點集中力\n\n| node | fx (${fu}) | fy (${fu}) | m (${mu}) |\n|---|---|---|---|\n`;
+    for (const p of model.point_loads) md += `| ${p.node} | ${fromSI('force', p.fx)} | ${fromSI('force', p.fy)} | ${fromSI('moment', p.m)} |\n`;
   }
   if (model.distributed_loads.length) {
-    md += `\n### 桿件均佈載重\n\n| member | w1 | w2 | x起點 | x終點 | 方向 | 角度 |\n|---|---|---|---|---|---|---|\n`;
-    for (const d of model.distributed_loads) md += `| ${d.member} | ${d.w_start} | ${d.w_end ?? '=w1'} | ${d.x_start ?? 0} | ${d.x_end ?? '全長'} | ${d.direction} | ${d.angle_deg ?? '-'} |\n`;
+    md += `\n### 桿件均佈載重(w單位: ${fu}/m)\n\n| member | w1 | w2 | x起點(m) | x終點(m) | 方向 | 角度 |\n|---|---|---|---|---|---|---|\n`;
+    for (const d of model.distributed_loads) md += `| ${d.member} | ${fromSI('force', d.w_start)} | ${d.w_end !== undefined && d.w_end !== null ? fromSI('force', d.w_end) : '=w1'} | ${d.x_start ?? 0} | ${d.x_end ?? '全長'} | ${d.direction} | ${d.angle_deg ?? '-'} |\n`;
   }
   if (model.member_point_loads.length) {
-    md += `\n### 桿件內部集中力/彎矩\n\n| member | a(m) | 方向 | fx | fy | F | 角度 | m |\n|---|---|---|---|---|---|---|---|\n`;
-    for (const p of model.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx ?? '-'} | ${p.fy ?? '-'} | ${p.F ?? '-'} | ${p.angle_deg ?? '-'} | ${p.m} |\n`;
+    md += `\n### 桿件內部集中力/彎矩(fx/fy/F單位: ${fu}, m單位: ${mu})\n\n| member | a(m) | 方向 | fx | fy | F | 角度 | m |\n|---|---|---|---|---|---|---|---|\n`;
+    for (const p of model.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx !== undefined && p.fx !== null ? fromSI('force', p.fx) : '-'} | ${p.fy !== undefined && p.fy !== null ? fromSI('force', p.fy) : '-'} | ${p.F !== undefined && p.F !== null ? fromSI('force', p.F) : '-'} | ${p.angle_deg ?? '-'} | ${fromSI('moment', p.m)} |\n`;
   }
 
   md += `\n## 節點結果\n\n`;
@@ -3104,12 +3117,52 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
   downloadBlob(blob, (currentName || 'frame2d_result') + '.md');
 });
 
+document.getElementById('btnExportFbd').addEventListener('click', async () => {
+  const scope = document.querySelector('input[name="fbdScope"]:checked').value;
+  let memberIds;
+  if (scope === 'current') {
+    const id = parseInt(document.getElementById('queryMember').value, 10);
+    if (isNaN(id)) { setStatus('「查詢」上面那個下拉選單目前沒有選到任何桿件'); return; }
+    memberIds = [id];
+  } else if (scope === 'selected') {
+    if (!multiSelection || !multiSelection.memberIds || !multiSelection.memberIds.length) {
+      setStatus('目前沒有框選/畫線選取任何桿件, 請先到「建模」用方框或畫線選取模式選幾根桿件');
+      return;
+    }
+    memberIds = multiSelection.memberIds;
+  } else {
+    memberIds = model.members.map(m => m.id);
+    if (!memberIds.length) { setStatus('目前模型沒有任何桿件'); return; }
+  }
+  sanitizeModel();
+  setStatus(`產生自由體圖PDF中(${memberIds.length} 根桿件, 每根附自由體圖+內力圖共2頁)...`);
+  try {
+    const payload = {...model, member_ids: memberIds, units: {
+      E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
+      disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
+    }};
+    const res = await fetch('/export/pdf', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    if (!res.ok) { setStatus('自由體圖PDF產生失敗: ' + await res.text()); return; }
+    const blob = await res.blob();
+    downloadBlob(blob, (currentName || 'frame2d_report') + '_fbd.pdf');
+    setStatus(`自由體圖PDF已下載(${memberIds.length} 根桿件)`);
+  } catch (e) { setStatus('自由體圖PDF產生失敗: ' + e.message); }
+});
 document.getElementById('btnExportPdf').addEventListener('click', async () => {
   sanitizeModel();
   setStatus('產生 PDF 中...');
   try {
+    // 把目前「顯示設定」選的單位一起送給後端, 讓PDF報告顯示的數字/
+    // 單位標籤跟畫面上看到的一致, 不用另外猜這份報告是SI還是別的
+    // 單位基準。
+    const payload = {...model, units: {
+      E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
+      disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
+    }};
     const res = await fetch('/export/pdf', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(model)
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
     if (!res.ok) { setStatus('PDF 產生失敗: ' + await res.text()); return; }
     const blob = await res.blob();

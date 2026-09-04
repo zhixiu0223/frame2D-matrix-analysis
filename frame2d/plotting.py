@@ -401,6 +401,242 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
     return ax
 
 
+def _simpson(y, x):
+    """辛普森法數值積分(需要偶數個區間, 即奇數個點)。之前這裡用手動
+    梯形法, 但梯形法對「力矩=∫w(x)*x dx」這種積分不是精確的——w(x)
+    本身是線性的梯形載重, x*w(x)是二次式, 梯形法對二次式有O(h²)的
+    誤差, 實際測出來400個細分還是有0.06這種級別的殘留誤差(手算過
+    梯形法誤差公式-  (b-a)³/(12n²)*f'', 算出來剛好等於實測的殘留量,
+    確認就是這個原因, 不是邏輯寫錯)。辛普森法對三次以下多項式是
+    精確積分, 能完全消除這個誤差來源, 不只是縮小它。"""
+    y, x = np.asarray(y, dtype=float), np.asarray(x, dtype=float)
+    n = len(x) - 1
+    if n % 2 == 1:
+        # 奇數個區間(偶數個點)時退化成加一個梯形法分段, 這個情況在
+        # 這個模組裡不會發生(呼叫端都固定用偶數個區間), 保留只是
+        # 避免未來有人改了取樣點數忘記這個限制時直接算錯而不自知。
+        return _trapz(y, x)
+    h = (x[-1] - x[0]) / n
+    s = y[0] + y[-1] + 4 * np.sum(y[1:-1:2]) + 2 * np.sum(y[2:-1:2])
+    return float(s * h / 3)
+
+
+def _trapz(y, x):
+    """手動實作梯形法數值積分, 不用numpy.trapz/trapezoid——numpy 2.0
+    把trapz改名成trapezoid, 為了不管部署環境的numpy版本新舊都能跑,
+    這裡自己算(輸入都已經是等距取樣的array, 邏輯很單純)。只有
+    _simpson()在區間數是奇數這個理論上不會發生的邊界情況才會退化
+    呼叫這個。"""
+    y, x = np.asarray(y), np.asarray(x)
+    return float(np.sum((y[1:] + y[:-1]) * 0.5 * np.diff(x)))
+
+
+def _member_inspan_load_resultant(frame, member_id):
+    """算這根桿件身上「跨間載重」(distributed_load + member_point_load,
+    不包含端點的節點集中力, 那些已經包含在end_forces_local裡了)在
+    局部座標系下的合力/合力矩(對i端取矩, 逆時針為正)——用細分數值
+    積分, 跟member_internal_forces()同一套局部x/y分解邏輯(重用同一種
+    direction='local'/'global_y'/'global'的分解方式), 只是這裡積分
+    出「總和」而不是逐點的N/V/M曲線。用途: 畫自由體圖時驗證平衡
+    (Fx1+Fx2+這裡的fx_total應該=0, 以此類推), 純粹拿來驗證/繪圖用,
+    不是拿去解方程式, 數值積分精度已經足夠。"""
+    m = frame.members[member_id]
+    ni, nj = frame.nodes[m.node_i], frame.nodes[m.node_j]
+    L, angle = member_geometry(ni, nj)
+    c_ang, s_ang = np.cos(angle), np.sin(angle)
+
+    fx_total, fy_total, m_about_i = 0.0, 0.0, 0.0
+
+    for dl in frame.distributed_loads:
+        if dl.member != member_id:
+            continue
+        x0 = 0.0 if dl.x_start is None else dl.x_start
+        x1 = L if dl.x_end is None else dl.x_end
+        w0 = dl.w_start
+        w1 = dl.w_start if dl.w_end is None else dl.w_end
+        if dl.direction == 'local':
+            wx0 = wx1 = 0.0
+            wy0, wy1 = w0, w1
+        elif dl.direction == 'global_y':
+            wx0 = wx1 = s_ang * (-w0)
+            wy0 = wy1 = c_ang * (-w0)
+        else:  # 'global'
+            ang = np.radians(dl.angle_deg)
+            ux, uy = np.cos(ang), np.sin(ang)
+            R = np.array([[c_ang, s_ang], [-s_ang, c_ang]])
+            local0 = R @ (np.array([ux, uy]) * w0)
+            local1 = R @ (np.array([ux, uy]) * w1)
+            wx0, wy0 = local0
+            wx1, wy1 = local1
+        # 細分梯形法數值積分(w在x0~x1之間線性變化)
+        n = 400
+        xs = np.linspace(x0, x1, n + 1)
+        wxs = np.linspace(wx0, wx1, n + 1)
+        wys = np.linspace(wy0, wy1, n + 1)
+        fx_total += _simpson(wxs, xs)
+        fy_total += _simpson(wys, xs)
+        m_about_i += _simpson(wys * xs, xs)  # 橫向分量對i端的力矩貢獻
+
+    for pl in frame.member_point_loads:
+        if pl.member != member_id:
+            continue
+        if pl.direction == 'global' and pl.F is not None:
+            ang = np.radians(pl.angle_deg)
+            ux, uy = np.cos(ang), np.sin(ang)
+            R = np.array([[c_ang, s_ang], [-s_ang, c_ang]])
+            fx, fy = R @ (np.array([ux, uy]) * pl.F)
+        else:
+            fx, fy = pl.fx, pl.fy
+        fx_total += fx
+        fy_total += fy
+        m_about_i += fy * pl.a + pl.m
+
+    return fx_total, fy_total, m_about_i
+
+
+def plot_member_fbd(frame, result, member_id, ax=None):
+    """畫這根桿件的自由體圖(free body diagram): 桿件本身(不含其他
+    桿件/支承), 兩端各畫「其餘結構對這一端的作用力+力矩」(直接來自
+    end_forces_local, 局部->全域座標轉換), 桿件身上的跨間載重(均佈
+    載重/桿件集中力)也一起畫出來, 並且在圖上標出ΣFx/ΣFy/ΣM(對i端
+    取矩)驗證平衡(理論上應該非常接近0, 只有浮點數值誤差)。
+
+    正負號慣例已經用兩個已知答案的案例實際驗證過(懸臂梁尖端載重、
+    簡支梁跨間均佈載重), 確認 Fx1+Fx2+跨間load的fx合力=0(以此類推
+    Fy, M)這個等式成立。"""
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+    m = frame.members[member_id]
+    ni, nj = _member_endpoints(frame, member_id)
+    L, angle = member_geometry(ni, nj)
+    c_ang, s_ang = np.cos(angle), np.sin(angle)
+
+    ax.plot([ni.x, nj.x], [ni.y, nj.y], color='black', lw=3, zorder=2,
+            solid_capstyle='round')
+    ax.plot([ni.x, nj.x], [ni.y, nj.y], 'o', color='black', ms=6, zorder=3)
+    ax.annotate(f'N{m.node_i}', (ni.x, ni.y),
+                xytext=(-10, -14), textcoords='offset points', fontsize=8, ha='right')
+    ax.annotate(f'N{m.node_j}', (nj.x, nj.y), xytext=(10, -14), textcoords='offset points', fontsize=8)
+    ax.set_title(f'Free Body Diagram: Member {member_id} ({m.member_type})', fontsize=11)
+
+    mr = result.member_results[member_id]
+    Fx1, Fy1, M1, Fx2, Fy2, M2 = mr.end_forces_local
+    # 局部->全域: R(angle) = [[c,-s],[s,c]] 作用在局部座標的力向量上
+    Fx1_g = c_ang * Fx1 - s_ang * Fy1
+    Fy1_g = s_ang * Fx1 + c_ang * Fy1
+    Fx2_g = c_ang * Fx2 - s_ang * Fy2
+    Fy2_g = s_ang * Fx2 + c_ang * Fy2
+
+    fmax = max(abs(Fx1_g), abs(Fy1_g), abs(Fx2_g), abs(Fy2_g), 1e-9)
+    arrow_len = L * 0.28
+
+    def _draw_end_force(x, y, fx, fy, mm, color):
+        mag = np.hypot(fx, fy)
+        if mag > 1e-6:
+            ux, uy = fx / mag, fy / mag
+            ax.annotate('', xy=(x, y), xytext=(x - ux * arrow_len, y - uy * arrow_len),
+                        arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
+            ax.annotate(f'{mag:.4g}', (x - ux * arrow_len, y - uy * arrow_len), fontsize=8, color=color,
+                        xytext=(4, 4), textcoords='offset points')
+        if abs(mm) > 1e-6:
+            _draw_moment_arc(ax, x, y, mm, L * 0.12, color)
+            ax.annotate(f'M={mm:.4g}', (x, y), fontsize=8, color=color,
+                        xytext=(6, -16), textcoords='offset points')
+
+    _draw_end_force(ni.x, ni.y, Fx1_g, Fy1_g, M1, 'crimson')
+    _draw_end_force(nj.x, nj.y, Fx2_g, Fy2_g, M2, 'darkorange')
+
+    # 跨間載重: 重用plot_loads()同一套均佈/集中力畫法會牽涉到整個
+    # frame的迴圈跟座標系, 這裡直接針對這一根桿件簡化畫(只畫這根
+    # 桿件身上的, 不畫別根桿件或節點的)
+    for dl in frame.distributed_loads:
+        if dl.member != member_id:
+            continue
+        x0 = 0.0 if dl.x_start is None else dl.x_start
+        x1 = L if dl.x_end is None else dl.x_end
+        # 沿桿軸取幾個點畫示意箭頭(不用畫到跟主圖一樣精緻, 這裡只是
+        # 標示「這裡有均佈載重」讓自由體圖看得懂受力來源)
+        n_arrows = 5
+        for t in np.linspace(x0, x1, n_arrows):
+            px = ni.x + t * c_ang
+            py = ni.y + t * s_ang
+            ax.annotate('', xy=(px, py), xytext=(px, py + L * 0.08),
+                        arrowprops=dict(arrowstyle='-|>', color='orange', lw=1, mutation_scale=8), zorder=1)
+        ax.annotate(f'w={dl.w_start:.4g}' + (f'~{dl.w_end:.4g}' if dl.w_end is not None else ''),
+                    (ni.x + (x0 + x1) / 2 * c_ang, ni.y + (x0 + x1) / 2 * s_ang + L * 0.1),
+                    fontsize=7, color='darkorange', ha='center')
+
+    for pl in frame.member_point_loads:
+        if pl.member != member_id:
+            continue
+        px = ni.x + pl.a * c_ang
+        py = ni.y + pl.a * s_ang
+        ax.plot([px], [py], 's', color='purple', ms=5, zorder=3)
+        ax.annotate(f'a={pl.a:.3g}', (px, py), fontsize=7, color='purple', xytext=(4, 8), textcoords='offset points')
+
+    # 平衡驗證: Fx1+Fx2+跨間載重fx合力 應該=0(以此類推Fy, M對i端取矩)
+    fx_load, fy_load, m_load = _member_inspan_load_resultant(frame, member_id)
+    sum_fx = Fx1 + Fx2 + fx_load
+    sum_fy = Fy1 + Fy2 + fy_load
+    sum_m = M1 + M2 + Fy2 * L + m_load
+    ax.text(0.02, 0.02,
+            f'Equilibrium check (local coords):\nΣFx = {sum_fx:.3g}   ΣFy = {sum_fy:.3g}   ΣM(about node i) = {sum_m:.3g}\n'
+            f'(should be ~0, small residual is floating-point noise)',
+            transform=ax.transAxes, fontsize=7.5, va='bottom',
+            bbox=dict(boxstyle='round,pad=0.3', fc='#f0fdf4', ec='#16a34a', lw=0.8))
+
+    margin = max(L * 0.5, 0.5)
+    ax.set_xlim(min(ni.x, nj.x) - margin, max(ni.x, nj.x) + margin)
+    ax.set_ylim(min(ni.y, nj.y) - margin, max(ni.y, nj.y) + margin)
+    ax.set_aspect('equal')
+    ax.grid(alpha=0.2)
+    return ax
+
+
+def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8)):
+    """單一桿件自己的N/V/M/變形四合一圖(不是整個結構, 只有這一根
+    桿件的內力沿桿長分佈+變形形狀), 給查詢/自由體圖功能搭配使用,
+    方便針對特定桿件抓出來單獨檢查或設計用。"""
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    x, N, V, M = member_internal_forces(frame, result, member_id, n=101)
+
+    # 變形圖的縮放倍率: 跟plot_deformed()同一套auto-scale邏輯, 只是
+    # 這裡只需要考慮這一根桿件自己的偏移量(不用掃整個結構), 讓變形
+    # 形狀相對於這根桿件自己的長度L有合理的視覺放大幅度, 不會小到
+    # 看起來像一條直線。
+    ni, nj = _member_endpoints(frame, member_id)
+    L, angle = member_geometry(ni, nj)
+    base_x = ni.x + np.linspace(0, L, 41) * np.cos(angle)
+    base_y = ni.y + np.linspace(0, L, 41) * np.sin(angle)
+    Xr, Yr = member_deformed_shape(frame, result, member_id, scale=1.0, n=41)
+    max_offset = max(np.max(np.hypot(Xr - base_x, Yr - base_y)), 1e-9)
+    scale = L * 0.15 / max_offset
+    X, Y = member_deformed_shape(frame, result, member_id, scale=scale, n=101)
+
+    for ax, vals, label, color in [
+        (axes[0, 0], N, 'N (Axial Force)', '#2563eb'),
+        (axes[0, 1], V, 'V (Shear Force)', '#2563eb'),
+        (axes[1, 0], M, 'M (Bending Moment)', '#dc2626'),
+    ]:
+        ax.plot(x, vals, color=color, lw=1.5)
+        ax.fill_between(x, vals, 0, color=color, alpha=0.15)
+        ax.axhline(0, color='black', lw=0.5)
+        i_max = int(np.argmax(np.abs(vals)))
+        ax.annotate(f'{vals[i_max]:.4g}', (x[i_max], vals[i_max]), fontsize=8, color=color)
+        ax.set_title(f'Member {member_id}: {label}', fontsize=10)
+        ax.grid(alpha=0.2)
+
+    ax4 = axes[1, 1]
+    ax4.plot(base_x, base_y, '--', color='gray', lw=1, alpha=0.6)
+    ax4.plot(X, Y, color='#16a34a', lw=1.5)
+    ax4.set_title(f'Member {member_id}: Deformed Shape (scale x{scale:.2g})', fontsize=10)
+    ax4.set_aspect('equal')
+    ax4.grid(alpha=0.2)
+
+    fig.tight_layout()
+    return fig
+
+
 def plot_all(frame, result, figsize=(14, 9)):
     """六合一總覽圖"""
     fig, axes = plt.subplots(2, 3, figsize=figsize)

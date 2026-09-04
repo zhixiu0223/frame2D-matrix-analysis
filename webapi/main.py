@@ -175,7 +175,7 @@ def delete_model(name: str):
 def export_pdf(payload: FrameIn):
     f = _build_frame(payload)
     try:
-        pdf_bytes = build_pdf_report(f)
+        pdf_bytes = build_pdf_report(f, units=payload.units, member_ids=payload.member_ids)
     except KeyError as e:
         raise HTTPException(
             status_code=400,

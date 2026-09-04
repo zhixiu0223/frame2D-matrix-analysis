@@ -172,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json_body()
                 f = _build_frame(payload)
                 try:
-                    pdf_bytes = build_pdf_report(f)
+                    pdf_bytes = build_pdf_report(f, units=payload.get("units"), member_ids=payload.get("member_ids"))
                 except KeyError as e:
                     raise ValueError(
                         f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"

@@ -74,6 +74,16 @@ class FrameIn(BaseModel):
     point_loads: List[PointLoadIn] = Field(default_factory=list)
     distributed_loads: List[DistributedLoadIn] = Field(default_factory=list)
     member_point_loads: List[MemberPointLoadIn] = Field(default_factory=list)
+    units: Optional[dict] = None
+    """匯出PDF/報告時, 前端目前「顯示設定」裡選的單位(E/I/A/disp/
+    force/moment, 例如{"E":"GPa","force":"kN",...})——只有/export/pdf
+    這個端點會用到, 讓PDF報告顯示的數字/單位標籤跟使用者畫面上看到
+    的一致, 不用另外去猜或換算; 其他端點忽略這個欄位, 因為/solve
+    本身進出都是SI, 跟顯示單位無關。"""
+    member_ids: Optional[List[int]] = None
+    """匯出PDF時, 如果有指定桿件(查詢畫面選一個/多個/全選), 每根
+    桿件會多附兩頁: 自由體圖(驗證Fx/Fy/M平衡)+ 這根桿件自己的
+    N/V/M/變形圖。只有/export/pdf這個端點會用到, 其他端點忽略。"""
 
 
 class NodeResultOut(BaseModel):
