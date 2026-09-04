@@ -2208,6 +2208,10 @@ function renderPropPanel() {
       splitMemberPlain(m, positions);
     };
     document.getElementById('dl_add').onclick = () => {
+      if (m.member_type === 'truss' || m.member_type === 'cable') {
+        setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受均佈載重(後端solver會直接報錯拒絕算——這是2026-09發現並修正的真實限制: truss/cable桿端彎矩定義上必須是0, 加均佈載重會讓固定端彎矩項被塞進求解算出錯誤答案, 所以solver乾脆直接拒絕這個組合)。如果要模擬自重, 改成在這根桿件兩端的節點上各加一半重量的節點集中力。`);
+        return;
+      }
       const x0raw = document.getElementById('dl_x0').value, x1raw = document.getElementById('dl_x1').value;
       const w0 = toSI('force', parseFloat(document.getElementById('dl_w0').value) || 0);
       const w1raw = document.getElementById('dl_w1').value;
@@ -2227,6 +2231,10 @@ function renderPropPanel() {
       render();
     };
     document.getElementById('mp_add').onclick = () => {
+      if (m.member_type === 'truss' || m.member_type === 'cable') {
+        setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受桿件內部集中力/力矩(理由同均佈載重, 後端solver會直接拒絕)。如果要模擬桁架/纜線中間的集中力, 改成用「在桿件中間插入節點」把這根桿件拆成兩段, 在新節點上加節點集中力。`);
+        return;
+      }
       const mode = document.getElementById('mp_mode').value;
       const value = parseFloat(document.getElementById('mp_value').value);
       const ni = nodeById(m.node_i), nj = nodeById(m.node_j);

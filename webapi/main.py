@@ -64,10 +64,17 @@ def _build_frame(payload: FrameIn) -> Frame2D:
 
 
 def _build_and_solve(payload: FrameIn):
-    """_build_frame()+solve() 的共用包裝, 統一處理「模型內有殘留參照」
-    這類錯誤(例如分割/刪除桿件後, 還留著指向舊桿件編號的均佈載重),
-    這種情況下 frame2d 底層會丟出 KeyError(9) 這種只印一個數字的
-    錯誤, 前端顯示出來完全看不懂在講什麼, 這裡統一轉成看得懂的訊息。"""
+    """_build_frame()+solve() 的共用包裝, 統一處理兩類已知會從solve()
+    冒出來的錯誤:
+    1. KeyError: 「模型內有殘留的參照」(例如分割/刪除桿件後, 還留著
+       指向舊桿件編號的均佈載重), frame2d底層會丟出KeyError(9)這種
+       只印一個數字的錯誤, 前端顯示出來完全看不懂在講什麼, 這裡統一
+       轉成看得懂的訊息。
+    2. ValueError: dofmanager.py對「truss/cable桿件不能承受桿件內部
+       載重(均佈載重/桿件集中力)」這個力學上的限制, 會丟出說明清楚
+       的ValueError(2026-09修正, 見frame2d/dofmanager.py) —— 這個
+       訊息本身已經寫得夠清楚, 直接原樣轉成400回傳, 不用像KeyError
+       那樣另外翻譯。"""
     f = _build_frame(payload)
     try:
         result = solve(f)
@@ -78,6 +85,8 @@ def _build_and_solve(payload: FrameIn):
                    f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
                    f"還留著指向舊桿件編號), 請檢查並移除",
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return f, result
 
 
