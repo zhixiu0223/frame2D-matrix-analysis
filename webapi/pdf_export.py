@@ -38,12 +38,19 @@ def _fig_to_png_base64(fig, dpi=110):
 def _force_moment_factors(units):
     """把units字典換算成(force_unit, force_factor, moment_unit, moment_factor)
     這組四元組, 直接餵給frame2d/plotting.py的plot_member_fbd()/
-    plot_member_own_diagrams()——那兩個函式本身不認識"kN"這種單位
-    名稱, 只認係數+要印出來的字串, 這裡負責從webapi層的units設定
-    轉換成它們要的格式。"""
+    plot_member_own_diagrams()/plot_all()等函式——那些函式本身不認識
+    "kN"這種單位名稱, 只認係數+要印出來的字串, 這裡負責從webapi層的
+    units設定轉換成它們要的格式。"""
     fu = _unit_label(units, "force", "N")
     mu = _unit_label(units, "moment", "N·m")
     return fu, 1.0 / UNIT_FACTORS["force"][fu], mu, 1.0 / UNIT_FACTORS["moment"][mu]
+
+
+def _disp_factor(units):
+    """回傳(disp_unit, disp_factor), 給plot_all()/plot_deformed()的
+    位移標籤用。"""
+    du = _unit_label(units, "disp", "m")
+    return du, 1.0 / UNIT_FACTORS["disp"][du]
 
 
 def _member_fbd_with_thumbnail_fig(f, result, mid, force_unit, force_factor, moment_unit, moment_factor, figsize=(12, 7)):
@@ -307,10 +314,12 @@ def build_pdf_report(f, units=None, member_ids=None, include_member_diagrams=Tru
     讓報告本身就能完全重現模型或手算/跨軟體驗證, 不用只能從圖上
     目測。"""
     fu, ff, mu, mf = _force_moment_factors(units)
+    du, df = _disp_factor(units)
     result = solve(f)
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
-        fig = plot_all(f, result, figsize=(14, 9))
+        fig = plot_all(f, result, figsize=(14, 9), force_factor=ff, force_unit=fu,
+                       moment_factor=mf, moment_unit=mu, disp_factor=df, disp_unit=du)
         pdf.savefig(fig)
         plt.close(fig)
 

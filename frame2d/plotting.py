@@ -167,7 +167,7 @@ def _auto_scale(frame):
     return max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
 
 
-def plot_loads(frame, ax=None):
+def plot_loads(frame, ax=None, force_factor=1.0, force_unit='N', moment_factor=1.0, moment_unit='N*m'):
     """② 受力圖"""
     if ax is None:
         fig, ax = plt.subplots()
@@ -186,9 +186,9 @@ def plot_loads(frame, ax=None):
                         arrowprops=dict(arrowstyle='->', color='red', lw=2))
             parts = []
             if abs(pl.fx) > 1e-9:
-                parts.append(f'Fx={pl.fx:.3g} N')
+                parts.append(f'Fx={pl.fx * force_factor:.3g} {force_unit}')
             if abs(pl.fy) > 1e-9:
-                parts.append(f'Fy={pl.fy:.3g} N')
+                parts.append(f'Fy={pl.fy * force_factor:.3g} {force_unit}')
             ax.annotate(', '.join(parts), (tail_x, tail_y), color='red', fontsize=8,
                         ha='center', xytext=(0, -10 if dy >= 0 else 10), textcoords='offset points')
             extra_pts_x += [tail_x]
@@ -196,7 +196,7 @@ def plot_loads(frame, ax=None):
         if abs(pl.m) > 1e-9:
             arc_r = scale * 0.06
             _draw_moment_arc(ax, n.x, n.y, pl.m, arc_r, 'purple')
-            ax.annotate(f'M={pl.m:.3g} N*m', (n.x, n.y), color='purple', fontsize=8,
+            ax.annotate(f'M={pl.m * moment_factor:.3g} {moment_unit}', (n.x, n.y), color='purple', fontsize=8,
                         xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     for dl in frame.distributed_loads:
@@ -230,9 +230,9 @@ def plot_loads(frame, ax=None):
             extra_pts_x += [tail_x]
             extra_pts_y += [tail_y]
         if abs(dl.w_start - dl.w_end) < 1e-9:
-            w_label = f'w={dl.w_start:.3g} N/m'
+            w_label = f'w={dl.w_start * force_factor:.3g} {force_unit}/m'
         else:
-            w_label = f'w={dl.w_start:.3g}~{dl.w_end:.3g} N/m'
+            w_label = f'w={dl.w_start * force_factor:.3g}~{dl.w_end * force_factor:.3g} {force_unit}/m'
         mx = ni.x + (x_start + x_end) / 2 * c
         my = ni.y + (x_start + x_end) / 2 * s
         ax.annotate(w_label, (mx, my), color='orange', fontsize=8,
@@ -250,7 +250,7 @@ def plot_loads(frame, ax=None):
             mag = pl.F
             ang = np.radians(pl.angle_deg)
             gdx, gdy = np.cos(ang) * mag, np.sin(ang) * mag
-            label = f'F={pl.F:.3g} N @{pl.angle_deg:.0f}°'
+            label = f'F={pl.F * force_factor:.3g} {force_unit} @{pl.angle_deg:.0f}°'
         else:
             mag = np.hypot(pl.fx, pl.fy)
             # fx,fy是局部座標分量, 換算成全域方向畫箭頭
@@ -258,9 +258,9 @@ def plot_loads(frame, ax=None):
             gdy = pl.fx * s + pl.fy * c
             parts = []
             if abs(pl.fx) > 1e-9:
-                parts.append(f'fx={pl.fx:.3g} N')
+                parts.append(f'fx={pl.fx * force_factor:.3g} {force_unit}')
             if abs(pl.fy) > 1e-9:
-                parts.append(f'fy={pl.fy:.3g} N')
+                parts.append(f'fy={pl.fy * force_factor:.3g} {force_unit}')
             label = ', '.join(parts)
         if mag > 1e-9:
             Larrow = scale * 0.15
@@ -276,7 +276,7 @@ def plot_loads(frame, ax=None):
             arc_r = scale * 0.06
             ax.plot(px, py, 'D', color='darkmagenta', ms=5, zorder=2)
             _draw_moment_arc(ax, px, py, pl.m, arc_r, 'darkmagenta')
-            ax.annotate(f'm={pl.m:.3g} N*m', (px, py), color='darkmagenta', fontsize=8,
+            ax.annotate(f'm={pl.m * moment_factor:.3g} {moment_unit}', (px, py), color='darkmagenta', fontsize=8,
                         xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     # 直接手動計算範圍再 set_xlim/ylim, 比依賴 relim/autoscale 對 annotate 更可靠
@@ -294,14 +294,21 @@ def plot_loads(frame, ax=None):
     return ax
 
 
-def plot_diagram(frame, result, kind, ax=None, scale=None):
-    """③④⑤ 軸力圖/剪力圖/彎矩圖. kind: 'N', 'V', 或 'M' """
+def plot_diagram(frame, result, kind, ax=None, scale=None, value_factor=1.0, value_unit=None):
+    """③④⑤ 軸力圖/剪力圖/彎矩圖. kind: 'N', 'V', 或 'M'
+
+    value_factor/value_unit: 跟plot_member_fbd()同一套設計——曲線
+    形狀/縮放比例scale永遠用SI值決定(不受顯示單位影響), 只有標籤
+    文字顯示的數字乘上value_factor換算; value_unit沒指定的話用
+    預設(N或N*m, 依kind決定)。"""
     if ax is None:
         fig, ax = plt.subplots()
     plot_structure(frame, ax=ax, show_node_ids=False, show_member_ids=False, show_dimensions=False)
 
     idx = {'N': 1, 'V': 2, 'M': 3}[kind]
-    label = {'N': 'Axial Force N (units: N)', 'V': 'Shear Force V (units: N)', 'M': 'Bending Moment M (units: N*m)'}[kind]
+    default_unit = 'N*m' if kind == 'M' else 'N'
+    unit = value_unit if value_unit is not None else default_unit
+    label = {'N': f'Axial Force N (units: {unit})', 'V': f'Shear Force V (units: {unit})', 'M': f'Bending Moment M (units: {unit})'}[kind]
 
     n_samples = 41  # 加密取樣點, 讓極值偵測(轉折點)更準確
     # 先算全部member的最大值, 用來自動定比例尺
@@ -339,7 +346,7 @@ def plot_diagram(frame, result, kind, ax=None, scale=None):
             sign = 1 if vals[i] >= 0 else -1
             off_x = -perp_x * sign * 10
             off_y = -perp_y * sign * 10
-            ax.annotate(f'{vals[i]:.3g}', (px[i], py[i]), fontsize=7, color='crimson',
+            ax.annotate(f'{vals[i] * value_factor:.3g}', (px[i], py[i]), fontsize=7, color='crimson',
                         ha='center', va='center', xytext=(off_x, off_y), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='crimson', lw=0.5, alpha=0.9))
 
@@ -359,7 +366,7 @@ def _label_indices(vals, atol=1e-6):
     return sorted(idxs)
 
 
-def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
+def plot_deformed(frame, result, ax=None, scale=None, show_values=True, disp_factor=1.0, disp_unit='m'):
     """⑥ 變形圖 (show_values=True: 在每個節點旁標出實際位移量, 方便對照SW FEA
     這類會直接印出位移數字的工具, 快速確認斷面/材料設定是否正確)"""
     if ax is None:
@@ -391,7 +398,7 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
             mag = np.hypot(dx, dy)
             if mag < 1e-12:
                 continue   # 支承等位移=0的節點不標, 避免畫面雜亂
-            ax.annotate(f'Δ={mag:.4g} m', (n.x, n.y), fontsize=7, color='darkblue',
+            ax.annotate(f'Δ={mag * disp_factor:.4g} {disp_unit}', (n.x, n.y), fontsize=7, color='darkblue',
                         xytext=(5, -10), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
@@ -410,7 +417,7 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
             i_max = np.argmax(offset_real)
             if offset_real[i_max] < 1e-9 or not (0 < i_max < n_sample - 1):
                 continue   # 端點已經在上面節點迴圈標過, 這裡只標"桿件內部"的最大值避免重複
-            ax.annotate(f'Δmax={offset_real[i_max]:.4g} m', (X1[i_max], Y1[i_max]), fontsize=7, color='darkblue',
+            ax.annotate(f'Δmax={offset_real[i_max] * disp_factor:.4g} {disp_unit}', (X1[i_max], Y1[i_max]), fontsize=7, color='darkblue',
                         xytext=(5, -12), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
@@ -689,14 +696,23 @@ def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8),
     return fig
 
 
-def plot_all(frame, result, figsize=(14, 9)):
-    """六合一總覽圖"""
+def plot_all(frame, result, figsize=(14, 9),
+             force_factor=1.0, force_unit='N', moment_factor=1.0, moment_unit='N*m',
+             disp_factor=1.0, disp_unit='m'):
+    """六合一總覽圖
+
+    force_factor/force_unit/moment_factor/moment_unit/disp_factor/
+    disp_unit: 跟plot_member_fbd()同一套設計——內部計算/幾何形狀
+    永遠用SI值決定, 只有標籤文字顯示的數字換算成呼叫端想要的單位。
+    frame2d本身不需要知道"kN"這種單位名稱, 換算係數+要印出來的
+    字串由webapi層(使用者的顯示設定)決定。"""
     fig, axes = plt.subplots(2, 3, figsize=figsize)
     plot_structure(frame, ax=axes[0, 0])
-    plot_loads(frame, ax=axes[0, 1])
-    plot_deformed(frame, result, ax=axes[0, 2])
-    plot_diagram(frame, result, 'N', ax=axes[1, 0])
-    plot_diagram(frame, result, 'V', ax=axes[1, 1])
-    plot_diagram(frame, result, 'M', ax=axes[1, 2])
+    plot_loads(frame, ax=axes[0, 1], force_factor=force_factor, force_unit=force_unit,
+               moment_factor=moment_factor, moment_unit=moment_unit)
+    plot_deformed(frame, result, ax=axes[0, 2], disp_factor=disp_factor, disp_unit=disp_unit)
+    plot_diagram(frame, result, 'N', ax=axes[1, 0], value_factor=force_factor, value_unit=force_unit)
+    plot_diagram(frame, result, 'V', ax=axes[1, 1], value_factor=force_factor, value_unit=force_unit)
+    plot_diagram(frame, result, 'M', ax=axes[1, 2], value_factor=moment_factor, value_unit=moment_unit)
     fig.tight_layout()
     return fig
