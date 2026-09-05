@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from frame2d import solve
-from frame2d.plotting import plot_all, plot_member_fbd, plot_member_own_diagrams
+from frame2d.plotting import plot_all, plot_member_fbd, plot_member_own_diagrams, plot_structure
 
 
 def _fig_to_png_base64(fig, dpi=110):
@@ -38,16 +38,32 @@ def _fig_to_png_base64(fig, dpi=110):
 def build_fbd_previews(f, member_ids):
     """回傳每根指定桿件的自由體圖預覽(base64 PNG), 給前端在真正
     匯出PDF之前先秀出來讓使用者確認、可以個別排除不想要的桿件。
-    回傳list of {"member_id":int, "image_base64":str}, 找不到的
-    member_id直接跳過(不報錯, 讓前端自己比對哪些真的有回傳)。"""
+    回傳list of {"member_id":int, "image_base64":str, "thumbnail_base64":str},
+    找不到的member_id直接跳過(不報錯, 讓前端自己比對哪些真的有回傳)。
+
+    thumbnail_base64: 整個結構的小縮圖, 目前這根桿件用醒目橘紅色
+    粗線標示、其他桿件淡化——目的是選「全部桿件」批次預覽時, 每張
+    自由體圖旁邊都能一眼看出對應到結構的哪個位置, 不用只憑桿件
+    編號自己去對照。"""
     result = solve(f)
     previews = []
     for mid in member_ids:
         if mid not in f.members:
             continue
         ax = plot_member_fbd(f, result, mid)
-        previews.append({"member_id": mid, "image_base64": _fig_to_png_base64(ax.figure)})
+        image_b64 = _fig_to_png_base64(ax.figure)
         plt.close(ax.figure)
+
+        thumb_fig, thumb_ax = plt.subplots(figsize=(3, 3))
+        plot_structure(f, ax=thumb_ax, show_node_ids=False, show_member_ids=False,
+                        show_dimensions=False, highlight_member_id=mid)
+        thumb_ax.set_title(f'Member {mid}', fontsize=9)
+        thumb_ax.set_xlabel(''); thumb_ax.set_ylabel('')
+        thumb_fig.tight_layout()
+        thumb_b64 = _fig_to_png_base64(thumb_fig, dpi=90)
+        plt.close(thumb_fig)
+
+        previews.append({"member_id": mid, "image_base64": image_b64, "thumbnail_base64": thumb_b64})
     return previews
 
 

@@ -37,24 +37,35 @@ def _draw_moment_arc(ax, x, y, m_value, radius, color):
                 arrowprops=dict(arrowstyle='-|>', color=color, lw=1.5, mutation_scale=10), zorder=3)
 
 
-def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, show_dimensions=True):
-    """① 結構尺寸圖 (可標註每根桿件長度 + 結構總寬/總高)"""
+def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, show_dimensions=True, highlight_member_id=None):
+    """① 結構尺寸圖 (可標註每根桿件長度 + 結構總寬/總高)
+
+    highlight_member_id: 指定的話, 那根桿件用醒目的橘紅色粗線畫(其他
+    桿件維持原本樣式變淡), 用在「這是整個結構裡的哪一根」的縮圖提示
+    ——例如自由體圖預覽時, 旁邊搭配一張這種小縮圖, 一眼就能看出目前
+    看的自由體圖對應到結構的哪個位置, 不用只憑桿件編號去對照。"""
     if ax is None:
         fig, ax = plt.subplots()
     for mid, m in frame.members.items():
         ni, nj = _member_endpoints(frame, mid)
-        if m.member_type == 'truss':
-            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k--', lw=1.3, zorder=1)      # 桁架: 黑虛線
+        is_hl = highlight_member_id is not None and mid == highlight_member_id
+        dim_others = highlight_member_id is not None and not is_hl
+        alpha = 0.35 if dim_others else 1.0
+        if is_hl:
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], color='#dc2626', lw=4, zorder=5, solid_capstyle='round')
+        elif m.member_type == 'truss':
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k--', lw=1.3, zorder=1, alpha=alpha)      # 桁架: 黑虛線
         elif m.member_type == 'cable':
-            ax.plot([ni.x, nj.x], [ni.y, nj.y], color='teal', ls=':', lw=1.3, zorder=1)  # 纜線: 藍綠點線
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], color='teal', ls=':', lw=1.3, zorder=1, alpha=alpha)  # 纜線: 藍綠點線
         else:
-            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1)        # 樑柱: 實線
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], 'k-', lw=2, zorder=1, alpha=alpha)        # 樑柱: 實線
         if show_member_ids:
             L, _ = member_geometry(ni, nj)
             xm, ym = (ni.x + nj.x) / 2, (ni.y + nj.y) / 2
             tag = {'frame': f'M{mid}', 'truss': f'T{mid}', 'cable': f'C{mid}'}[m.member_type]
             label = f'{tag} (L={L:.2f})' if show_dimensions else tag
-            ax.annotate(label, (xm, ym), color='blue', fontsize=8,
+            ax.annotate(label, (xm, ym), color='#dc2626' if is_hl else 'blue', fontsize=9 if is_hl else 8,
+                        fontweight='bold' if is_hl else 'normal',
                         ha='center', va='center',
                         bbox=dict(boxstyle='round,pad=0.1', fc='white', ec='none', alpha=0.7))
         # 內部鉸接(release): 在釋放的那一端畫個空心紅圈標記(跟SW FEA app的

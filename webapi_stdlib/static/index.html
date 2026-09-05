@@ -208,7 +208,6 @@
           <div class="dropdownBody" style="display:block;">
             <p class="hint">自由體圖: 把指定桿件從結構裡「切」出來單獨看, 畫出兩端受到其餘結構/支承作用的力+力矩、以及桿件身上的均佈載重/集中力, 並在圖上算出ΣFx/ΣFy/ΣM(應該接近0, 驗證真的平衡), 方便針對特定桿件抓出來單獨檢查或設計。</p>
             <label class="snapLabel"><input type="radio" name="fbdScope" value="current" checked>目前上面選到的那根桿件("查詢"用的那個下拉選單)</label>
-            <label class="snapLabel"><input type="radio" name="fbdScope" value="selected">目前框選/畫線選取的桿件(批次選取)</label>
             <label class="snapLabel"><input type="radio" name="fbdScope" value="all">全部桿件</label>
             <button id="btnExportFbd" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">👁 預覽自由體圖(匯出前可個別移除)</button>
             <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
@@ -1963,7 +1962,23 @@ function handleMemberAddClick(id) {
   }
 }
 
+// renderPropPanel()整個函式改名成_renderPropPanelInner, 外層包一層
+// 「重畫前記住哪些收合區塊是打開的、重畫後照樣打開」的邏輯——上一輪
+// 把所有propSection改成預設收合之後, 這裡的「編輯均佈載重/桿件集中力」
+// 功能被連帶弄壞: 編輯的流程本來就是"填回表單+移除舊資料+重新渲染
+// 整個面板", 但整個面板重新渲染後, 剛剛打開的那個區塊(桿件均佈/
+// 梯形載重)會跟著變回預設收合, 連同剛填好的表單、還有"改完按新增
+// 套用"的提示訊息一起被藏起來, 使用者看起來就像編輯直接把資料刪掉
+// 一樣。用區塊在面板裡的順序位置(不是ID, 因為這幾個區塊沒有各自的
+// id)當比對依據, 記住/還原打開狀態。
 function renderPropPanel() {
+  const panelEl = document.getElementById('propPanel');
+  const openFlags = Array.from(panelEl.querySelectorAll('.propSection, .dropdownSection')).map(d => d.open);
+  _renderPropPanelInner();
+  const newSections = panelEl.querySelectorAll('.propSection, .dropdownSection');
+  openFlags.forEach((wasOpen, i) => { if (wasOpen && newSections[i]) newSections[i].open = true; });
+}
+function _renderPropPanelInner() {
   const panel = document.getElementById('propPanel');
   const modal = document.getElementById('propModal');
   const backdrop = document.getElementById('propModalBackdrop');
@@ -3140,12 +3155,6 @@ document.getElementById('btnExportFbd').addEventListener('click', async () => {
     const id = parseInt(document.getElementById('queryMember').value, 10);
     if (isNaN(id)) { setStatus('「查詢」上面那個下拉選單目前沒有選到任何桿件'); return; }
     memberIds = [id];
-  } else if (scope === 'selected') {
-    if (!multiSelection || !multiSelection.memberIds || !multiSelection.memberIds.length) {
-      setStatus('目前沒有框選/畫線選取任何桿件, 請先到「建模」用方框或畫線選取模式選幾根桿件');
-      return;
-    }
-    memberIds = multiSelection.memberIds;
   } else {
     memberIds = model.members.map(m => m.id);
     if (!memberIds.length) { setStatus('目前模型沒有任何桿件'); return; }
@@ -3173,7 +3182,10 @@ function showFbdPreviewModal(previews) {
         <strong>桿件 M${p.member_id}</strong>
         <button class="fbdRemoveBtn" data-member-id="${p.member_id}" style="width:auto;background:#dc2626;color:white;">✕ 移除這根</button>
       </div>
-      <img src="data:image/png;base64,${p.image_base64}" alt="M${p.member_id} 自由體圖">
+      <div style="display:flex;gap:0.5rem;align-items:flex-start;">
+        ${p.thumbnail_base64 ? `<img src="data:image/png;base64,${p.thumbnail_base64}" alt="M${p.member_id} 在結構中的位置" style="width:5.5rem;flex-shrink:0;border:1px solid #e5e7eb;border-radius:4px;">` : ''}
+        <img src="data:image/png;base64,${p.image_base64}" alt="M${p.member_id} 自由體圖" style="flex:1;min-width:0;">
+      </div>
     </div>
   `).join('');
   list.querySelectorAll('.fbdRemoveBtn').forEach(btn => {
