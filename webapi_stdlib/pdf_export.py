@@ -35,22 +35,58 @@ def _fig_to_png_base64(fig, dpi=110):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def build_fbd_previews(f, member_ids):
+def _force_moment_factors(units):
+    """把units字典換算成(force_unit, force_factor, moment_unit, moment_factor)
+    這組四元組, 直接餵給frame2d/plotting.py的plot_member_fbd()/
+    plot_member_own_diagrams()——那兩個函式本身不認識"kN"這種單位
+    名稱, 只認係數+要印出來的字串, 這裡負責從webapi層的units設定
+    轉換成它們要的格式。"""
+    fu = _unit_label(units, "force", "N")
+    mu = _unit_label(units, "moment", "N·m")
+    return fu, 1.0 / UNIT_FACTORS["force"][fu], mu, 1.0 / UNIT_FACTORS["moment"][mu]
+
+
+def _member_fbd_with_thumbnail_fig(f, result, mid, force_unit, force_factor, moment_unit, moment_factor, figsize=(12, 7)):
+    """自由體圖+旁邊一張結構縮圖(目前這根桿件用橘紅色標示)合併成
+    一張figure——跟瀏覽器預覽(build_fbd_previews, 分開兩張圖用CSS
+    排版)不一樣, PDF裡沒有CSS可以排版, 直接用matplotlib的GridSpec
+    把兩個subplot擺在同一張圖裡, 縮圖佔窄的1/4, 自由體圖佔剩下3/4。"""
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(1, 4)
+    thumb_ax = fig.add_subplot(gs[0, 0])
+    plot_structure(f, ax=thumb_ax, show_node_ids=False, show_member_ids=False,
+                    show_dimensions=False, highlight_member_id=mid)
+    thumb_ax.set_title(f'Member {mid}', fontsize=9)
+    thumb_ax.set_xlabel('')
+    thumb_ax.set_ylabel('')
+    fbd_ax = fig.add_subplot(gs[0, 1:])
+    plot_member_fbd(f, result, mid, ax=fbd_ax, force_unit=force_unit, force_factor=force_factor,
+                     moment_unit=moment_unit, moment_factor=moment_factor)
+    fig.tight_layout()
+    return fig
+
+
+def build_fbd_previews(f, member_ids, units=None):
     """回傳每根指定桿件的自由體圖預覽(base64 PNG), 給前端在真正
     匯出PDF之前先秀出來讓使用者確認、可以個別排除不想要的桿件。
     回傳list of {"member_id":int, "image_base64":str, "thumbnail_base64":str},
     找不到的member_id直接跳過(不報錯, 讓前端自己比對哪些真的有回傳)。
 
+    units: 前端顯示單位設定, None用SI——之前這裡沒有接units, 圖上
+    的Fx/Fy/M數字永遠是SI(N/N*m), 跟使用者在「顯示設定」選的單位
+    (例如kN)對不起來, 這次修正。
+
     thumbnail_base64: 整個結構的小縮圖, 目前這根桿件用醒目橘紅色
     粗線標示、其他桿件淡化——目的是選「全部桿件」批次預覽時, 每張
     自由體圖旁邊都能一眼看出對應到結構的哪個位置, 不用只憑桿件
     編號自己去對照。"""
+    fu, ff, mu, mf = _force_moment_factors(units)
     result = solve(f)
     previews = []
     for mid in member_ids:
         if mid not in f.members:
             continue
-        ax = plot_member_fbd(f, result, mid)
+        ax = plot_member_fbd(f, result, mid, force_unit=fu, force_factor=ff, moment_unit=mu, moment_factor=mf)
         image_b64 = _fig_to_png_base64(ax.figure)
         plt.close(ax.figure)
 
@@ -236,14 +272,41 @@ def build_result_data_page(f, result, units=None):
     ])
 
 
-def build_pdf_report(f, units=None, member_ids=None) -> bytes:
+def build_fbd_images_archive(f, member_ids, units=None) -> bytes:
+    """回傳一個zip檔的bytes, 裡面是每根指定桿件的自由體圖PNG(跟
+    PDF裡的版面一樣: 自由體圖+旁邊的結構縮圖合併成一張圖, 不是
+    分開兩個檔案)。單一桿件時, 呼叫端(main.py/server.py)可以決定
+    直接回傳裡面那張PNG而不包zip——這裡固定產生zip, 由呼叫端依
+    member_ids長度決定要不要解開, 邏輯不用寫兩次。"""
+    import zipfile
+    fu, ff, mu, mf = _force_moment_factors(units)
+    result = solve(f)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for mid in member_ids:
+            if mid not in f.members:
+                continue
+            fig = _member_fbd_with_thumbnail_fig(f, result, mid, fu, ff, mu, mf)
+            img_buf = io.BytesIO()
+            fig.savefig(img_buf, format="png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            zf.writestr(f"member_{mid}_fbd.png", img_buf.getvalue())
+    return buf.getvalue()
+
+
+def build_pdf_report(f, units=None, member_ids=None, include_member_diagrams=True) -> bytes:
     """f: 已經建好的 frame2d.Frame2D。units: 前端目前顯示單位設定,
     None的話用SI。member_ids: 如果有指定(選一個/多個/全選桿件),
-    每根桿件會多兩頁: 自由體圖(驗證Fx/Fy/M平衡)+ 這根桿件自己的
-    N/V/M/變形圖, 方便把特定桿件抓出來單獨檢查或設計。回傳 PDF 的
-    bytes(六合一總覽圖 + 完整輸入資料表格 + 求解結果表格 + 選擇性
-    的桿件自由體圖頁), 讓報告本身就能完全重現模型或手算/跨軟體
-    驗證, 不用只能從圖上目測。"""
+    每根桿件會多附加自由體圖(含旁邊的結構縮圖, 驗證Fx/Fy/M平衡)頁面。
+    include_member_diagrams: True(預設, 維持原本行為)時, 每根桿件
+    的自由體圖後面還會再附一頁那根桿件自己的N/V/M/變形圖; 設成
+    False可以只要自由體圖(含縮圖)、跳過N/V/M/變形這幾張, 讓PDF
+    更精簡——例如想要「結構裡每一根桿件的自由體圖總覽」但不需要
+    看每根的內力分布細節時用。回傳 PDF 的 bytes(六合一總覽圖 +
+    完整輸入資料表格 + 求解結果表格 + 選擇性的桿件自由體圖頁),
+    讓報告本身就能完全重現模型或手算/跨軟體驗證, 不用只能從圖上
+    目測。"""
+    fu, ff, mu, mf = _force_moment_factors(units)
     result = solve(f)
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
@@ -263,11 +326,13 @@ def build_pdf_report(f, units=None, member_ids=None) -> bytes:
             for mid in member_ids:
                 if mid not in f.members:
                     continue
-                fbd_ax = plot_member_fbd(f, result, mid)
-                pdf.savefig(fbd_ax.figure)
-                plt.close(fbd_ax.figure)
+                fbd_fig = _member_fbd_with_thumbnail_fig(f, result, mid, fu, ff, mu, mf)
+                pdf.savefig(fbd_fig)
+                plt.close(fbd_fig)
 
-                own_fig = plot_member_own_diagrams(f, result, mid)
-                pdf.savefig(own_fig)
-                plt.close(own_fig)
+                if include_member_diagrams:
+                    own_fig = plot_member_own_diagrams(f, result, mid, force_unit=fu, force_factor=ff,
+                                                        moment_unit=mu, moment_factor=mf)
+                    pdf.savefig(own_fig)
+                    plt.close(own_fig)
     return buf.getvalue()

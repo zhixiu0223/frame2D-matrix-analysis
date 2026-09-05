@@ -31,7 +31,14 @@
                border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 201; padding: 1rem; }
   #fbdPreviewModal.open { display: block; }
   .fbdPreviewCard { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 0.7rem; padding: 0.5rem; }
-  .fbdPreviewCard img { width: 100%; display: block; border-radius: 4px; }
+  .fbdPreviewCard img { width: 100%; display: block; border-radius: 4px; cursor: zoom-in; }
+  #fbdLightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 300;
+                 flex-direction: column; }
+  #fbdLightbox.open { display: flex; }
+  #fbdLightboxToolbar { display: flex; gap: 0.4rem; padding: 0.5rem; justify-content: center; flex-shrink: 0; }
+  #fbdLightboxToolbar button { width: auto; background: #374151; color: white; border: none; }
+  #fbdLightboxScroll { flex: 1; overflow: auto; touch-action: pan-x pan-y; }
+  #fbdLightboxImg { transform-origin: top left; display: block; }
   .fbdPreviewCard.removed { opacity: 0.35; }
   h1 { font-size: 1.05rem; margin: 0; padding: 0.6rem 0 0.3rem; }
   .hint { font-size: 0.78rem; color: #666; margin-bottom: 0.6rem; }
@@ -175,6 +182,7 @@
         </label>
         <button id="btnExportMd">⬇ 匯出Markdown</button>
         <button id="btnExportPdf">⬇ 匯出PDF</button>
+        <button id="btnExportPdfAllFbd" title="每根桿件的自由體圖(含旁邊的結構縮圖), 不含N/V/M/變形圖, 檔案比較精簡">⬇ 匯出PDF(含全部自由體圖)</button>
       </div>
 
       <div class="menuGroup" data-group="model">
@@ -312,14 +320,25 @@
 
 <div id="propModalBackdrop"></div>
 <div id="fbdPreviewBackdrop"></div>
+<div id="fbdLightbox">
+  <div id="fbdLightboxToolbar">
+    <button id="fbdZoomOut">🔍-</button>
+    <button id="fbdZoomReset">⟲ 原大小</button>
+    <button id="fbdZoomIn">🔍+</button>
+    <button id="fbdLightboxClose">✕ 關閉</button>
+  </div>
+  <div id="fbdLightboxScroll"><img id="fbdLightboxImg"></div>
+</div>
 <div id="fbdPreviewModal">
   <h3 style="margin-top:0;">自由體圖預覽</h3>
-  <p class="hint">確認每一張沒問題再按下面「確認匯出PDF」。不想要的桿件按「✕ 移除這根」, 只有還留著的桿件會真的匯出到PDF裡。</p>
+  <p class="hint">確認每一張沒問題再按下面按鈕。不想要的桿件按「✕ 移除這根」, 只有還留著的桿件會真的匯出。圖片可以點擊放大檢視。</p>
+  <p class="hint">「確認匯出PDF」= 完整報告(結構總覽圖+輸入資料表格+反力位移表格, 跟「檔案」選單裡的「Export PDF」內容相同)後面再附加這幾張自由體圖, 檔案會比較大。「匯出圖檔」= 只有自由體圖本身(1根直接下載PNG, 多根打包成zip), 不含完整報告, 檔案小很多、也不用等產生報告的其他部分。</p>
   <div id="fbdPreviewList"></div>
   <div class="row2" style="margin-top:0.4rem;">
     <button id="fbdPreviewConfirm" style="background:#16a34a;color:white;">✔ 確認匯出PDF</button>
-    <button id="fbdPreviewCancel">取消</button>
+    <button id="fbdPreviewExportImages" style="background:#0891b2;color:white;">🖼 匯出圖檔</button>
   </div>
+  <button id="fbdPreviewCancel" style="width:100%;margin-top:0.4rem;">取消</button>
 </div>
 
 <div id="propModal">
@@ -3173,6 +3192,10 @@ document.getElementById('btnExportFbd').addEventListener('click', async () => {
   } catch (e) { setStatus('自由體圖預覽產生失敗: ' + e.message); }
 });
 
+function updateFbdPreviewButtonLabels() {
+  document.getElementById('fbdPreviewConfirm').textContent = `✔ 確認匯出PDF(${fbdPreviewMemberIds.length} 根桿件)`;
+  document.getElementById('fbdPreviewExportImages').textContent = `🖼 匯出圖檔(${fbdPreviewMemberIds.length} 根桿件)`;
+}
 function showFbdPreviewModal(previews) {
   fbdPreviewMemberIds = previews.map(p => p.member_id);
   const list = document.getElementById('fbdPreviewList');
@@ -3184,7 +3207,7 @@ function showFbdPreviewModal(previews) {
       </div>
       <div style="display:flex;gap:0.5rem;align-items:flex-start;">
         ${p.thumbnail_base64 ? `<img src="data:image/png;base64,${p.thumbnail_base64}" alt="M${p.member_id} 在結構中的位置" style="width:5.5rem;flex-shrink:0;border:1px solid #e5e7eb;border-radius:4px;">` : ''}
-        <img src="data:image/png;base64,${p.image_base64}" alt="M${p.member_id} 自由體圖" style="flex:1;min-width:0;">
+        <img class="fbdOpenLightbox" data-src="data:image/png;base64,${p.image_base64}" src="data:image/png;base64,${p.image_base64}" alt="M${p.member_id} 自由體圖(點擊放大)" style="flex:1;min-width:0;">
       </div>
     </div>
   `).join('');
@@ -3196,29 +3219,70 @@ function showFbdPreviewModal(previews) {
       card.classList.add('removed');
       btn.disabled = true;
       btn.textContent = '已移除';
-      document.getElementById('fbdPreviewConfirm').textContent =
-        `✔ 確認匯出PDF(${fbdPreviewMemberIds.length} 根桿件)`;
+      updateFbdPreviewButtonLabels();
     });
   });
-  document.getElementById('fbdPreviewConfirm').textContent = `✔ 確認匯出PDF(${fbdPreviewMemberIds.length} 根桿件)`;
+  list.querySelectorAll('.fbdOpenLightbox').forEach(img => {
+    img.addEventListener('click', () => openFbdLightbox(img.dataset.src));
+  });
+  updateFbdPreviewButtonLabels();
   document.getElementById('fbdPreviewModal').classList.add('open');
   document.getElementById('fbdPreviewBackdrop').classList.add('open');
 }
+
+// 自由體圖預覽的圖片在modal裡本來就顯示得比較小(卡片式排版, 一次
+// 要塞縮圖+自由體圖+按鈕), 頁面又整體鎖定user-scalable=no(避免跟
+// 主畫布本身的自訂雙指縮放手勢衝突), 原生雙指縮放在這裡完全沒用。
+// 改成點圖片開一個全螢幕放大檢視層, 用按鈕縮放(不依賴雙指手勢),
+// 縮放後放進一個可以捲動的容器, 一樣能自由平移看細節。
+let fbdLightboxScale = 1;
+function openFbdLightbox(src) {
+  fbdLightboxScale = 1;
+  const img = document.getElementById('fbdLightboxImg');
+  img.src = src;
+  img.style.transform = 'scale(1)';
+  document.getElementById('fbdLightbox').classList.add('open');
+}
+function closeFbdLightbox() {
+  document.getElementById('fbdLightbox').classList.remove('open');
+}
+function applyFbdLightboxZoom() {
+  document.getElementById('fbdLightboxImg').style.transform = `scale(${fbdLightboxScale})`;
+}
+document.getElementById('fbdZoomIn').addEventListener('click', () => {
+  fbdLightboxScale = Math.min(fbdLightboxScale + 0.5, 6);
+  applyFbdLightboxZoom();
+});
+document.getElementById('fbdZoomOut').addEventListener('click', () => {
+  fbdLightboxScale = Math.max(fbdLightboxScale - 0.5, 0.5);
+  applyFbdLightboxZoom();
+});
+document.getElementById('fbdZoomReset').addEventListener('click', () => {
+  fbdLightboxScale = 1;
+  applyFbdLightboxZoom();
+});
+document.getElementById('fbdLightboxClose').addEventListener('click', closeFbdLightbox);
 function closeFbdPreviewModal() {
   document.getElementById('fbdPreviewModal').classList.remove('open');
   document.getElementById('fbdPreviewBackdrop').classList.remove('open');
 }
 document.getElementById('fbdPreviewCancel').addEventListener('click', closeFbdPreviewModal);
 document.getElementById('fbdPreviewBackdrop').addEventListener('click', closeFbdPreviewModal);
+// 組出目前「顯示設定」選的六個單位, 送給後端做PDF/圖檔匯出用——
+// 好幾個匯出功能(自由體圖PDF/圖檔、一般PDF)都要送一樣的東西,
+// 抽成共用函式避免重複。
+function currentUnitsPayload() {
+  return {
+    E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
+    disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
+  };
+}
 document.getElementById('fbdPreviewConfirm').addEventListener('click', async () => {
   if (!fbdPreviewMemberIds.length) { setStatus('已經把全部桿件都移除了, 沒有東西可以匯出'); return; }
   closeFbdPreviewModal();
   setStatus(`產生自由體圖PDF中(${fbdPreviewMemberIds.length} 根桿件, 每根附自由體圖+內力圖共2頁)...`);
   try {
-    const payload = {...model, member_ids: fbdPreviewMemberIds, units: {
-      E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
-      disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
-    }};
+    const payload = {...model, member_ids: fbdPreviewMemberIds, units: currentUnitsPayload()};
     const res = await fetch('/export/pdf', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
@@ -3228,6 +3292,23 @@ document.getElementById('fbdPreviewConfirm').addEventListener('click', async () 
     setStatus(`自由體圖PDF已下載(${fbdPreviewMemberIds.length} 根桿件)`);
   } catch (e) { setStatus('自由體圖PDF產生失敗: ' + e.message); }
 });
+document.getElementById('fbdPreviewExportImages').addEventListener('click', async () => {
+  if (!fbdPreviewMemberIds.length) { setStatus('已經把全部桿件都移除了, 沒有東西可以匯出'); return; }
+  closeFbdPreviewModal();
+  const n = fbdPreviewMemberIds.length;
+  setStatus(`產生自由體圖檔中(${n} 根桿件, ${n > 1 ? '會打包成zip' : '直接下載PNG'})...`);
+  try {
+    const payload = {...model, member_ids: fbdPreviewMemberIds, units: currentUnitsPayload()};
+    const res = await fetch('/export/fbd_images', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    if (!res.ok) { setStatus('自由體圖圖檔產生失敗: ' + await res.text()); return; }
+    const blob = await res.blob();
+    const ext = n > 1 ? '.zip' : `_M${fbdPreviewMemberIds[0]}.png`;
+    downloadBlob(blob, (currentName || 'frame2d') + '_fbd' + ext);
+    setStatus(`自由體圖圖檔已下載(${n} 根桿件)`);
+  } catch (e) { setStatus('自由體圖圖檔產生失敗: ' + e.message); }
+});
 document.getElementById('btnExportPdf').addEventListener('click', async () => {
   sanitizeModel();
   setStatus('產生 PDF 中...');
@@ -3235,10 +3316,7 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
     // 把目前「顯示設定」選的單位一起送給後端, 讓PDF報告顯示的數字/
     // 單位標籤跟畫面上看到的一致, 不用另外猜這份報告是SI還是別的
     // 單位基準。
-    const payload = {...model, units: {
-      E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
-      disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
-    }};
+    const payload = {...model, units: currentUnitsPayload()};
     const res = await fetch('/export/pdf', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
@@ -3246,6 +3324,26 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
     const blob = await res.blob();
     downloadBlob(blob, (currentName || 'frame2d_report') + '.pdf');
     setStatus('PDF 已下載');
+  } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
+});
+document.getElementById('btnExportPdfAllFbd').addEventListener('click', async () => {
+  if (!model.members.length) { setStatus('目前模型沒有任何桿件'); return; }
+  sanitizeModel();
+  setStatus(`產生PDF中(全部 ${model.members.length} 根桿件的自由體圖, 略過N/V/M/變形圖)...`);
+  try {
+    const payload = {
+      ...model,
+      member_ids: model.members.map(m => m.id),
+      fbd_only: true,
+      units: currentUnitsPayload(),
+    };
+    const res = await fetch('/export/pdf', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    if (!res.ok) { setStatus('PDF 產生失敗: ' + await res.text()); return; }
+    const blob = await res.blob();
+    downloadBlob(blob, (currentName || 'frame2d_report') + '_all_fbd.pdf');
+    setStatus(`PDF已下載(全部 ${model.members.length} 根桿件的自由體圖)`);
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
 });
 

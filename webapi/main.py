@@ -18,7 +18,7 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -175,7 +175,8 @@ def delete_model(name: str):
 def export_pdf(payload: FrameIn):
     f = _build_frame(payload)
     try:
-        pdf_bytes = build_pdf_report(f, units=payload.units, member_ids=payload.member_ids)
+        pdf_bytes = build_pdf_report(f, units=payload.units, member_ids=payload.member_ids,
+                                      include_member_diagrams=not payload.fbd_only)
     except KeyError as e:
         raise HTTPException(
             status_code=400,
@@ -192,6 +193,44 @@ def export_pdf(payload: FrameIn):
     )
 
 
+@app.post("/export/fbd_images")
+def export_fbd_images(payload: FrameIn):
+    """匯出指定桿件的自由體圖圖檔(不是PDF報告): 只有1根桿件時直接
+    回傳PNG, 多根桿件打包成zip(每根一個檔案), 給只想要圖片、不需要
+    完整報告的情境用。"""
+    f = _build_frame(payload)
+    if not payload.member_ids:
+        raise HTTPException(status_code=400, detail="沒有指定要匯出的桿件(member_ids)")
+    try:
+        zip_bytes = build_fbd_images_archive(f, payload.member_ids, units=payload.units)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                   f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                   f"還留著指向舊桿件編號), 請檢查並移除",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if len(payload.member_ids) == 1:
+        # 只有1根桿件時, 直接把zip裡唯一那張PNG解開單獨回傳, 不用
+        # 讓使用者多一道「下載zip再解壓縮才能看到一張圖」的手續。
+        import io as _io
+        import zipfile as _zipfile
+        with _zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+            names = zf.namelist()
+            if names:
+                png_bytes = zf.read(names[0])
+                return Response(
+                    content=png_bytes, media_type="image/png",
+                    headers={"Content-Disposition": f'attachment; filename="member_{payload.member_ids[0]}_fbd.png"'},
+                )
+    return Response(
+        content=zip_bytes, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="frame2d_fbd_images.zip"'},
+    )
+
+
 @app.post("/preview/fbd")
 def preview_fbd(payload: FrameIn):
     """匯出自由體圖PDF之前, 先讓前端秀出每根指定桿件的自由體圖預覽
@@ -201,7 +240,7 @@ def preview_fbd(payload: FrameIn):
     if not payload.member_ids:
         raise HTTPException(status_code=400, detail="沒有指定要預覽的桿件(member_ids)")
     try:
-        previews = build_fbd_previews(f, payload.member_ids)
+        previews = build_fbd_previews(f, payload.member_ids, units=payload.units)
     except KeyError as e:
         raise HTTPException(
             status_code=400,

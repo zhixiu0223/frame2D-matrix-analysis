@@ -76,14 +76,19 @@ class FrameIn(BaseModel):
     member_point_loads: List[MemberPointLoadIn] = Field(default_factory=list)
     units: Optional[dict] = None
     """匯出PDF/報告時, 前端目前「顯示設定」裡選的單位(E/I/A/disp/
-    force/moment, 例如{"E":"GPa","force":"kN",...})——只有/export/pdf
-    這個端點會用到, 讓PDF報告顯示的數字/單位標籤跟使用者畫面上看到
-    的一致, 不用另外去猜或換算; 其他端點忽略這個欄位, 因為/solve
-    本身進出都是SI, 跟顯示單位無關。"""
+    force/moment, 例如{"E":"GPa","force":"kN",...})——/export/pdf、
+    /preview/fbd、/export/fbd_images這三個端點會用到, 讓報告顯示
+    的數字/單位標籤跟使用者畫面上看到的一致, 不用另外去猜或換算;
+    其他端點忽略這個欄位, 因為/solve本身進出都是SI, 跟顯示單位
+    無關。"""
     member_ids: Optional[List[int]] = None
-    """匯出PDF時, 如果有指定桿件(查詢畫面選一個/多個/全選), 每根
-    桿件會多附兩頁: 自由體圖(驗證Fx/Fy/M平衡)+ 這根桿件自己的
-    N/V/M/變形圖。只有/export/pdf這個端點會用到, 其他端點忽略。"""
+    """指定桿件(查詢畫面選一個/多個/全選)——/export/pdf、
+    /preview/fbd、/export/fbd_images這三個端點會用到: 每根桿件
+    附一張自由體圖(含旁邊的結構縮圖, 驗證Fx/Fy/M平衡)。其他端點
+    忽略。"""
+    fbd_only: Optional[bool] = False
+    """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
+    跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""
 
 
 class NodeResultOut(BaseModel):

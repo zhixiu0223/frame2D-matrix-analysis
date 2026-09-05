@@ -513,7 +513,9 @@ def _member_inspan_load_resultant(frame, member_id):
     return fx_total, fy_total, m_about_i
 
 
-def plot_member_fbd(frame, result, member_id, ax=None):
+def plot_member_fbd(frame, result, member_id, ax=None,
+                     force_factor=1.0, force_unit='N',
+                     moment_factor=1.0, moment_unit='N*m'):
     """畫這根桿件的自由體圖(free body diagram): 桿件本身(不含其他
     桿件/支承), 兩端各畫「其餘結構對這一端的作用力+力矩」(直接來自
     end_forces_local, 局部->全域座標轉換), 桿件身上的跨間載重(均佈
@@ -522,7 +524,14 @@ def plot_member_fbd(frame, result, member_id, ax=None):
 
     正負號慣例已經用兩個已知答案的案例實際驗證過(懸臂梁尖端載重、
     簡支梁跨間均佈載重), 確認 Fx1+Fx2+跨間load的fx合力=0(以此類推
-    Fy, M)這個等式成立。"""
+    Fy, M)這個等式成立。
+
+    force_factor/moment_factor: 內部計算永遠是SI(N, N*m), 顯示的
+    時候乘以這兩個係數換算成呼叫端想要的單位(例如kN就是0.001),
+    force_unit/moment_unit是對應要顯示的單位字串——frame2d本身
+    不需要知道"kN"這種單位名稱怎麼命名, 只需要知道換算係數跟
+    要印出來的字串, 單位名稱/係數表由webapi層(使用者的顯示設定)
+    決定, 這樣frame2d繪圖函式維持跟單位系統無關、可攜性不受影響。"""
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
     m = frame.members[member_id]
@@ -557,17 +566,17 @@ def plot_member_fbd(frame, result, member_id, ax=None):
             sign = 1 if fx > 0 else -1
             ax.annotate('', xy=(x, y), xytext=(x - sign * arrow_len, y),
                         arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
-            ax.annotate(f'Fx={fx:.4g} N', (x - sign * arrow_len, y), fontsize=7.5, color=color,
+            ax.annotate(f'Fx={fx * force_factor:.4g} {force_unit}', (x - sign * arrow_len, y), fontsize=7.5, color=color,
                         xytext=(4, 6), textcoords='offset points')
         if abs(fy) > 1e-6:
             sign = 1 if fy > 0 else -1
             ax.annotate('', xy=(x, y), xytext=(x, y - sign * arrow_len),
                         arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
-            ax.annotate(f'Fy={fy:.4g} N', (x, y - sign * arrow_len), fontsize=7.5, color=color,
+            ax.annotate(f'Fy={fy * force_factor:.4g} {force_unit}', (x, y - sign * arrow_len), fontsize=7.5, color=color,
                         xytext=(4, -10), textcoords='offset points')
         if abs(mm) > 1e-6:
             _draw_moment_arc(ax, x, y, mm, L * 0.12, color)
-            ax.annotate(f'M={mm:.4g} N*m', (x, y), fontsize=8, color=color,
+            ax.annotate(f'M={mm * moment_factor:.4g} {moment_unit}', (x, y), fontsize=8, color=color,
                         xytext=(6, -16), textcoords='offset points')
 
     _draw_end_force(ni.x, ni.y, Fx1_g, Fy1_g, M1, 'crimson')
@@ -589,7 +598,9 @@ def plot_member_fbd(frame, result, member_id, ax=None):
             py = ni.y + t * s_ang
             ax.annotate('', xy=(px, py), xytext=(px, py + L * 0.08),
                         arrowprops=dict(arrowstyle='-|>', color='orange', lw=1, mutation_scale=8), zorder=1)
-        ax.annotate(f'w={dl.w_start:.4g}' + (f'~{dl.w_end:.4g}' if dl.w_end is not None else '') + ' N/m',
+        w0_disp = dl.w_start * force_factor
+        w1_disp = dl.w_end * force_factor if dl.w_end is not None else None
+        ax.annotate(f'w={w0_disp:.4g}' + (f'~{w1_disp:.4g}' if w1_disp is not None else '') + f' {force_unit}/m',
                     (ni.x + (x0 + x1) / 2 * c_ang, ni.y + (x0 + x1) / 2 * s_ang + L * 0.1),
                     fontsize=7, color='darkorange', ha='center')
 
@@ -602,14 +613,17 @@ def plot_member_fbd(frame, result, member_id, ax=None):
         ax.annotate(f'a={pl.a:.3g} m', (px, py), fontsize=7, color='purple', xytext=(4, 8), textcoords='offset points')
 
     # 平衡驗證: Fx1+Fx2+跨間載重fx合力 應該=0(以此類推Fy, M對i端取矩)
+    # ——內部計算全程用SI(浮點噪音的量級判斷才有意義), 顯示才乘上
+    # 換算係數, 不管顯示單位是什麼, "接近0"這件事情本身不會因為
+    # 換算係數而改變(0乘任何係數還是0)。
     fx_load, fy_load, m_load = _member_inspan_load_resultant(frame, member_id)
     sum_fx = Fx1 + Fx2 + fx_load
     sum_fy = Fy1 + Fy2 + fy_load
     sum_m = M1 + M2 + Fy2 * L + m_load
     ax.text(0.02, 0.02,
             f'L = {L:.4g} m (member length, node {m.node_i} to node {m.node_j})\n'
-            f'Equilibrium check (local coords, units: N, N*m):\n'
-            f'ΣFx = {sum_fx:.3g}   ΣFy = {sum_fy:.3g}   ΣM(about node i) = {sum_m:.3g}\n'
+            f'Equilibrium check (local coords, units: {force_unit}, {moment_unit}):\n'
+            f'\u03a3Fx = {sum_fx * force_factor:.3g}   \u03a3Fy = {sum_fy * force_factor:.3g}   \u03a3M(about node i) = {sum_m * moment_factor:.3g}\n'
             f'(should be ~0, small residual is floating-point noise)',
             transform=ax.transAxes, fontsize=7.5, va='bottom',
             bbox=dict(boxstyle='round,pad=0.3', fc='#f0fdf4', ec='#16a34a', lw=0.8))
@@ -624,7 +638,9 @@ def plot_member_fbd(frame, result, member_id, ax=None):
     return ax
 
 
-def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8)):
+def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8),
+                              force_factor=1.0, force_unit='N',
+                              moment_factor=1.0, moment_unit='N*m'):
     """單一桿件自己的N/V/M/變形四合一圖(不是整個結構, 只有這一根
     桿件的內力沿桿長分佈+變形形狀), 給查詢/自由體圖功能搭配使用,
     方便針對特定桿件抓出來單獨檢查或設計用。"""
@@ -645,10 +661,10 @@ def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8)):
     scale = L * 0.15 / max_offset
     X, Y = member_deformed_shape(frame, result, member_id, scale=scale, n=101)
 
-    for ax, vals, label, color, unit in [
-        (axes[0, 0], N, 'N (Axial Force)', '#2563eb', 'N'),
-        (axes[0, 1], V, 'V (Shear Force)', '#2563eb', 'N'),
-        (axes[1, 0], M, 'M (Bending Moment)', '#dc2626', 'N*m'),
+    for ax, vals, label, color, unit, factor in [
+        (axes[0, 0], N * force_factor, 'N (Axial Force)', '#2563eb', force_unit, force_factor),
+        (axes[0, 1], V * force_factor, 'V (Shear Force)', '#2563eb', force_unit, force_factor),
+        (axes[1, 0], M * moment_factor, 'M (Bending Moment)', '#dc2626', moment_unit, moment_factor),
     ]:
         ax.plot(x, vals, color=color, lw=1.5)
         ax.fill_between(x, vals, 0, color=color, alpha=0.15)

@@ -21,7 +21,7 @@ from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -172,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json_body()
                 f = _build_frame(payload)
                 try:
-                    pdf_bytes = build_pdf_report(f, units=payload.get("units"), member_ids=payload.get("member_ids"))
+                    pdf_bytes = build_pdf_report(f, units=payload.get("units"), member_ids=payload.get("member_ids"),
+                                                  include_member_diagrams=not payload.get("fbd_only", False))
                 except KeyError as e:
                     raise ValueError(
                         f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
@@ -184,6 +185,36 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return
+        if self.path == "/export/fbd_images":
+            try:
+                payload = self._read_json_body()
+                f = _build_frame(payload)
+                member_ids = payload.get("member_ids")
+                if not member_ids:
+                    raise ValueError("沒有指定要匯出的桿件(member_ids)")
+                try:
+                    zip_bytes = build_fbd_images_archive(f, member_ids, units=payload.get("units"))
+                except KeyError as e:
+                    raise ValueError(
+                        f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
+                        f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
+                        f"還留著指向舊桿件編號), 請檢查並移除"
+                    )
+                if len(member_ids) == 1:
+                    import io as _io
+                    import zipfile as _zipfile
+                    with _zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+                        names = zf.namelist()
+                        if names:
+                            png_bytes = zf.read(names[0])
+                            self._send_bytes(png_bytes, "image/png",
+                                              extra_headers={"Content-Disposition": f'attachment; filename="member_{member_ids[0]}_fbd.png"'})
+                            return
+                self._send_bytes(zip_bytes, "application/zip",
+                                  extra_headers={"Content-Disposition": 'attachment; filename="frame2d_fbd_images.zip"'})
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
         if self.path == "/preview/fbd":
             try:
                 payload = self._read_json_body()
@@ -192,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not member_ids:
                     raise ValueError("沒有指定要預覽的桿件(member_ids)")
                 try:
-                    previews = build_fbd_previews(f, member_ids)
+                    previews = build_fbd_previews(f, member_ids, units=payload.get("units"))
                 except KeyError as e:
                     raise ValueError(
                         f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
