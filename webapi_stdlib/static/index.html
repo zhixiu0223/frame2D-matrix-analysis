@@ -180,8 +180,6 @@
         <button id="btnSelectRect">⬚ 方框選取</button>
         <button id="btnSelectLine">／ 直線選取</button>
         <span class="sep"></span>
-        <button id="btnBatchSupport">🔒 支承(選取套用)</button>
-        <button id="btnBatchLoad">⬇ 施加外力(選取套用)</button>
         <button id="btnSectionManager">📐 斷面管理</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="snapGrid" checked>格線鎖定</label>
@@ -210,6 +208,7 @@
             <label class="snapLabel"><input type="radio" name="fbdScope" value="selected">目前框選/畫線選取的桿件(批次選取)</label>
             <label class="snapLabel"><input type="radio" name="fbdScope" value="all">全部桿件</label>
             <button id="btnExportFbd" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">👁 預覽自由體圖(匯出前可個別移除)</button>
+            <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
           </div>
         </details>
       </div>
@@ -246,6 +245,7 @@
               </label>
             </div>
             <p class="hint" style="width:100%;">所有顯示設定(格線/單位/圖示大小等)會自動存在這個瀏覽器裡, 下次打開不用重調; 換裝置或清瀏覽器資料前, 記得先匯出備份, 之後可以匯入回來。</p>
+            <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
           </div>
         </details>
         <details class="dropdownSection">
@@ -270,6 +270,7 @@
               <option value="N·m">N·m</option><option value="kN·m" selected>kN·m</option>
             </select></label>
             <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
+            <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
           </div>
         </details>
       </div>
@@ -387,7 +388,6 @@ let addMode = null;         // null | 'node' | 'member'
 let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選取模式
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
 let multiSelection = null;  // {nodeIds:[...], memberIds:[...]} -- 批次選取的結果
-let pendingBatchAction = null; // null | 'support' | 'load' -- 從快捷按鈕觸發選取時, 選完要直接跳哪個表單
 let pendingQueryLinePick = false; // true時, 這次的直線選取是為了查詢桿件用, 不是批次編輯
 let queryPickMode = false; // true時, 點畫布上的桿件會直接填進查詢用的下拉選單, 不用在清單裡找編號
 let memberFirstNode = null;
@@ -1655,6 +1655,7 @@ function renderSectionManager() {
             <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
             <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
           </div>
+          <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
         </div>
       </details>`;
   }).join('');
@@ -1671,6 +1672,7 @@ function renderSectionManager() {
           <input id="sm_new_A" type="number" step="any" placeholder="A(${au})">
         </div>
         <button id="sm_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面</button>
+        <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </div>
     </details>
     <button id="sm_back" style="width:100%;margin-top:0.6rem;">返回</button>
@@ -1819,6 +1821,7 @@ function renderBatchMemberEditForm(memberIds) {
           <input id="be_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
         </div>
         <button id="be_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這批桿件</button>
+        <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </div>
     </details>
   </fieldset>`;
@@ -2084,6 +2087,7 @@ function renderPropPanel() {
                 <input id="p_sec_new_A" type="number" step="any" placeholder="A(${unitOf('A')})">
               </div>
               <button id="p_sec_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面並套用到這根桿件</button>
+              <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
             </div>
           </details>
         </div>
@@ -2671,9 +2675,6 @@ svg.addEventListener('pointerup', () => {
       render();
       return;
     }
-    const wasPendingSupport = pendingBatchAction === 'support';
-    const wasPendingLoad = pendingBatchAction === 'load';
-    pendingBatchAction = null;
     if (result.nodeIds.length === 0 && result.memberIds.length === 0) {
       setStatus('這個範圍內沒有選到任何東西');
       render();
@@ -2697,18 +2698,7 @@ svg.addEventListener('pointerup', () => {
     }
     selected = null;
     multiSelection = result;
-    // 如果是從「支承(選取套用)」/「施加外力(選取套用)」快捷按鈕
-    // 觸發的選取(選到2個以上東西時才會走到這裡, 剛好1個的話上面已經
-    // 提早跳去完整面板了), 選完直接跳對應的表單, 跳過中間那層
-    // 「批次選取」摘要畫面, 省一次點擊。
-    if (wasPendingSupport && result.nodeIds.length > 0) {
-      renderBatchSupportForm(result.nodeIds);
-    } else if (wasPendingLoad) {
-      if (result.nodeIds.length > 0) renderBatchNodeLoadForm(result.nodeIds);
-      else renderBatchDistLoadForm(result.memberIds);
-    } else {
-      renderMultiSelectPanel();
-    }
+    renderMultiSelectPanel();
     render();
     return;
   }
@@ -2832,7 +2822,6 @@ function clearAllModes() {
   Object.values(MODE_BUTTONS).forEach(id => document.getElementById(id).classList.remove('active'));
 }
 function toggleMode(kind) {
-  pendingBatchAction = null; // 任何時候手動切換模式, 之前快捷按鈕留下的「待處理動作」都作廢
   pendingQueryLinePick = false;
   const wasActive = document.getElementById(MODE_BUTTONS[kind]).classList.contains('active');
   clearAllModes();
@@ -2853,30 +2842,6 @@ document.getElementById('btnAddNode').addEventListener('click', () => toggleMode
 document.getElementById('btnAddMember').addEventListener('click', () => toggleMode('member'));
 document.getElementById('btnSelectRect').addEventListener('click', () => toggleMode('rect'));
 document.getElementById('btnSelectLine').addEventListener('click', () => toggleMode('line'));
-
-document.getElementById('btnBatchSupport').addEventListener('click', () => {
-  if (multiSelection && multiSelection.nodeIds.length > 0) {
-    renderBatchSupportForm(multiSelection.nodeIds);
-    return;
-  }
-  // 還沒選東西的話, 這顆按鈕直接幫你切換成方框選取模式, 框完會
-  // 自動跳出支承設定表單(跳過中間那層「批次選取」摘要畫面),
-  // 不用先點「方框選取」再回頭點這裡, 省一次點擊。
-  pendingBatchAction = 'support';
-  if (selectMode !== 'rect') toggleMode('rect');
-  pendingBatchAction = 'support';
-  setStatus('先框選要設定支承的節點, 框完會直接跳出支承設定表單');
-});
-document.getElementById('btnBatchLoad').addEventListener('click', () => {
-  if (multiSelection && (multiSelection.nodeIds.length > 0 || multiSelection.memberIds.length > 0)) {
-    renderMultiSelectPanel();
-    return;
-  }
-  pendingBatchAction = 'load';
-  if (selectMode !== 'rect') toggleMode('rect');
-  pendingBatchAction = 'load';
-  setStatus('先框選要施加外力的節點/桿件, 框完會直接跳出設定表單(選到桿件的話用「直線選取」也可以)');
-});
 
 // 每次要送模型給後端算之前, 一律先清掉所有「指向不存在的節點/桿件」
 // 的殘留參照(桿件端點節點不見了、支承/集中力掛在不存在的節點上、

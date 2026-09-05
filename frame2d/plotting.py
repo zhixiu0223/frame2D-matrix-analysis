@@ -82,6 +82,8 @@ def plot_structure(frame, ax=None, show_node_ids=True, show_member_ids=True, sho
 
     ax.set_aspect('equal')
     ax.set_title('Geometry')
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
     ax.grid(True, alpha=0.3)
     return ax
 
@@ -173,9 +175,9 @@ def plot_loads(frame, ax=None):
                         arrowprops=dict(arrowstyle='->', color='red', lw=2))
             parts = []
             if abs(pl.fx) > 1e-9:
-                parts.append(f'Fx={pl.fx:.3g}')
+                parts.append(f'Fx={pl.fx:.3g} N')
             if abs(pl.fy) > 1e-9:
-                parts.append(f'Fy={pl.fy:.3g}')
+                parts.append(f'Fy={pl.fy:.3g} N')
             ax.annotate(', '.join(parts), (tail_x, tail_y), color='red', fontsize=8,
                         ha='center', xytext=(0, -10 if dy >= 0 else 10), textcoords='offset points')
             extra_pts_x += [tail_x]
@@ -183,7 +185,7 @@ def plot_loads(frame, ax=None):
         if abs(pl.m) > 1e-9:
             arc_r = scale * 0.06
             _draw_moment_arc(ax, n.x, n.y, pl.m, arc_r, 'purple')
-            ax.annotate(f'M={pl.m:.3g}', (n.x, n.y), color='purple', fontsize=8,
+            ax.annotate(f'M={pl.m:.3g} N*m', (n.x, n.y), color='purple', fontsize=8,
                         xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     for dl in frame.distributed_loads:
@@ -217,9 +219,9 @@ def plot_loads(frame, ax=None):
             extra_pts_x += [tail_x]
             extra_pts_y += [tail_y]
         if abs(dl.w_start - dl.w_end) < 1e-9:
-            w_label = f'w={dl.w_start:.3g}'
+            w_label = f'w={dl.w_start:.3g} N/m'
         else:
-            w_label = f'w={dl.w_start:.3g}~{dl.w_end:.3g}'
+            w_label = f'w={dl.w_start:.3g}~{dl.w_end:.3g} N/m'
         mx = ni.x + (x_start + x_end) / 2 * c
         my = ni.y + (x_start + x_end) / 2 * s
         ax.annotate(w_label, (mx, my), color='orange', fontsize=8,
@@ -237,7 +239,7 @@ def plot_loads(frame, ax=None):
             mag = pl.F
             ang = np.radians(pl.angle_deg)
             gdx, gdy = np.cos(ang) * mag, np.sin(ang) * mag
-            label = f'F={pl.F:.3g}@{pl.angle_deg:.0f}°'
+            label = f'F={pl.F:.3g} N @{pl.angle_deg:.0f}°'
         else:
             mag = np.hypot(pl.fx, pl.fy)
             # fx,fy是局部座標分量, 換算成全域方向畫箭頭
@@ -245,9 +247,9 @@ def plot_loads(frame, ax=None):
             gdy = pl.fx * s + pl.fy * c
             parts = []
             if abs(pl.fx) > 1e-9:
-                parts.append(f'fx={pl.fx:.3g}')
+                parts.append(f'fx={pl.fx:.3g} N')
             if abs(pl.fy) > 1e-9:
-                parts.append(f'fy={pl.fy:.3g}')
+                parts.append(f'fy={pl.fy:.3g} N')
             label = ', '.join(parts)
         if mag > 1e-9:
             Larrow = scale * 0.15
@@ -263,7 +265,7 @@ def plot_loads(frame, ax=None):
             arc_r = scale * 0.06
             ax.plot(px, py, 'D', color='darkmagenta', ms=5, zorder=2)
             _draw_moment_arc(ax, px, py, pl.m, arc_r, 'darkmagenta')
-            ax.annotate(f'm={pl.m:.3g}', (px, py), color='darkmagenta', fontsize=8,
+            ax.annotate(f'm={pl.m:.3g} N*m', (px, py), color='darkmagenta', fontsize=8,
                         xytext=(8 + arc_r * 60, -12), textcoords='offset points')
 
     # 直接手動計算範圍再 set_xlim/ylim, 比依賴 relim/autoscale 對 annotate 更可靠
@@ -276,6 +278,8 @@ def plot_loads(frame, ax=None):
         ax.set_ylim(min(ys) - pad_y, max(ys) + pad_y)
 
     ax.set_title('Loads')
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
     return ax
 
 
@@ -286,7 +290,7 @@ def plot_diagram(frame, result, kind, ax=None, scale=None):
     plot_structure(frame, ax=ax, show_node_ids=False, show_member_ids=False, show_dimensions=False)
 
     idx = {'N': 1, 'V': 2, 'M': 3}[kind]
-    label = {'N': 'Axial Force (N)', 'V': 'Shear Force (V)', 'M': 'Bending Moment (M)'}[kind]
+    label = {'N': 'Axial Force N (units: N)', 'V': 'Shear Force V (units: N)', 'M': 'Bending Moment M (units: N*m)'}[kind]
 
     n_samples = 41  # 加密取樣點, 讓極值偵測(轉折點)更準確
     # 先算全部member的最大值, 用來自動定比例尺
@@ -329,6 +333,8 @@ def plot_diagram(frame, result, kind, ax=None, scale=None):
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='crimson', lw=0.5, alpha=0.9))
 
     ax.set_title(label)
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
     return ax
 
 
@@ -374,7 +380,7 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
             mag = np.hypot(dx, dy)
             if mag < 1e-12:
                 continue   # 支承等位移=0的節點不標, 避免畫面雜亂
-            ax.annotate(f'Δ={mag:.4g}', (n.x, n.y), fontsize=7, color='darkblue',
+            ax.annotate(f'Δ={mag:.4g} m', (n.x, n.y), fontsize=7, color='darkblue',
                         xytext=(5, -10), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
@@ -393,11 +399,13 @@ def plot_deformed(frame, result, ax=None, scale=None, show_values=True):
             i_max = np.argmax(offset_real)
             if offset_real[i_max] < 1e-9 or not (0 < i_max < n_sample - 1):
                 continue   # 端點已經在上面節點迴圈標過, 這裡只標"桿件內部"的最大值避免重複
-            ax.annotate(f'Δmax={offset_real[i_max]:.4g}', (X1[i_max], Y1[i_max]), fontsize=7, color='darkblue',
+            ax.annotate(f'Δmax={offset_real[i_max]:.4g} m', (X1[i_max], Y1[i_max]), fontsize=7, color='darkblue',
                         xytext=(5, -12), textcoords='offset points',
                         bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='darkblue', lw=0.5, alpha=0.85))
 
     ax.set_title(f'Deformation (scale x{scale:.1f})')
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
     return ax
 
 
@@ -517,7 +525,7 @@ def plot_member_fbd(frame, result, member_id, ax=None):
     ax.annotate(f'N{m.node_i}', (ni.x, ni.y),
                 xytext=(-10, -14), textcoords='offset points', fontsize=8, ha='right')
     ax.annotate(f'N{m.node_j}', (nj.x, nj.y), xytext=(10, -14), textcoords='offset points', fontsize=8)
-    ax.set_title(f'Free Body Diagram: Member {member_id} ({m.member_type})', fontsize=11)
+    ax.set_title(f'Free Body Diagram: Member {member_id} ({m.member_type}), L = {L:.4g} m', fontsize=11)
 
     mr = result.member_results[member_id]
     Fx1, Fy1, M1, Fx2, Fy2, M2 = mr.end_forces_local
@@ -538,17 +546,17 @@ def plot_member_fbd(frame, result, member_id, ax=None):
             sign = 1 if fx > 0 else -1
             ax.annotate('', xy=(x, y), xytext=(x - sign * arrow_len, y),
                         arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
-            ax.annotate(f'Fx={fx:.4g}', (x - sign * arrow_len, y), fontsize=7.5, color=color,
+            ax.annotate(f'Fx={fx:.4g} N', (x - sign * arrow_len, y), fontsize=7.5, color=color,
                         xytext=(4, 6), textcoords='offset points')
         if abs(fy) > 1e-6:
             sign = 1 if fy > 0 else -1
             ax.annotate('', xy=(x, y), xytext=(x, y - sign * arrow_len),
                         arrowprops=dict(arrowstyle='-|>', color=color, lw=2, mutation_scale=14), zorder=4)
-            ax.annotate(f'Fy={fy:.4g}', (x, y - sign * arrow_len), fontsize=7.5, color=color,
+            ax.annotate(f'Fy={fy:.4g} N', (x, y - sign * arrow_len), fontsize=7.5, color=color,
                         xytext=(4, -10), textcoords='offset points')
         if abs(mm) > 1e-6:
             _draw_moment_arc(ax, x, y, mm, L * 0.12, color)
-            ax.annotate(f'M={mm:.4g}', (x, y), fontsize=8, color=color,
+            ax.annotate(f'M={mm:.4g} N*m', (x, y), fontsize=8, color=color,
                         xytext=(6, -16), textcoords='offset points')
 
     _draw_end_force(ni.x, ni.y, Fx1_g, Fy1_g, M1, 'crimson')
@@ -570,7 +578,7 @@ def plot_member_fbd(frame, result, member_id, ax=None):
             py = ni.y + t * s_ang
             ax.annotate('', xy=(px, py), xytext=(px, py + L * 0.08),
                         arrowprops=dict(arrowstyle='-|>', color='orange', lw=1, mutation_scale=8), zorder=1)
-        ax.annotate(f'w={dl.w_start:.4g}' + (f'~{dl.w_end:.4g}' if dl.w_end is not None else ''),
+        ax.annotate(f'w={dl.w_start:.4g}' + (f'~{dl.w_end:.4g}' if dl.w_end is not None else '') + ' N/m',
                     (ni.x + (x0 + x1) / 2 * c_ang, ni.y + (x0 + x1) / 2 * s_ang + L * 0.1),
                     fontsize=7, color='darkorange', ha='center')
 
@@ -580,7 +588,7 @@ def plot_member_fbd(frame, result, member_id, ax=None):
         px = ni.x + pl.a * c_ang
         py = ni.y + pl.a * s_ang
         ax.plot([px], [py], 's', color='purple', ms=5, zorder=3)
-        ax.annotate(f'a={pl.a:.3g}', (px, py), fontsize=7, color='purple', xytext=(4, 8), textcoords='offset points')
+        ax.annotate(f'a={pl.a:.3g} m', (px, py), fontsize=7, color='purple', xytext=(4, 8), textcoords='offset points')
 
     # 平衡驗證: Fx1+Fx2+跨間載重fx合力 應該=0(以此類推Fy, M對i端取矩)
     fx_load, fy_load, m_load = _member_inspan_load_resultant(frame, member_id)
@@ -588,7 +596,9 @@ def plot_member_fbd(frame, result, member_id, ax=None):
     sum_fy = Fy1 + Fy2 + fy_load
     sum_m = M1 + M2 + Fy2 * L + m_load
     ax.text(0.02, 0.02,
-            f'Equilibrium check (local coords):\nΣFx = {sum_fx:.3g}   ΣFy = {sum_fy:.3g}   ΣM(about node i) = {sum_m:.3g}\n'
+            f'L = {L:.4g} m (member length, node {m.node_i} to node {m.node_j})\n'
+            f'Equilibrium check (local coords, units: N, N*m):\n'
+            f'ΣFx = {sum_fx:.3g}   ΣFy = {sum_fy:.3g}   ΣM(about node i) = {sum_m:.3g}\n'
             f'(should be ~0, small residual is floating-point noise)',
             transform=ax.transAxes, fontsize=7.5, va='bottom',
             bbox=dict(boxstyle='round,pad=0.3', fc='#f0fdf4', ec='#16a34a', lw=0.8))
@@ -597,6 +607,8 @@ def plot_member_fbd(frame, result, member_id, ax=None):
     ax.set_xlim(min(ni.x, nj.x) - margin, max(ni.x, nj.x) + margin)
     ax.set_ylim(min(ni.y, nj.y) - margin, max(ni.y, nj.y) + margin)
     ax.set_aspect('equal')
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
     ax.grid(alpha=0.2)
     return ax
 
@@ -614,6 +626,7 @@ def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8)):
     # 看起來像一條直線。
     ni, nj = _member_endpoints(frame, member_id)
     L, angle = member_geometry(ni, nj)
+    fig.suptitle(f'Member {member_id}: Internal Forces & Deformation (L = {L:.4g} m)', fontsize=11)
     base_x = ni.x + np.linspace(0, L, 41) * np.cos(angle)
     base_y = ni.y + np.linspace(0, L, 41) * np.sin(angle)
     Xr, Yr = member_deformed_shape(frame, result, member_id, scale=1.0, n=41)
@@ -621,23 +634,27 @@ def plot_member_own_diagrams(frame, result, member_id, figsize=(10, 8)):
     scale = L * 0.15 / max_offset
     X, Y = member_deformed_shape(frame, result, member_id, scale=scale, n=101)
 
-    for ax, vals, label, color in [
-        (axes[0, 0], N, 'N (Axial Force)', '#2563eb'),
-        (axes[0, 1], V, 'V (Shear Force)', '#2563eb'),
-        (axes[1, 0], M, 'M (Bending Moment)', '#dc2626'),
+    for ax, vals, label, color, unit in [
+        (axes[0, 0], N, 'N (Axial Force)', '#2563eb', 'N'),
+        (axes[0, 1], V, 'V (Shear Force)', '#2563eb', 'N'),
+        (axes[1, 0], M, 'M (Bending Moment)', '#dc2626', 'N*m'),
     ]:
         ax.plot(x, vals, color=color, lw=1.5)
         ax.fill_between(x, vals, 0, color=color, alpha=0.15)
         ax.axhline(0, color='black', lw=0.5)
         i_max = int(np.argmax(np.abs(vals)))
-        ax.annotate(f'{vals[i_max]:.4g}', (x[i_max], vals[i_max]), fontsize=8, color=color)
+        ax.annotate(f'{vals[i_max]:.4g} {unit}', (x[i_max], vals[i_max]), fontsize=8, color=color)
         ax.set_title(f'Member {member_id}: {label}', fontsize=10)
+        ax.set_xlabel('x along member (m)')
+        ax.set_ylabel(f'{label.split()[0]} ({unit})')
         ax.grid(alpha=0.2)
 
     ax4 = axes[1, 1]
     ax4.plot(base_x, base_y, '--', color='gray', lw=1, alpha=0.6)
     ax4.plot(X, Y, color='#16a34a', lw=1.5)
     ax4.set_title(f'Member {member_id}: Deformed Shape (scale x{scale:.2g})', fontsize=10)
+    ax4.set_xlabel('x (m)')
+    ax4.set_ylabel('y (m)')
     ax4.set_aspect('equal')
     ax4.grid(alpha=0.2)
 
