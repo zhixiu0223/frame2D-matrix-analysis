@@ -67,6 +67,8 @@
   .dropdownSection summary::-webkit-details-marker { display: none; }
   .dropdownSection summary::before { content: '▸ '; color: #6b7280; }
   .dropdownSection[open] summary::before { content: '▾ '; }
+  .dropdownSection[open] summary { background: #dbeafe; }
+  .dropdownSection[open] { border-color: #93c5fd; }
   .dropdownBody { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; padding: 0 0.6rem 0.5rem; }
 
   #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; }
@@ -104,7 +106,8 @@
   .propSection summary::-webkit-details-marker { display: none; }
   .propSection summary::before { content: '▸'; font-size: 0.75rem; color: #6b7280; transition: transform 0.15s; }
   .propSection[open] summary::before { transform: rotate(90deg); }
-  .propSection[open] summary { border-bottom: 1px solid #eee; }
+  .propSection[open] summary { border-bottom: 1px solid #eee; background: #dbeafe; }
+  .propSection[open] { border-color: #93c5fd; }
   .propSection .propSectionBody { padding: 0.7rem; }
   .sectionCount { font-weight: 400; color: #6b7280; font-size: 0.8rem; }
   legend { font-size: 0.85rem; font-weight: bold; padding: 0 0.3rem; }
@@ -2046,7 +2049,7 @@ function renderPropPanel() {
     panel.innerHTML = `
       <h3 style="margin:0 0 0.5rem;font-size:1rem;">桿件 M${m.id}(N${m.node_i}→N${m.node_j})</h3>
 
-      <details class="propSection" open>
+      <details class="propSection">
         <summary>基本設定</summary>
         <div class="propSectionBody">
           <label>元素類型</label>
@@ -2091,6 +2094,7 @@ function renderPropPanel() {
             </div>
           </details>
         </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
 
       <details class="propSection">
@@ -2106,6 +2110,7 @@ function renderPropPanel() {
           <input id="p_pin_value" type="number" step="any" value="0.5">
           <button id="p_pin_add" style="width:100%;margin-top:0.5rem;background:#7c3aed;color:white;">✂ 在此加內部鉸接(分割桿件)</button>
         </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
 
       <details class="propSection">
@@ -2132,6 +2137,7 @@ function renderPropPanel() {
             <button id="p_split_equal" style="background:#0891b2;color:white;">➕ 等分插入</button>
           </div>
         </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
 
       <details class="propSection">
@@ -2155,6 +2161,7 @@ function renderPropPanel() {
           </select>
           <button id="dl_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增均佈載重</button>
         </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
 
       <details class="propSection">
@@ -2176,6 +2183,7 @@ function renderPropPanel() {
           </div>
           <button id="mp_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增集中力/彎矩</button>
         </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
 
       <p class="hint" style="margin-top:0.2rem;">均佈載重跟集中力/彎矩已經各自用「新增」按鈕即時生效, 「套用『基本設定』的修改」按鈕在最上面那個收合區塊裡。</p>
@@ -2782,6 +2790,28 @@ document.getElementById('statusCopyBtn').addEventListener('click', async () => {
     ta.select();
     setStatus('自動複製失敗(常見於非HTTPS環境), 已跳出一個文字框選好內容, 長按選取範圍應該就能看到複製選項(點畫面其他地方會關閉這個文字框)');
     ta.addEventListener('blur', () => ta.remove(), {once: true});
+  }
+});
+// 收合區塊(propSection/dropdownSection)展開時, 版面會被撐開造成
+// reflow, 使用者原本盯著看的東西會跳位置, 每次都要重新找。這裡用
+// 事件委派(在document上用capture階段監聽, 不管這些<details>是不是
+// 動態產生/重新render過都能抓到, 不用每次renderPropPanel()之類的
+// 函式重畫HTML後都要重新掛listener)監聽toggle事件, 剛展開的區塊
+// 延遲一點點(等reflow跑完)自動捲動到畫面上方一個固定位置——搭配
+// 上面CSS加的淺藍色底色提示, 這樣就算版面跳動了, 使用者的視線
+// 焦點也會跟著自動移到正確位置, 不用自己重新掃一次畫面找。
+document.addEventListener('toggle', (e) => {
+  if (e.target.matches && e.target.matches('.propSection, .dropdownSection') && e.target.open) {
+    setTimeout(() => e.target.scrollIntoView({behavior: 'smooth', block: 'start'}), 60);
+  }
+}, true);
+
+document.getElementById('debugToggle').addEventListener('change', (e) => {
+  // 之前這裡沒有監聽器: 除錯面板一旦被debugLog()打開過(display:block),
+  // 關掉這個開關只會讓debugLog()不再累加新訊息, 面板本身沒有任何
+  // 地方會把它藏回去, 造成「明明關掉了, 面板卻一直留著」的問題。
+  if (!e.target.checked) {
+    document.getElementById('debugPanel').style.display = 'none';
   }
 });
 document.getElementById('debugCopyBtn').addEventListener('click', async () => {
