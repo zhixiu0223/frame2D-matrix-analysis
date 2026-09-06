@@ -413,20 +413,35 @@ def solve_pdelta(frame: Frame2D, max_iterations: int = 20, tol: float = 1e-6) ->
 
 
 def initial_hinge_states(frame: Frame2D) -> dict:
-    """掃描frame裡所有Mp_i不是None的frame元素, 幫每一根建一個全新的
-    HingeState(未降伏、塑性轉角0)。Mp_i是None的member(絕大多數,
+    """掃描frame裡Mp_i「或」Mp_j不是None的frame元素, 幫每一根建一個全新的
+    HingeState(未降伏、塑性轉角0)。兩個都是None的member(絕大多數,
     沒設定塑鉸容量的一般彈性桿件)不會出現在回傳的字典裡。
+
+    留空(None)的那一端, 轉換成Mp=float('inf')——這一端的彎矩不管多大
+    都不會達到"無限大", 等於"這一端永遠不會降伏", 這才是網頁前端UI
+    上寫的"留空代表這個端點永遠保持彈性"的真正實作(2026-09修正: 原本
+    只檢查Mp_i、且把None原封不動傳給HingeState, 兩個都是bug——只填
+    Mp_j留空Mp_i時整根桿件會被完全忽略, 而只要有一端後來需要判斷降伏
+    時abs(M)>=None會直接丟TypeError讓側推整個崩潰。已用
+    tests/test_hinge_wiring.py補上這兩種情況的回歸測試)。
 
     這只是「建立初始狀態」的便利函式, 純函式、不修改frame也不做任何
     求解——遞增側推時該怎麼逐步更新這個字典(降伏判斷、事件到事件)
-    是下一階段的工作, 這裡先提供這個起點。"""
+    是pushover.py的責任, 這裡只提供起點。"""
     hinge_states = {}
     for mid, m in frame.members.items():
-        if m.Mp_i is None:
+        if m.Mp_i is None and m.Mp_j is None:
             continue
+        Mp1 = m.Mp_i if m.Mp_i is not None else float('inf')
+        Mp2 = m.Mp_j if m.Mp_j is not None else float('inf')
+        # 留空那一端的R_post_yield用什麼值都不影響任何結果(Mp=inf保證
+        # 那一端yielded永遠是False, current_R()永遠不會去讀
+        # R_post_yield那個分支), 用0.0只是給一個確定的浮點數,
+        # 不要把None一路傳下去。
+        R1 = m.R_post_yield_i if m.R_post_yield_i is not None else 0.0
+        R2 = m.R_post_yield_j if m.R_post_yield_j is not None else 0.0
         hinge_states[mid] = HingeState(
-            Mp1=m.Mp_i, Mp2=m.Mp_j,
-            R_post_yield_1=m.R_post_yield_i, R_post_yield_2=m.R_post_yield_j,
+            Mp1=Mp1, Mp2=Mp2, R_post_yield_1=R1, R_post_yield_2=R2,
         )
     return hinge_states
 

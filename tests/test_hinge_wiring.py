@@ -7,8 +7,8 @@
 案例B: 設定了塑鉸容量但目前(全部未降伏)的模型, solve_with_hinges()
        應該非常接近純彈性solve_dofmanager()的結果(差異只來自
        RIGID_FACTOR是很大但不是無限大的數值近似)。
-案例C: initial_hinge_states()只掃出Mp_i不是None的member, 其他member
-       不會出現在回傳字典裡。
+案例C: initial_hinge_states()只掃兩端Mp都是None的member會被跳過, 只要
+       任一端設定了就會出現在回傳字典裡。
 案例D: 手動把某一端設成已降伏狀態, solve_with_hinges()算出來的側向
        位移/轉角, 跟獨立用hinge_bending_stiffness()(已在
        test_hinge_condensation.py驗證過的公式)組出縮減後2自由度系統
@@ -20,6 +20,7 @@ import numpy as np
 from frame2d import Frame2D
 from frame2d.dofmanager import solve_dofmanager, solve_with_hinges, initial_hinge_states
 from frame2d.hinge import HingeState, hinge_bending_stiffness
+from frame2d.pushover import run_pushover
 
 E, I, A, L = 200e6, 8e-5, 1e-2, 4.0
 
@@ -107,5 +108,37 @@ v2_elastic_full = solve_dofmanager(cantilever(with_hinge_capacity=False)).displa
     f_yielded.dofs_of(1)[1]]
 assert abs(v2_fem) > abs(v2_elastic_full), "降伏後側向勁度變小, 位移應該比純彈性時更大"
 print(f"PASS: 降伏後位移跟dofmanager()組裝結果吻合, 且比純彈性(v2={v2_elastic_full:.6e})更大\n")
+
+
+# ---- 案例E: 只填一端Mp、另一端留空None, 應該正確處理成"那端永遠彈性"
+#      (2026-09修正: 這裡原本有兩個bug, 見initial_hinge_states()的
+#      docstring說明; 這裡補上這兩個具體情境的回歸測試, 避免以後改壞) ----
+print("=== 案例E: 只填一端Mp, 另一端留空應正確視為\"永遠彈性\" ===")
+
+f_only_j = Frame2D()
+f_only_j.add_node(0, 0, 0); f_only_j.add_node(1, 0, L)
+f_only_j.add_section('sec', E=E, I=I, A=A)
+f_only_j.add_member(0, node_i=0, node_j=1, section='sec',
+                     Mp_j=200.0, R_post_yield_j=1e4)   # i端(Mp_i)故意留空
+f_only_j.fix(0)
+states_only_j = initial_hinge_states(f_only_j)
+assert 0 in states_only_j, "只填j端Mp時, 這根桿件應該還是要出現在hinge_states裡(之前的bug會整根被忽略)"
+assert states_only_j[0].Mp[0] == float('inf'), "留空的i端應該轉換成Mp=inf(永遠不會降伏)"
+assert states_only_j[0].Mp[1] == 200.0
+print("PASS: 只填j端Mp, 桿件正確出現在hinge_states裡, 留空的i端Mp=inf")
+
+f_only_i = Frame2D()
+f_only_i.add_node(0, 0, 0); f_only_i.add_node(1, 0, L)
+f_only_i.add_section('sec', E=E, I=I, A=A)
+f_only_i.add_member(0, node_i=0, node_j=1, section='sec',
+                     Mp_i=100.0, R_post_yield_i=1e4)   # j端(Mp_j)故意留空
+f_only_i.fix(0)
+states_only_i = initial_hinge_states(f_only_i)
+u_e, F_e, ev_e, hs_e, mech_e = run_pushover(
+    f_only_i, states_only_i, prescribed_dofs=[f_only_i.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.05, d_nominal=0.001, base_reaction_dofs=[f_only_i.dofs_of(0)[0]],
+)
+assert hs_e[0].yielded == [True, False], "i端應該正常降伏, j端(留空=Mp=inf)永遠不該降伏"
+print("PASS: 只填i端Mp, run_pushover()不再crash, i端正常降伏、j端(留空)永遠不降伏\n")
 
 print("PASS: 塑鉸容量wiring所有案例通過")
