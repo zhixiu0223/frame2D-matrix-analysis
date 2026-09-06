@@ -20,7 +20,39 @@ def member_geometry(node_i, node_j):
     return L, angle
 
 
-def member_stiffness_local(E, I, A, L, release_i=False, release_j=False):
+def local_geometric_stiffness(P, L):
+    """一致幾何剛度矩陣 (consistent geometric stiffness),用於 P-Delta 效應。
+    只作用在彎曲自由度 (v1, theta1, v2, theta2),軸向自由度不受影響。
+
+    符號慣例: P 為拉力為正 (tension-positive) —— 拉力會增加側向勁度、
+    壓力(P<0)會降低側向勁度,符合物理直覺(拉直的繩子比鬆弛的更不容易橫向晃動)。
+    這個符號慣例跟公式本身,是從 [[portal-frame-pushover-scratch]] 移植過來的,
+    該專案已經對真正的 OpenSeesPy 模型逐點驗證過 P-Delta 效應(單層框架
+    全曲線誤差0.55%、雙層框架0.02%)。移植時發現該repo原始docstring
+    寫「壓為正」是文件筆誤(跟它自己後續assemble_with_hinges()裡對P做
+    符號處理的實際行為矛盾),這裡照實際驗證過的行為(拉力為正)記錄,
+    不照抄錯誤的docstring說明。
+
+    P=0時回傳全零矩陣,疊加到既有彈性勁度矩陣上完全不影響現有結果
+    (這是這個函式可以在不碰動任何既有純彈性測試的前提下新增的原因)。
+    """
+    kg = np.zeros((6, 6))
+    if P == 0.0:
+        return kg
+    kgb = (P / L) * np.array([
+        [6 / 5,      L / 10,      -6 / 5,       L / 10],
+        [L / 10,     2 * L**2 / 15, -L / 10,     -L**2 / 30],
+        [-6 / 5,    -L / 10,       6 / 5,      -L / 10],
+        [L / 10,    -L**2 / 30,   -L / 10,      2 * L**2 / 15],
+    ])
+    idx = [1, 2, 4, 5]
+    for i, ii in enumerate(idx):
+        for j, jj in enumerate(idx):
+            kg[ii, jj] = kgb[i, j]
+    return kg
+
+
+def member_stiffness_local(E, I, A, L, release_i=False, release_j=False, P=0.0):
     """局部座標系下的 6x6 勁度矩陣 (軸向 + 彎曲耦合已分離,標準組合式)。
 
     release_i/release_j: 該端是否有內部鉸接(彎矩釋放, M=0)。用靜力凝縮
@@ -31,6 +63,11 @@ def member_stiffness_local(E, I, A, L, release_i=False, release_j=False):
     只支援單端釋放或不釋放; 兩端同時釋放(等同truss, 但這裡沒有處理桿件
     內部有載重時的固定端反力修正公式)不支援, 兩端都釋放時只用軸向+已經
     是0的彎曲勁度, 不保證載重情況正確, 請改用add_truss()。
+
+    P: 桿件目前軸力(拉力為正),非零時疊加一致幾何剛度矩陣(見
+    local_geometric_stiffness),用於P-Delta效應。目前只支援兩端都不釋放
+    的情況(release_i=release_j=False)——帶內部鉸的幾何剛度凝縮公式
+    尚未推導,兩者同時使用會直接raise,不會靜靜算出未驗證過的錯誤結果。
     """
     EA_L = E * A / L
     EI = E * I
@@ -78,6 +115,14 @@ def member_stiffness_local(E, I, A, L, release_i=False, release_j=False):
         for b, ib in enumerate(bend_idx):
             k[ia, ib] = kb[a, b]
 
+    if P != 0.0:
+        if release_i or release_j:
+            raise NotImplementedError(
+                "幾何剛度矩陣(P-Delta)目前只支援兩端都不釋放的frame元素;"
+                "帶內部鉸的Kg凝縮公式尚未推導與驗證。"
+            )
+        k = k + local_geometric_stiffness(P, L)
+
     return k
 
 
@@ -96,14 +141,19 @@ def member_stiffness_local_truss(E, A, L):
     return k
 
 
-def member_local_stiffness_dispatch(member_type, E, I, A, L, release_i=False, release_j=False):
+def member_local_stiffness_dispatch(member_type, E, I, A, L, release_i=False, release_j=False, P=0.0):
     """依member_type選擇對應的局部勁度矩陣公式。
     'truss'跟'cable'共用同一條軸力公式(兩端鉸接、只傳軸力), 差別在
     solve.py會不會把受壓的cable桿件當成鬆弛移除, truss則不管拉壓都保留。
-    'frame'則依release_i/release_j決定要不要做端點鉸接的靜力凝縮。"""
+    'frame'則依release_i/release_j決定要不要做端點鉸接的靜力凝縮。
+
+    P(幾何剛度用的軸力)目前只對'frame'生效; truss/cable的彎曲自由度
+    本來就是零矩陣,P-Delta效應對純桁架元素的處理方式(是否需要、公式
+    是否相同)還沒有驗證過,這裡刻意先不套用,避免默默算出未驗證的結果。
+    """
     if member_type in ('truss', 'cable'):
         return member_stiffness_local_truss(E, A, L)
-    return member_stiffness_local(E, I, A, L, release_i, release_j)
+    return member_stiffness_local(E, I, A, L, release_i, release_j, P)
 
 
 def transformation_matrix(angle):
@@ -120,10 +170,15 @@ def transformation_matrix(angle):
     return T
 
 
-def member_stiffness_global(section, node_i, node_j, member_type='frame', release_i=False, release_j=False):
-    """組出全域座標系下的 6x6 勁度矩陣,回傳 (k_global, L, angle, T)"""
+def member_stiffness_global(section, node_i, node_j, member_type='frame', release_i=False, release_j=False, P=0.0):
+    """組出全域座標系下的 6x6 勁度矩陣,回傳 (k_global, L, angle, T)
+
+    P: 桿件目前軸力(拉力為正),預設0.0時完全等同於原本純彈性結果
+    (這個參數是新增的,不影響任何舊呼叫方式)。非零時見
+    member_stiffness_local()裡對P-Delta/幾何剛度的說明與限制。
+    """
     L, angle = member_geometry(node_i, node_j)
-    k_local = member_local_stiffness_dispatch(member_type, section.E, section.I, section.A, L, release_i, release_j)
+    k_local = member_local_stiffness_dispatch(member_type, section.E, section.I, section.A, L, release_i, release_j, P)
     T = transformation_matrix(angle)
     k_global = T.T @ k_local @ T
     return k_global, L, angle, T

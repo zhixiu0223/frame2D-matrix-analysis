@@ -13,7 +13,13 @@
 - 纜線元素 (cable):跟truss共用軸向公式,但只受拉,受壓時自動判定鬆弛、
   移除勁度貢獻、重新求解,反覆迭代至收斂(見下方「纜線元素」章節)
 - 支承除了fixed/pin/roller,也支援強制位移(沉陷/施工誤差分析)
-- **尚未支援**: 幾何非線性(P-Delta)、
+- 幾何剛度矩陣(P-Delta用):`elements.local_geometric_stiffness(P, L)`,
+  已用sympy從Hermite形狀函數獨立積分驗證公式本身(見
+  tests/test_geometric_stiffness.py),可疊加到frame元素的局部勁度矩陣上
+  (`member_stiffness_local(..., P=軸力)`)——**但目前只是元素層級的公式,
+  求解器(solve.py)還沒有依變形狀態疊代更新軸力的P-Delta迴圈**,只支援
+  兩端都不釋放的frame元素(帶release的Kg凝縮公式尚未推導)
+- **尚未支援**: 完整的P-Delta求解迴圈(load-stepping+疊代更新軸力)、
   材料非線性——這些等基本框架穩定後再視需求加入,不要為了還沒出現的需求
   先付架構成本(詳細優先順序見ROADMAP.md)
 
