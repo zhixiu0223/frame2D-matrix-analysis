@@ -2154,6 +2154,24 @@ function _renderPropPanelInner() {
       </details>
 
       <details class="propSection">
+        <summary>塑性鉸容量(Pushover用)</summary>
+        <div class="propSectionBody">
+          <p class="hint">只有元素類型是frame時有意義, 只有做Pushover(遞增側推)分析時才會用到——線性/P-Delta分析完全忽略這裡的設定。留空(不填)代表這個端點永遠保持彈性、不會降伏。</p>
+          <label>i端(N${m.node_i}) 降伏彎矩 Mp (${unitOf('moment')})</label>
+          <input id="p_mp_i" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.Mp_i != null ? fromSI('moment', m.Mp_i) : ''}">
+          <label>i端 降伏後轉角勁度 R (${unitOf('moment')}/rad)</label>
+          <input id="p_rpy_i" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.R_post_yield_i != null ? fromSI('moment', m.R_post_yield_i) : ''}">
+          <label>j端(N${m.node_j}) 降伏彎矩 Mp (${unitOf('moment')})</label>
+          <input id="p_mp_j" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.Mp_j != null ? fromSI('moment', m.Mp_j) : ''}">
+          <label>j端 降伏後轉角勁度 R (${unitOf('moment')}/rad)</label>
+          <input id="p_rpy_j" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.R_post_yield_j != null ? fromSI('moment', m.R_post_yield_j) : ''}">
+          <p class="hint">降伏後轉角勁度R越小, 降伏後越軟(接近完全塑性); 建議先抓彈性勁度(4EI/L)的1%~5%量級試算, 太小(接近0)容易讓側推提早判定成機構。</p>
+          <button id="p_hinge_apply" style="width:100%;margin-top:0.6rem;background:#16a34a;color:white;">套用塑性鉸容量</button>
+        </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
+      </details>
+
+      <details class="propSection">
         <summary>內部鉸接(桿件中間)</summary>
         <div class="propSectionBody">
           <p class="hint">力學上跟你自己拆桿件+兩端 release 完全等價(彎矩在該點不連續,剪力/軸力照樣傳遞),這裡是自動幫你拆——按下去會把 M${m.id} 從輸入的位置切成兩根桿件,並在切點互相釋放彎矩,等同 SW FEA 的 Add Internal Pin/Hinge。<br><b>注意</b>:如果切開後某一段沒有其他支承或桿件幫忙抗轉(例如懸臂的自由端),那一段會變成可以繞鉸接自由轉動的機構,Solve 會回報「勁度矩陣奇異」——這是真實的力學不穩定,不是這個功能的 bug,跟兩端都還接著柱子的梁不會有這個問題。</p>
@@ -2260,6 +2278,21 @@ function _renderPropPanelInner() {
       sec.E = toSI('E', parseFloat(document.getElementById('p_E').value));
       sec.I = toSI('I', parseFloat(document.getElementById('p_I').value));
       sec.A = toSI('A', parseFloat(document.getElementById('p_A').value));
+      render();
+    };
+    document.getElementById('p_hinge_apply').onclick = () => {
+      // 留空的欄位存成null(=不設塑鉸, 這個端點永遠彈性), 不是0
+      // (Mp=0在力學上代表"完全沒有彎矩容量, 一放上去就立刻降伏",
+      // 跟"沒有塑鉸"是完全不同的意思, 不能把空字串當0處理)。
+      const parseOrNull = (id) => {
+        const v = document.getElementById(id).value;
+        return v === '' ? null : toSI('moment', parseFloat(v));
+      };
+      m.Mp_i = parseOrNull('p_mp_i');
+      m.R_post_yield_i = parseOrNull('p_rpy_i');
+      m.Mp_j = parseOrNull('p_mp_j');
+      m.R_post_yield_j = parseOrNull('p_rpy_j');
+      setStatus('M' + m.id + ' 已套用塑性鉸容量設定');
       render();
     };
     document.getElementById('p_sec_switch').onclick = () => {
