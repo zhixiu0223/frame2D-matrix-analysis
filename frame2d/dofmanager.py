@@ -69,10 +69,23 @@ def build_dof_map(frame: Frame2D):
     return member_dofs, n_node_dof, n_extra_dof
 
 
-def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
+def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict = None) -> SolveResult:
     """跑一次線性求解, slack_cables裡的cable member直接跳過(不貢獻勁度,
     end_forces_local設為0向量), 跟solve.py的_solve_once()是完全獨立寫的
-    第二套求解路徑。"""
+    第二套求解路徑。
+
+    member_axial: 可選, {member_id: P(拉力為正)} -- 非None時, 對應frame
+    元素的局部勁度矩陣會疊加P-Delta用的幾何剛度矩陣(見elements.py的
+    local_geometric_stiffness)。預設None時完全等同於原本行為, 不影響任何
+    既有呼叫。這裡刻意不管該member是否release(不像member_stiffness_local
+    自己呼叫時那樣檢查release_i/release_j並在有P時raise)——因為DOFManager
+    版本本來就一律用「標準」(未釋放)局部矩陣呼叫member_stiffness_local,
+    release的物理效果完全靠額外不共用的DOF體現(見本檔案開頭說明), 不是
+    靠修改矩陣本身, 所以Kg可以用同一招自然延伸到release端, 不需要另外
+    推導release專屬的Kg凝縮公式。這個做法跟portal-frame-pushover
+    已用OpenSeesPy驗證過的hinge.py採用同一種簡化(P-Delta的Kg直接疊加,
+    不管端點的降伏/釋放狀態), 不是重新發明。
+    """
     member_dofs, n_node_dof, n_extra_dof = build_dof_map(frame)
     n = n_node_dof + n_extra_dof
     K = np.zeros((n, n))
@@ -99,7 +112,8 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
         if m.member_type in ('truss', 'cable'):
             k_local = member_stiffness_local_truss(section.E, section.A, L)
         else:
-            k_local = member_stiffness_local(section.E, section.I, section.A, L)  # 標準版, release=False,False
+            P = 0.0 if member_axial is None else member_axial.get(mid, 0.0)
+            k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)  # 標準版, release=False,False
 
         k_global = T.T @ k_local @ T
         idx = np.array(member_dofs[mid])
@@ -256,7 +270,8 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set) -> SolveResult:
         if m.member_type in ('truss', 'cable'):
             k_local = member_stiffness_local_truss(section.E, section.A, L)
         else:
-            k_local = member_stiffness_local(section.E, section.I, section.A, L)
+            P = 0.0 if member_axial is None else member_axial.get(mid, 0.0)
+            k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)
         f_FE = fixed_end_local.get(mid, np.zeros(6))
         end_forces_local = k_local @ u_local - f_FE
         member_results[mid] = MemberResult(
@@ -304,3 +319,76 @@ def solve_dofmanager(frame: Frame2D, max_iterations: int = 20) -> SolveResult:
     raise RuntimeError(
         f"cable鬆弛迭代超過 {max_iterations} 次仍未收斂 -- 可能是模型設計本身有問題"
         " (例如載重下所有cable都會鬆弛、結構變成機構), 請檢查模型。")
+
+
+def solve_pdelta(frame: Frame2D, max_iterations: int = 20, tol: float = 1e-6) -> SolveResult:
+    """在solve_dofmanager()基礎上疊代更新frame元素軸力, 做線性化P-Delta分析。
+
+    做法(線性化P-Delta, 業界標準做法, 不是真正的corotational大變形):
+      1. 先假設所有frame元素軸力=0(純彈性)求解一次
+      2. 用剛解出的每根frame元素軸力(拉力為正)重新組裝含幾何剛度的勁度
+         矩陣, 再解一次
+      3. 比較前後兩次的軸力, 全部元素的相對變化量都小於tol就視為收斂;
+         若模型有cable, 鬆弛偵測(跟solve_dofmanager同一套邏輯)包在同一層
+         疊代裡一起做
+      4. 未收斂就重複step2, 直到收斂或超過max_iterations
+
+    跟solve_dofmanager()的關係: 如果模型裡所有frame元素解出來的軸力都是0
+    (沒有任何造成軸力的載重路徑), 第一次疊代後max_rel_change=0直接收斂,
+    回傳結果會跟solve_dofmanager()逐位元一致——這是新增這個函式不影響任何
+    既有呼叫的原因, 兩者是平行的兩個公開函式, 不是誰取代誰。
+
+    已知限制(誠實記錄, 不誇大):
+      - 這是「凍結每步軸力、重新解一次線性系統」的疊代格式, 不是真正對
+        總位能取極值的Newton-Raphson, 收斂性沒有一般性數學證明——但對
+        遠低於挫屈載重的一般結構, 業界經驗上收斂很快(通常2-5次)
+      - 沒有做真正的大變形(corotational)幾何更新, 桿件角度/長度全程視為
+        初始未變形狀態, 跟portal-frame-pushover的P-Delta處理
+        方式一致(幾何角度凍結), 不含塑性鉸/事件到事件, 不是要取代它
+      - release端的Kg疊加方式沿用_solve_once_dofmanager()docstring說明的
+        簡化(不管端點release狀態一律疊加同一個Kg), 跟已用OpenSeesPy驗證
+        過的hinge.py採同一種簡化, 沒有另外推導release專屬的Kg凝聚公式
+    """
+    has_cable = any(m.member_type == 'cable' for m in frame.members.values())
+    frame_member_ids = [mid for mid, m in frame.members.items() if m.member_type == 'frame']
+
+    slack_cables = set()
+    member_axial = {mid: 0.0 for mid in frame_member_ids}
+
+    for iteration in range(max_iterations):
+        try:
+            result = _solve_once_dofmanager(frame, slack_cables, member_axial)
+        except (ValueError, RuntimeError) as e:
+            if slack_cables or any(v != 0.0 for v in member_axial.values()):
+                raise RuntimeError(
+                    f"P-Delta疊代第{iteration + 1}次求解失敗(可能軸力已經接近"
+                    f"挫屈載重, 或cable鬆弛後結構變成機構)。原始錯誤: {e}")
+            raise
+
+        newly_slack = set()
+        if has_cable:
+            for mid, m in frame.members.items():
+                if m.member_type != 'cable' or mid in slack_cables:
+                    continue
+                N = -result.member_results[mid].end_forces_local[0]   # 拉力為正
+                if N < -1e-9:
+                    newly_slack.add(mid)
+
+        new_axial = {}
+        max_rel_change = 0.0
+        for mid in frame_member_ids:
+            N_new = result.member_results[mid].end_forces_local[3]   # 拉力為正(端j的Fx)
+            N_old = member_axial[mid]
+            new_axial[mid] = N_new
+            denom = max(abs(N_old), abs(N_new), 1.0)
+            max_rel_change = max(max_rel_change, abs(N_new - N_old) / denom)
+
+        if not newly_slack and max_rel_change < tol:
+            return result
+
+        slack_cables |= newly_slack
+        member_axial = new_axial
+
+    raise RuntimeError(
+        f"P-Delta疊代超過{max_iterations}次仍未收斂(軸力持續變化或cable持續"
+        "鬆弛) -- 可能是軸力已經接近挫屈載重、或模型設計有問題, 請檢查。")

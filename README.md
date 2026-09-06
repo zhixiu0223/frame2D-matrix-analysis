@@ -13,15 +13,17 @@
 - 纜線元素 (cable):跟truss共用軸向公式,但只受拉,受壓時自動判定鬆弛、
   移除勁度貢獻、重新求解,反覆迭代至收斂(見下方「纜線元素」章節)
 - 支承除了fixed/pin/roller,也支援強制位移(沉陷/施工誤差分析)
-- 幾何剛度矩陣(P-Delta用):`elements.local_geometric_stiffness(P, L)`,
-  已用sympy從Hermite形狀函數獨立積分驗證公式本身(見
-  tests/test_geometric_stiffness.py),可疊加到frame元素的局部勁度矩陣上
-  (`member_stiffness_local(..., P=軸力)`)——**但目前只是元素層級的公式,
-  求解器(solve.py)還沒有依變形狀態疊代更新軸力的P-Delta迴圈**,只支援
-  兩端都不釋放的frame元素(帶release的Kg凝縮公式尚未推導)
-- **尚未支援**: 完整的P-Delta求解迴圈(load-stepping+疊代更新軸力)、
-  材料非線性——這些等基本框架穩定後再視需求加入,不要為了還沒出現的需求
-  先付架構成本(詳細優先順序見ROADMAP.md)
+- 線性化P-Delta求解:`dofmanager.solve_pdelta(frame)`,對frame元素疊代
+  更新軸力(拉力為正)、重新組裝含幾何剛度的勁度矩陣,直到軸力收斂
+  (預設容許誤差1e-6);沒有軸力路徑的模型跟`solve_dofmanager()`逐位元
+  一致(見tests/test_pdelta.py)。**這是線性化(frozen-geometry)P-Delta,
+  不是真正的corotational大變形**,軸力必須遠低於挫屈臨界載重才有效
+  (超過會嚴重外推、矩陣接近奇異);release端的幾何剛度疊加方式沿用
+  portal-frame-pushover已用OpenSeesPy驗證過的簡化做法
+  (不管端點release狀態一律疊加),沒有另外推導release專屬的Kg凝聚公式
+- **尚未支援**: 真正的大變形(corotational)幾何非線性、塑性鉸/材料非線性、
+  挫屈臨界載重偵測——這些等基本框架穩定後再視需求加入,不要為了還沒
+  出現的需求先付架構成本(詳細優先順序見ROADMAP.md)
 
 ## 結構
 

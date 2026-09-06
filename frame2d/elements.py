@@ -26,7 +26,7 @@ def local_geometric_stiffness(P, L):
 
     符號慣例: P 為拉力為正 (tension-positive) —— 拉力會增加側向勁度、
     壓力(P<0)會降低側向勁度,符合物理直覺(拉直的繩子比鬆弛的更不容易橫向晃動)。
-    這個符號慣例跟公式本身,是從 [[portal-frame-pushover-scratch]] 移植過來的,
+    這個符號慣例跟公式本身,是從 portal-frame-pushover 移植過來的,
     該專案已經對真正的 OpenSeesPy 模型逐點驗證過 P-Delta 效應(單層框架
     全曲線誤差0.55%、雙層框架0.02%)。移植時發現該repo原始docstring
     寫「壓為正」是文件筆誤(跟它自己後續assemble_with_hinges()裡對P做
