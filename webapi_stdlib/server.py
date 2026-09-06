@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from frame2d import Frame2D, solve
-from frame2d.dofmanager import solve_pdelta
+from frame2d.dofmanager import solve_pdelta, initial_hinge_states
+from frame2d.pushover import run_pushover, apply_gravity
 from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -42,7 +43,9 @@ def _build_frame(payload: dict) -> Frame2D:
     for m in payload.get("members", []):
         f.add_member(m["id"], node_i=m["node_i"], node_j=m["node_j"], section=m["section"],
                      member_type=m.get("member_type", "frame"),
-                     release_i=m.get("release_i", False), release_j=m.get("release_j", False))
+                     release_i=m.get("release_i", False), release_j=m.get("release_j", False),
+                     Mp_i=m.get("Mp_i"), Mp_j=m.get("Mp_j"),
+                     R_post_yield_i=m.get("R_post_yield_i"), R_post_yield_j=m.get("R_post_yield_j"))
     for sp in payload.get("supports", []):
         f.support(sp["node"], ux=sp.get("ux"), uy=sp.get("uy"), rot=sp.get("rot"))
     for pl in payload.get("point_loads", []):
@@ -88,7 +91,71 @@ def _build_and_solve(payload: dict, analysis_type: str = None):
     return f, result
 
 
+def _solve_pushover_payload(payload: dict) -> dict:
+    """analysis_type='pushover'的獨立處理路徑, 邏輯跟webapi/main.py的
+    _solve_pushover()完全一致, 只是輸入是普通dict。"""
+    control_node = payload.get("pushover_control_node")
+    target = payload.get("pushover_target")
+    step = payload.get("pushover_step")
+    if control_node is None or target is None or step is None:
+        raise ValueError("pushover需要指定pushover_control_node、pushover_target、pushover_step三個欄位")
+
+    f = _build_frame(payload)
+    hinge_states = initial_hinge_states(f)
+    if not hinge_states:
+        raise ValueError(
+            "模型裡沒有任何桿件設定Mp_i(塑鉸容量), 無法做pushover -- "
+            "至少要有一根frame桿件設定Mp_i/Mp_j/R_post_yield_i/R_post_yield_j"
+        )
+
+    direction_key = payload.get("pushover_direction", "x")
+    local_idx = {"x": 0, "y": 1}[direction_key]
+    control_dof = f.dofs_of(control_node)[local_idx]
+    base_reaction_dofs = list(dict.fromkeys(
+        f.dofs_of(s.node)[local_idx] for s in f.supports))
+
+    initial_cum_forces = None
+    has_gravity_loads = bool(f.point_loads or f.distributed_loads or f.member_point_loads)
+    if has_gravity_loads:
+        initial_cum_forces, _ = apply_gravity(f, hinge_states)
+
+    history_u, history_F, event_log, hs_final, mechanism = run_pushover(
+        f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
+        target_total=target, d_nominal=step,
+        base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
+        use_pdelta=payload.get("pushover_use_pdelta", False),
+        mechanism_ratio_limit=payload.get("pushover_mechanism_ratio_limit", 1e-8),
+    )
+
+    hinge_summary = {
+        str(mid): {
+            "Mp": [float(hs.Mp[0]), float(hs.Mp[1])],
+            "yielded": [bool(hs.yielded[0]), bool(hs.yielded[1])],
+            "theta_p": [float(hs.theta_p[0]), float(hs.theta_p[1])],
+            "performance_level": [hs.performance_level(0), hs.performance_level(1)],
+        }
+        for mid, hs in hs_final.items()
+    }
+    event_log_out = [
+        {"u": float(ev["u"]), "F": float(ev["F"]),
+         "yielded": [[mid, end_idx] for mid, end_idx in ev["yielded"]]}
+        for ev in event_log
+    ]
+
+    return {
+        "analysis_type": "pushover",
+        "history_u": [float(v) for v in history_u],
+        "history_F": [float(v) for v in history_F],
+        "event_log": event_log_out,
+        "mechanism_reached": bool(mechanism),
+        "hinge_summary": hinge_summary,
+    }
+
+
 def _solve_payload(payload: dict) -> dict:
+    if payload.get("analysis_type", "linear") == "pushover":
+        return _solve_pushover_payload(payload)
+
     f, result = _build_and_solve(payload)
 
     node_out = []

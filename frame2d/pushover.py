@@ -239,7 +239,8 @@ def apply_gravity(frame, hinge_states):
 
 def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                   d_nominal, base_reaction_dofs, initial_cum_forces=None,
-                  use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000):
+                  use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000,
+                  include_final_displacement=False):
     """位移控制的遞增側推主迴圈。
 
     frame: 已定義節點/桿件/支承的Frame2D(側推的推力來自prescribed_dofs
@@ -262,9 +263,14 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     mechanism_ratio_limit: 縮聚剛度最小/最大特徵值比例低於此值視為已達機構
     max_steps: 安全閥(避免d_nominal設太小或有bug時無窮迴圈), 超過直接
         raise, 不會被誤判成"正常跑完"
+    include_final_displacement: False(預設)時回傳5個值, 完全等同原本的
+        呼叫方式跟既有測試不受影響。True時額外多回傳最終的絕對位移向量
+        u_full_cum(全域DOF編號, 跟frame.dofs_of()對應), 供後續需要畫
+        最終變形形狀(例如疊加塑鉸圈圈)的呼叫端使用。
 
     回傳: history_u(np.array), history_F(np.array), event_log(list of dict),
         hinge_states(原地更新後的同一組物件), mechanism_reached(bool)
+        [, u_full_cum(np.array) -- 只有include_final_displacement=True時]
     """
     direction = np.array(direction, dtype=float)
     fixed_dofs = _fixed_dof_set(frame)
@@ -352,4 +358,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             history_u.append(lam)
             history_F.append(F_base)
 
+    if include_final_displacement:
+        return (np.array(history_u), np.array(history_F), event_log,
+                hinge_states, mechanism_reached, u_full_cum)
     return np.array(history_u), np.array(history_F), event_log, hinge_states, mechanism_reached

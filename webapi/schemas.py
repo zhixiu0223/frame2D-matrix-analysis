@@ -28,6 +28,14 @@ class MemberIn(BaseModel):
     member_type: Literal['frame', 'truss', 'cable'] = 'frame'
     release_i: bool = False
     release_j: bool = False
+    Mp_i: Optional[float] = None
+    Mp_j: Optional[float] = None
+    R_post_yield_i: Optional[float] = None
+    R_post_yield_j: Optional[float] = None
+    """塑鉸容量(選用, 見frame2d/hinge.py的HingeState), 只有'frame'元素
+    有意義。預設None時完全不影響任何行為, 跟原本一樣是純彈性桿件——
+    只有做pushover(analysis_type='pushover')才會用到, 線性/P-Delta分析
+    完全忽略這幾個欄位(不管有沒有設定)。"""
 
 
 class SupportIn(BaseModel):
@@ -89,10 +97,29 @@ class FrameIn(BaseModel):
     fbd_only: Optional[bool] = False
     """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
     跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""
-    analysis_type: Literal['linear', 'pdelta'] = 'linear'
-    """'linear'(預設, 完全等同舊行為)或'pdelta'(疊代更新軸力的線性化
-    P-Delta, 見frame2d.dofmanager.solve_pdelta)。舊的呼叫端不帶這個欄位
-    時預設'linear', /solve回傳格式完全不變, 不受影響。"""
+    analysis_type: Literal['linear', 'pdelta', 'pushover'] = 'linear'
+    """'linear'(預設, 完全等同舊行為)、'pdelta'(疊代更新軸力的線性化
+    P-Delta, 見frame2d.dofmanager.solve_pdelta)、或'pushover'(遞增側推,
+    見frame2d.pushover.run_pushover)。舊的呼叫端不帶這個欄位時預設
+    'linear', /solve回傳格式完全不變, 不受影響。"""
+    pushover_control_node: Optional[int] = None
+    """analysis_type='pushover'時必填: 側推控制點的節點id(位移控制,
+    這個節點會被強制推到pushover_target)。目前只支援單一控制點,
+    多點同向側推(例如兩根柱頂一起推)是未來擴充。"""
+    pushover_direction: Literal['x', 'y'] = 'x'
+    """側推方向對應的自由度, 絕大多數情況是'x'(水平側推)。"""
+    pushover_target: Optional[float] = None
+    """analysis_type='pushover'時必填: 目標側推位移(m)。"""
+    pushover_step: Optional[float] = None
+    """analysis_type='pushover'時必填: 名目步長(m), 沒有降伏事件發生時
+    每步走多少; 太大會讓降伏點定位不夠精確(event-to-event只在單一步
+    內找降伏比例, 一步內如果有兩個以上獨立的降伏會漏掉後面那個),
+    太小則計算變慢——一般抓target的1/50到1/200之間。"""
+    pushover_use_pdelta: bool = False
+    """側推過程是否同時考慮P-Delta(用目前累積軸力組幾何剛度)。"""
+    pushover_mechanism_ratio_limit: float = 1e-8
+    """機構偵測的縮聚剛度特徵值比例門檻, 見
+    frame2d.pushover.check_mechanism()。一般不需要調整。"""
 
 
 class NodeResultOut(BaseModel):

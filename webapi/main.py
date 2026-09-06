@@ -13,7 +13,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from frame2d import Frame2D, solve
-from frame2d.dofmanager import solve_pdelta
+from frame2d.dofmanager import solve_pdelta, initial_hinge_states
+from frame2d.pushover import run_pushover, apply_gravity
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
@@ -49,7 +50,9 @@ def _build_frame(payload: FrameIn) -> Frame2D:
         f.add_section(s.name, E=s.E, I=s.I, A=s.A)
     for m in payload.members:
         f.add_member(m.id, node_i=m.node_i, node_j=m.node_j, section=m.section,
-                     member_type=m.member_type, release_i=m.release_i, release_j=m.release_j)
+                     member_type=m.member_type, release_i=m.release_i, release_j=m.release_j,
+                     Mp_i=m.Mp_i, Mp_j=m.Mp_j,
+                     R_post_yield_i=m.R_post_yield_i, R_post_yield_j=m.R_post_yield_j)
     for sp in payload.supports:
         f.support(sp.node, ux=sp.ux, uy=sp.uy, rot=sp.rot)
     for pl in payload.point_loads:
@@ -102,8 +105,94 @@ def _build_and_solve(payload: FrameIn, analysis_type: str = None):
     return f, result
 
 
+def _solve_pushover(payload: FrameIn):
+    """analysis_type='pushover'的獨立處理路徑, 不跟_build_and_solve()共用
+    (那個函式的dispatch邏輯是linear/pdelta二選一, pushover是完全不同的
+    位移控制+event-to-event流程, 混在一起會讓兩邊都難懂)。
+
+    回傳跟linear/pdelta的/solve完全不同的形狀(沒有nodes/members/diagrams/
+    deformed, 因為那些是"單一狀態的解", pushover的重點是"一整條歷程"):
+    容量曲線(history_u/history_F)、每個降伏事件的清單、最終每個塑鉸的
+    狀態摘要(Mp、降伏與否、累積塑性轉角、IO/LS/CP分類)、有沒有形成機構。
+    """
+    if payload.pushover_control_node is None or payload.pushover_target is None \
+            or payload.pushover_step is None:
+        raise HTTPException(
+            status_code=400,
+            detail="pushover需要指定pushover_control_node、pushover_target、pushover_step三個欄位",
+        )
+
+    f = _build_frame(payload)
+    hinge_states = initial_hinge_states(f)
+    if not hinge_states:
+        raise HTTPException(
+            status_code=400,
+            detail="模型裡沒有任何桿件設定Mp_i(塑鉸容量), 無法做pushover -- "
+                   "至少要有一根frame桿件設定Mp_i/Mp_j/R_post_yield_i/R_post_yield_j",
+        )
+
+    local_idx = {'x': 0, 'y': 1}[payload.pushover_direction]
+    try:
+        control_dof = f.dofs_of(payload.pushover_control_node)[local_idx]
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到pushover_control_node指定的節點id {payload.pushover_control_node}",
+        )
+    # 底剪力用: 每個支承節點對應方向的反力DOF加總, 不用使用者自己指定
+    # (支承是模型本身已經定義好的, 這裡自動抓, 減少一個容易配置錯的欄位)。
+    base_reaction_dofs = list(dict.fromkeys(
+        f.dofs_of(s.node)[local_idx] for s in f.supports))
+
+    initial_cum_forces = None
+    has_gravity_loads = bool(f.point_loads or f.distributed_loads or f.member_point_loads)
+    if has_gravity_loads:
+        try:
+            initial_cum_forces, _ = apply_gravity(f, hinge_states)
+        except (ValueError, KeyError, RuntimeError) as e:
+            raise HTTPException(status_code=400, detail=f"重力預載階段求解失敗: {e}")
+
+    try:
+        history_u, history_F, event_log, hs_final, mechanism = run_pushover(
+            f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
+            target_total=payload.pushover_target, d_nominal=payload.pushover_step,
+            base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
+            use_pdelta=payload.pushover_use_pdelta,
+            mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    hinge_summary = {
+        str(mid): {
+            "Mp": [float(hs.Mp[0]), float(hs.Mp[1])],
+            "yielded": [bool(hs.yielded[0]), bool(hs.yielded[1])],
+            "theta_p": [float(hs.theta_p[0]), float(hs.theta_p[1])],
+            "performance_level": [hs.performance_level(0), hs.performance_level(1)],
+        }
+        for mid, hs in hs_final.items()
+    }
+    event_log_out = [
+        {"u": float(ev['u']), "F": float(ev['F']),
+         "yielded": [[mid, end_idx] for mid, end_idx in ev['yielded']]}
+        for ev in event_log
+    ]
+
+    return {
+        "analysis_type": "pushover",
+        "history_u": [float(v) for v in history_u],
+        "history_F": [float(v) for v in history_F],
+        "event_log": event_log_out,
+        "mechanism_reached": bool(mechanism),
+        "hinge_summary": hinge_summary,
+    }
+
+
 @app.post("/solve")
 def solve_frame(payload: FrameIn):
+    if payload.analysis_type == 'pushover':
+        return _solve_pushover(payload)
+
     f, result = _build_and_solve(payload)
 
     node_out = []
