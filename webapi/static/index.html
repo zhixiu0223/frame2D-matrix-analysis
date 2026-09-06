@@ -103,6 +103,8 @@
   .pushoverCurveLine { stroke: #16a34a; stroke-width: 3; fill: none; }
   .pushoverEventDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
   .mechanismWarn { font-size: 18px; fill: #dc2626; font-weight: bold; }
+  .hinge-circle-elastic { fill: rgba(37,99,235,0.15); stroke: #2563eb; stroke-width: 2; stroke-dasharray: 3 2; }
+  .hinge-circle-yielded { fill: rgba(220,38,38,0.35); stroke: #dc2626; stroke-width: 2; }
   .diagram-fill { fill: rgba(37, 99, 235, 0.22); stroke: #2563eb; stroke-width: 1; }
   .diagram-fill.M { fill: rgba(220, 38, 38, 0.20); stroke: #dc2626; }
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
@@ -752,6 +754,10 @@ function render() {
   const t = getTransform(PAD_BY_VIEW[viewMode]);
   debugLog(`RENDER nodes=${model.nodes.length} ${model.nodes.map(n=>`N${n.id}(${n.x},${n.y})`).join(',')} | t={scale:${t.scale.toFixed(2)},cx:${t.cx.toFixed(2)},cy:${t.cy.toFixed(2)}} | camera={x:${camera.x.toFixed(1)},y:${camera.y.toFixed(1)},k:${camera.k.toFixed(2)}}`);
   if (document.getElementById('showGridToggle').checked) drawGrid(t);
+  // pushover的回傳沒有nodes/reactions這種「單一狀態」資料, drawReactions()
+  // 會直接對undefined做for...of壞掉——這裡統一算一次, 這個畫面能不能疊加
+  // 反力/內力這類「需要lastResult裡有單一解」的圖層。
+  const hasStructuralResult = lastResult && lastResult.analysis_type !== 'pushover';
 
   if (viewMode === 'structure') {
     drawMembers(t, false);
@@ -760,20 +766,27 @@ function render() {
     drawLoads(t);
     drawNodes(t);
     if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
+    if (lastResult && lastResult.analysis_type === 'pushover') drawHingeCircles(t);
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
-      drawSupports(t); drawLoads(t); drawReactions(t);
+      drawSupports(t); drawLoads(t);
+      if (hasStructuralResult) drawReactions(t);
       if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     }
-    if (lastResult) drawDeformed(t); else drawNeedSolveMsg();
+    if (!lastResult) drawNeedSolveMsg();
+    else if (lastResult.analysis_type === 'pushover') drawPushoverResultMissingMsg();
+    else drawDeformed(t);
   } else {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
-      drawSupports(t); drawLoads(t); drawReactions(t);
+      drawSupports(t); drawLoads(t);
+      if (hasStructuralResult) drawReactions(t);
       if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     }
-    if (lastResult) drawDiagram(t, viewMode); else drawNeedSolveMsg();
+    if (!lastResult) drawNeedSolveMsg();
+    else if (lastResult.analysis_type === 'pushover') drawPushoverResultMissingMsg();
+    else drawDiagram(t, viewMode);
   }
   drawQueryMarker(t);
   drawMarquee(t);
@@ -993,6 +1006,16 @@ function drawNeedSolveMsg() {
   put(m);
 }
 
+function drawPushoverResultMissingMsg() {
+  // pushover的回傳只有history_u/F這種"一整條歷程"的資料, 沒有
+  // deformed/diagrams這種"單一狀態"的資料——之前沒防護這裡,
+  // Pushover解完之後切到「變形」或N/V/M圖會直接撞undefined access
+  // 壞掉, 這裡補上明確的提示訊息取代崩潰。
+  const m = el('text', {x: 10, y: 22, 'font-size': 13, fill: '#dc2626'});
+  m.textContent = 'Pushover結果沒有單一狀態的變形/內力圖, 請切到「容量曲線」分頁';
+  put(m);
+}
+
 function niceStep(rough) {
   const mag = Math.pow(10, Math.floor(Math.log10(rough)));
   const norm = rough / mag;
@@ -1167,6 +1190,44 @@ function drawPinMarkers(t) {
     if (m.release_j) {
       const [x, y] = toScreen(nj.x - ux * offset, nj.y - uy * offset, t);
       put(el('circle', {cx: x, cy: y, r: 4.5, class: 'pin-marker'}));
+    }
+  }
+}
+
+// 塑鉸圈圈: 只在Pushover結果存在時畫(見render()裡的呼叫條件), 位置故意
+// 跟release用的pin-marker錯開(offset更大、r更大、顏色完全不同——藍色
+// 虛線空心=已定義塑鉸但還沒降伏, 紅色實心半透明=已降伏, 半徑隨累積
+// 塑性轉角theta_p變大), 避免使用者把兩種圈圈搞混(這是使用者事先問過
+// 的顧慮, 特意這樣設計)。
+function drawHingeCircles(t) {
+  if (!lastResult || !lastResult.hinge_summary) return;
+  for (const m of model.members) {
+    const summary = lastResult.hinge_summary[String(m.id)];
+    if (!summary) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const dx = nj.x - ni.x, dy = nj.y - ni.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const ux = dx / L, uy = dy / L;
+    const offset = Math.min(0.5, L * 0.18);   // 比release的pin-marker(0.35/0.12)偏移更多, 避免疊在一起
+    const ends = [
+      {idx: 0, nx: ni.x + ux * offset, ny: ni.y + uy * offset, label: 'i'},
+      {idx: 1, nx: nj.x - ux * offset, ny: nj.y - uy * offset, label: 'j'},
+    ];
+    for (const end of ends) {
+      if (summary.Mp[end.idx] == null) continue;   // 這端沒設塑鉸(留空=永遠彈性), 不畫圈
+      const yielded = summary.yielded[end.idx];
+      const thetaP = summary.theta_p[end.idx];
+      const r = yielded ? Math.min(8 + thetaP * 400, 26) : 8;   // 半徑隨累積塑性轉角變大, 上限26px避免蓋住其他圖元
+      const [x, y] = toScreen(end.nx, end.ny, t);
+      const c = el('circle', {cx: x, cy: y, r, class: yielded ? 'hinge-circle-yielded' : 'hinge-circle-elastic'});
+      const title = el('title', {});
+      const level = summary.performance_level[end.idx];
+      title.textContent = `M${m.id} 端${end.label}: ${yielded ? '已降伏' : '彈性(尚未降伏)'}`
+        + (yielded ? `, 累積塑性轉角θp=${thetaP.toFixed(5)}rad` : '')
+        + (level ? `, 性能等級:${level}` : '');
+      c.appendChild(title);
+      put(c);
     }
   }
 }
@@ -3184,7 +3245,8 @@ function pushoverStatusSuffix(base) {
   const lastU = fromSI('disp', r.history_u[r.history_u.length - 1]);
   const lastF = fromSI('force', r.history_F[r.history_F.length - 1]);
   return `${base} ｜ 位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
-    + `${r.event_log.length}個降伏事件` + (r.mechanism_reached ? '(⚠已形成機構, 側推中止)' : '');
+    + `${r.event_log.length}個降伏事件` + (r.mechanism_reached ? '(⚠已形成機構, 側推中止)' : '')
+    + ' ｜ 切到「結構/荷載」分頁可以看塑鉸圈圈(藍色虛線=彈性, 紅色=已降伏)';
 }
 
 function pdeltaStatusSuffix(base) {
