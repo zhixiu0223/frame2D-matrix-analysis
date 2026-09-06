@@ -3099,6 +3099,23 @@ document.querySelectorAll('.viewBtn').forEach(btn => {
   });
 });
 
+// 新建/載入檔案時統一呼叫: 把視圖切回「結構/荷載」、分析類型切回線性、
+// 隱藏Pushover設定列跟容量曲線分頁。不這樣做的話, 如果使用者上一個
+// 檔案是在容量曲線分頁做完Pushover(這是Solve完會自動切過去的分頁),
+// 新建/載入之後lastResult被清空、viewMode卻還停在'pushover_curve',
+// 畫布會一直卡在「請先按Solve才有結果可畫」那個空白畫面(沒有格線、
+// 什麼都看不到), 即使新增節點也是加到model裡了(所以查詢會說「已經有
+// 節點」), 只是完全沒有畫面能顯示出來——這是真實發生過的bug, 不是
+// 假設情境。
+function resetViewToStructure() {
+  viewMode = 'structure';
+  document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+  document.querySelector('.viewBtn[data-view="structure"]').classList.add('active');
+  document.getElementById('analysisType').value = 'linear';
+  document.getElementById('pushoverConfigBar').style.display = 'none';
+  document.getElementById('btnViewPushover').style.display = 'none';
+}
+
 const MODE_BUTTONS = {node: 'btnAddNode', member: 'btnAddMember', rect: 'btnSelectRect', line: 'btnSelectLine'};
 function clearAllModes() {
   addMode = null; selectMode = null; memberFirstNode = null; marqueeState = null;
@@ -3342,6 +3359,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   camera = {x: 0, y: 0, k: 1};
   resetTransform();
   applyCameraTransform();
+  resetViewToStructure();
   clearSelection();
   setStatus('已新建空白專案');
 });
@@ -3364,6 +3382,7 @@ document.getElementById('btnLoad').addEventListener('click', async () => {
     document.getElementById('modelName').value = name;
     lastResult = null;
     resetTransform();
+    resetViewToStructure();
     clearSelection();
     setStatus('已載入 "' + name + '"(記得重新按 Solve)');
   } catch (e) { setStatus('載入失敗: ' + e.message); }
