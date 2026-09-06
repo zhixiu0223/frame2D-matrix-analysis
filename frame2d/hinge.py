@@ -113,6 +113,32 @@ def hinge_bending_stiffness(E, I, L, hinge_state):
     ])
 
 
+def beam_internal_rotation(E, I, L, hinge_state, v1, theta1, v2, theta2):
+    """回傳樑本身內部端點的真實轉角(phi1, phi2), 不是外部節點自由度
+    (theta1, theta2)本身——這兩者只有在彈簧沒有變形(彈性、剛接近似)時
+    才會幾乎相等; 鉸降伏後, 彈簧會有顯著的相對轉動, 樑內部端點轉角跟
+    外部節點轉角會明顯不同(尤其是鉸剛好在完全固定支承上這種情況:
+    外部節點轉角theta1被邊界條件釘死在0, 但樑內部端點phi1可以因為
+    彈簧軟化而顯著轉動, 這正是"塑性鉸轉動"這件事在數學上的體現)。
+
+    封閉式解跟hinge_bending_stiffness()用的是同一組聯立方程式(樑ODE
+    的M1,M2 = 彈簧力矩-轉角關係R1*(theta1-phi1), R2*(theta2-phi2)),
+    只是這裡解出的是phi1,phi2本身而不是消去它們之後的縮聚矩陣。用途:
+    pushover.py拿(theta1-phi1), (theta2-phi2)當作該端"目前的塑性轉角"
+    (theta_p), 給後續視覺化(圈圈大小)跟IO/LS/CP分類用。"""
+    EI = E * I
+    R1 = hinge_state.current_R(EI, L, 0)
+    R2 = hinge_state.current_R(EI, L, 1)
+    denom = L * (12 * EI**2 + 4 * EI * L * R1 + 4 * EI * L * R2 + L**2 * R1 * R2)
+    phi1 = (-12 * EI**2 * v1 + 12 * EI**2 * v2 + 4 * EI * L**2 * R1 * theta1
+            - 2 * EI * L**2 * R2 * theta2 - 6 * EI * L * R2 * v1 + 6 * EI * L * R2 * v2
+            + L**3 * R1 * R2 * theta1) / denom
+    phi2 = (-12 * EI**2 * v1 + 12 * EI**2 * v2 - 2 * EI * L**2 * R1 * theta1
+            + 4 * EI * L**2 * R2 * theta2 - 6 * EI * L * R1 * v1 + 6 * EI * L * R1 * v2
+            + L**3 * R1 * R2 * theta2) / denom
+    return phi1, phi2
+
+
 def full_6x6_with_hinge(E, A, I, L, hinge_state, P=0.0):
     """組出完整6x6局部剛度矩陣(軸向不受鉸影響 + 撓曲用含鉸凝聚公式 +
     選用的P-Delta幾何剛度), 自由度順序跟elements.py一致:

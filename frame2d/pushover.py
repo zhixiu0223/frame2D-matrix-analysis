@@ -159,6 +159,31 @@ def _find_crossing_events(hinge_states, cum_forces, df_local_by_member):
     return events
 
 
+def _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full):
+    """用目前累積的絕對位移u_full, 算每個有塑鉸的frame元素兩端"樑內部
+    端點轉角跟外部節點轉角的差"(=彈簧的相對轉動), 更新
+    HingeState.theta_p。只對已經降伏的端點更新(未降伏時彈簧幾乎不轉動,
+    RIGID_FACTOR夠大, 直接當作0, 不用另外算);已降伏端點的彈簧轉動幾乎
+    全部是塑性變形(降伏前的彈性轉動已經因為RIGID_FACTOR趨近0而可忽略),
+    這是集中塑性鉸(lumped plasticity)理論標準的近似, 不是另外發明的
+    公式。純粹更新"事後可查詢"的欄位, 不影響任何求解邏輯本身。"""
+    from .hinge import beam_internal_rotation
+    for mid, hs in hinge_states.items():
+        if not any(hs.yielded):
+            continue
+        m = frame.members[mid]
+        section = frame.sections[m.section]
+        L = member_L[mid]
+        T = member_T[mid]
+        u_local = T @ u_full[np.array(member_dofs[mid])]
+        v1, theta1, v2, theta2 = u_local[1], u_local[2], u_local[4], u_local[5]
+        phi1, phi2 = beam_internal_rotation(section.E, section.I, L, hs, v1, theta1, v2, theta2)
+        if hs.yielded[0]:
+            hs.theta_p[0] = abs(theta1 - phi1)
+        if hs.yielded[1]:
+            hs.theta_p[1] = abs(theta2 - phi2)
+
+
 def check_mechanism(K, prescribed_dofs, fixed_dofs, stiffness_ratio_limit=1e-8):
     """機構偵測: 算受控自由度(側推方向)的縮聚剛度(Schur complement),
     這才是「再推一單位位移, 需要多少額外力」的真實剛度。機構形成時這個
@@ -257,6 +282,10 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     history_F = [0.0]
     event_log = []
     mechanism_reached = False
+    u_full_cum = np.zeros(n_total)   # 累積絕對位移, 給_update_theta_p()算樑
+                                      # 內部端點真正轉角用(不能只累積增量,
+                                      # 因為beam_internal_rotation()的公式
+                                      # 需要目前絕對的v1,theta1,v2,theta2)
 
     def current_axial_forces():
         return {mid: f[3] for mid, f in cum_forces.items()}   # 拉力為正(端j的Fx)
@@ -293,6 +322,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             for mid, df in df_by_member_sub.items():
                 cum_forces[mid] += df
             cum_reaction += K @ du_full_sub
+            u_full_cum += du_full_sub
             lam += d_sub
             remaining -= d_sub
 
@@ -302,6 +332,8 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                     hinge_states[mid].yielded[end_idx] = True
                     newly_yielded.append((mid, end_idx))
 
+            _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full_cum)
+
             F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
             history_u.append(lam)
             history_F.append(F_base)
@@ -310,8 +342,11 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             for mid, df in df_by_member.items():
                 cum_forces[mid] += df
             cum_reaction += K @ du_full
+            u_full_cum += du_full
             lam += d_step
             remaining -= d_step
+
+            _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full_cum)
 
             F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
             history_u.append(lam)
