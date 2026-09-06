@@ -172,6 +172,16 @@
       <p class="hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。</p>
     </div>
 
+    <div id="playbackBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <div style="display:flex;align-items:center;gap:0.4rem;">
+        <button id="pb_prev" style="padding:0.3rem 0.6rem;">◀</button>
+        <input id="pb_slider" type="range" min="0" max="0" value="0" style="flex:1;">
+        <button id="pb_next" style="padding:0.3rem 0.6rem;">▶</button>
+      </div>
+      <p id="pb_info" class="hint" style="margin:0.3rem 0 0;font-weight:bold;"></p>
+      <p class="hint" style="margin:0.2rem 0 0;">拖動滑桿或按左右箭頭一步一步看: 桿件顏色深淺代表當下彎矩大小, 圈圈是塑鉸狀態(藍色虛線=彈性, 紅色=已降伏, 大小隨累積塑性轉角變化)。這裡的桿件位置是原始(未變形)幾何, 不是變形後的形狀。</p>
+    </div>
+
     <!-- 視圖切換+疊加外力+縮放: 之前改成永遠顯示、不放進選單裡, 是
          為了避免每次切視圖都要先打開選單(蓋住畫布)才點得到。但這樣
          建模的時候(還沒要看N/V/M圖跟疊加比較)也一直佔用畫面空間,
@@ -186,6 +196,7 @@
       <button data-view="V" class="viewBtn">V 圖(剪力)</button>
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
+      <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
       <span class="sep-v"></span>
       <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
       <label class="snapLabel"><input type="checkbox" id="overlayDimsToggle" checked>顯示尺寸/斷面</label>
@@ -434,6 +445,7 @@ let lastResult = null;
 let selected = null;        // {type:'node'|'member', id}
 let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面上標記)
 let viewMode = 'structure';
+let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
 let addMode = null;         // null | 'node' | 'member'
 let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選取模式
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
@@ -752,6 +764,15 @@ function render() {
     drawPushoverCurve();
     return;
   }
+  if (viewMode === 'pushover_playback') {
+    // 逐步回放需要畫實際結構幾何(套用camera平移縮放), 用法跟structure
+    // 視圖比較像, 所以不比照pushover_curve整個跳過transform。
+    const tp = getTransform(PAD_BY_VIEW.structure);
+    if (document.getElementById('showGridToggle').checked) drawGrid(tp);
+    drawPushoverPlayback(tp);
+    drawQueryMarker(tp);
+    return;
+  }
   const t = getTransform(PAD_BY_VIEW[viewMode]);
   debugLog(`RENDER nodes=${model.nodes.length} ${model.nodes.map(n=>`N${n.id}(${n.x},${n.y})`).join(',')} | t={scale:${t.scale.toFixed(2)},cx:${t.cx.toFixed(2)},cy:${t.cy.toFixed(2)}} | camera={x:${camera.x.toFixed(1)},y:${camera.y.toFixed(1)},k:${camera.k.toFixed(2)}}`);
   if (document.getElementById('showGridToggle').checked) drawGrid(t);
@@ -874,6 +895,127 @@ function drawPushoverCurve() {
     putOverlay(warn);
   }
 }
+
+// 彎矩大小 -> 顏色, ratio是0~1(相對於整個回放過程裡的最大彎矩)。
+// 0=淺灰藍(幾乎沒有彎矩), 1=紅色(全回放過程裡彎矩最大的時刻)。
+function momentColor(ratio) {
+  ratio = Math.max(0, Math.min(1, ratio));
+  const r = Math.round(148 + (220 - 148) * ratio);
+  const g = Math.round(163 + (38 - 163) * ratio);
+  const b = Math.round(184 + (38 - 184) * ratio);
+  return `rgb(${r},${g},${b})`;
+}
+
+// Pushover逐步回放: 桿件顏色深淺代表當下(這一步的快照)彎矩大小(顏色
+// 刻度用整個回放過程的最大彎矩固定, 不會每拖一步就重新縮放讓人誤判
+// "顏色變淺=彎矩變小"——這裡刻意保持同一把尺), 疊加塑鉸圈圈(用這一步
+// 的yielded/theta_p, 不是最終狀態)。
+//
+// 已知限制(誠實記錄): 桿件位置畫的是原始(未變形)幾何, 不是這一步
+// 真正變形後的形狀——因為快照只記錄了桿件端點內力跟塑鉸狀態, 沒有
+// 記錄每一步的完整位移場, 要畫真正變形後的形狀需要另外累積每一步的
+// u_full, 這裡先不做(這個限制不影響「看彎矩怎麼變化、塑鉸怎麼一個一個
+// 出現」這個主要目的)。
+function drawPushoverPlayback(t) {
+  if (!lastResult || lastResult.analysis_type !== 'pushover' || !lastResult.history_snapshots) {
+    drawNeedSolveMsg();
+    return;
+  }
+  const snapshots = lastResult.history_snapshots;
+  const idx = Math.max(0, Math.min(pushoverStepIndex, snapshots.length - 1));
+  const snap = snapshots[idx];
+
+  let globalMaxM = 1e-9;
+  for (const s of snapshots) {
+    for (const mid in s.member_forces) {
+      const f = s.member_forces[mid];
+      globalMaxM = Math.max(globalMaxM, Math.abs(f[2]), Math.abs(f[5]));
+    }
+  }
+
+  for (const m of model.members) {
+    const f = snap.member_forces[String(m.id)];
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!f || !ni || !nj) continue;
+    const maxM = Math.max(Math.abs(f[2]), Math.abs(f[5]));
+    const ratio = maxM / globalMaxM;
+    const [x1, y1] = toScreen(ni.x, ni.y, t);
+    const [x2, y2] = toScreen(nj.x, nj.y, t);
+    put(el('line', {
+      x1, y1, x2, y2, stroke: momentColor(ratio),
+      'stroke-width': 3 + ratio * 4, 'stroke-linecap': 'round',
+    }));
+  }
+  drawSupports(t);
+  drawNodes(t);
+
+  for (const m of model.members) {
+    const summary = lastResult.hinge_summary[String(m.id)];
+    const stepHs = snap.hinge_states[String(m.id)];
+    if (!summary || !stepHs) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const dx = nj.x - ni.x, dy = nj.y - ni.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const ux = dx / L, uy = dy / L;
+    const offset = Math.min(0.5, L * 0.18);
+    const ends = [
+      {idx: 0, nx: ni.x + ux * offset, ny: ni.y + uy * offset, label: 'i'},
+      {idx: 1, nx: nj.x - ux * offset, ny: nj.y - uy * offset, label: 'j'},
+    ];
+    for (const end of ends) {
+      if (summary.Mp[end.idx] == null) continue;
+      const yielded = stepHs.yielded[end.idx];
+      const thetaP = stepHs.theta_p[end.idx];
+      const r = yielded ? Math.min(8 + thetaP * 400, 26) : 8;
+      const [x, y] = toScreen(end.nx, end.ny, t);
+      const c = el('circle', {cx: x, cy: y, r, class: yielded ? 'hinge-circle-yielded' : 'hinge-circle-elastic'});
+      const title = el('title', {});
+      title.textContent = `M${m.id} 端${end.label}: ${yielded ? '已降伏' : '彈性'}`
+        + (yielded ? `, θp=${thetaP.toFixed(5)}rad` : '');
+      c.appendChild(title);
+      put(c);
+    }
+  }
+
+  const du = unitOf('disp'), fu = unitOf('force');
+  const u = fromSI('disp', lastResult.history_u[idx]);
+  const F = fromSI('force', lastResult.history_F[idx]);
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#334155;`});
+  lbl.textContent = `第${idx + 1}/${snapshots.length}步  u=${u.toFixed(3)}${du}  F=${F.toFixed(2)}${fu}`;
+  putOverlay(lbl);
+}
+
+function updatePlaybackInfo() {
+  if (!lastResult || lastResult.analysis_type !== 'pushover' || !lastResult.history_snapshots) return;
+  const n = lastResult.history_snapshots.length;
+  const slider = document.getElementById('pb_slider');
+  slider.max = n - 1;
+  slider.value = pushoverStepIndex;
+  const du = unitOf('disp'), fu = unitOf('force');
+  const idx = Math.max(0, Math.min(pushoverStepIndex, n - 1));
+  const u = fromSI('disp', lastResult.history_u[idx]);
+  const F = fromSI('force', lastResult.history_F[idx]);
+  let text = `第 ${idx + 1} / ${n} 步 ｜ u=${u.toFixed(3)}${du} ｜ F=${F.toFixed(2)}${fu}`;
+  const ev = lastResult.event_log.find(e => Math.abs(e.u - lastResult.history_u[idx]) < 1e-9);
+  if (ev) {
+    text += ' ｜ ⚡ 這一步降伏: ' + ev.yielded.map(([mid, e]) => `M${mid}端${e === 0 ? 'i' : 'j'}`).join(', ');
+  }
+  document.getElementById('pb_info').textContent = text;
+}
+
+document.getElementById('pb_slider').addEventListener('input', (e) => {
+  pushoverStepIndex = parseInt(e.target.value, 10);
+  updatePlaybackInfo();
+  render();
+});
+document.getElementById('pb_prev').addEventListener('click', () => {
+  if (pushoverStepIndex > 0) { pushoverStepIndex--; updatePlaybackInfo(); render(); }
+});
+document.getElementById('pb_next').addEventListener('click', () => {
+  const max = (lastResult && lastResult.history_snapshots) ? lastResult.history_snapshots.length - 1 : 0;
+  if (pushoverStepIndex < max) { pushoverStepIndex++; updatePlaybackInfo(); render(); }
+});
 
 function drawDimensionsAndSections(t) {
   for (const m of model.members) {
@@ -3187,6 +3329,8 @@ document.querySelectorAll('.viewBtn').forEach(btn => {
     document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     viewMode = btn.dataset.view;
+    document.getElementById('playbackBar').style.display = viewMode === 'pushover_playback' ? 'block' : 'none';
+    if (viewMode === 'pushover_playback') updatePlaybackInfo();
     render();
   });
 });
@@ -3206,6 +3350,9 @@ function resetViewToStructure() {
   document.getElementById('analysisType').value = 'linear';
   document.getElementById('pushoverConfigBar').style.display = 'none';
   document.getElementById('btnViewPushover').style.display = 'none';
+  document.getElementById('btnViewPlayback').style.display = 'none';
+  document.getElementById('playbackBar').style.display = 'none';
+  pushoverStepIndex = 0;
 }
 
 const MODE_BUTTONS = {node: 'btnAddNode', member: 'btnAddMember', rect: 'btnSelectRect', line: 'btnSelectLine'};
@@ -3322,12 +3469,15 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
     if (!res.ok) { setStatus('API 錯誤: ' + await res.text()); return; }
     lastResult = await res.json();
     document.getElementById('btnViewPushover').style.display = isPushover ? '' : 'none';
+    document.getElementById('btnViewPlayback').style.display = isPushover ? '' : 'none';
     if (isPushover) {
+      pushoverStepIndex = 0;
       setStatus(pushoverStatusSuffix('完成'));
       // renderTables()是節點/桿件的「單一狀態」結果表格, pushover回傳
       // 的是一整條歷程(history_u/F), 沒有nodes/members這兩個欄位,
       // 直接跳過(呼叫下去會因為lastResult.nodes是undefined而壞掉)。
     } else {
+      document.getElementById('playbackBar').style.display = 'none';
       setStatus(pdeltaStatusSuffix('完成'));
       renderTables();
     }
