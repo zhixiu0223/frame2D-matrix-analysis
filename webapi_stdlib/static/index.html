@@ -105,6 +105,7 @@
   .mechanismWarn { font-size: 18px; fill: #dc2626; font-weight: bold; }
   .hinge-circle-elastic { fill: rgba(37,99,235,0.15); stroke: #2563eb; stroke-width: 2; stroke-dasharray: 3 2; }
   .hinge-circle-yielded { fill: rgba(220,38,38,0.35); stroke: #dc2626; stroke-width: 2; }
+  .hinge-defined-marker { fill: rgba(147,51,234,0.2); stroke: #9333ea; stroke-width: 2; stroke-dasharray: 2 2; }
   .diagram-fill { fill: rgba(37, 99, 235, 0.22); stroke: #2563eb; stroke-width: 1; }
   .diagram-fill.M { fill: rgba(220, 38, 38, 0.20); stroke: #dc2626; }
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
@@ -767,6 +768,7 @@ function render() {
     drawNodes(t);
     if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     if (lastResult && lastResult.analysis_type === 'pushover') drawHingeCircles(t);
+    else drawHingeDefinedMarkers(t);
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
@@ -1226,6 +1228,44 @@ function drawHingeCircles(t) {
       title.textContent = `M${m.id} 端${end.label}: ${yielded ? '已降伏' : '彈性(尚未降伏)'}`
         + (yielded ? `, 累積塑性轉角θp=${thetaP.toFixed(5)}rad` : '')
         + (level ? `, 性能等級:${level}` : '');
+      c.appendChild(title);
+      put(c);
+    }
+  }
+}
+
+// 建模階段就能看到的塑鉸提示: 不管有沒有Solve過, 只要桿件的Mp_i/Mp_j
+// 有值就畫一個固定大小的紫色虛線圈(顏色/樣式跟release用的pin-marker、
+// Pushover解完才會出現的hinge-circle-*都不一樣, 避免搞混三種標記)。
+// 這是為了回答使用者的問題:"剛設定完不會提示塑鉸的設定位置嗎?"
+// ——設定完立刻在結構視圖上看得到, 不用等Solve完。跟drawHingeCircles()
+// 錯開顯示(見render()裡的呼叫條件): 還沒有Pushover結果時顯示這個,
+// 有結果之後改顯示drawHingeCircles()那個更豐富的版本(含降伏狀態/
+// 塑性轉角大小), 不會兩種同時疊在一起。
+function drawHingeDefinedMarkers(t) {
+  for (const m of model.members) {
+    if (m.member_type !== 'frame') continue;
+    if (m.Mp_i == null && m.Mp_j == null) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const dx = nj.x - ni.x, dy = nj.y - ni.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const ux = dx / L, uy = dy / L;
+    const offset = Math.min(0.5, L * 0.18);
+    const mu = unitOf('moment');
+    if (m.Mp_i != null) {
+      const [x, y] = toScreen(ni.x + ux * offset, ni.y + uy * offset, t);
+      const c = el('circle', {cx: x, cy: y, r: 7, class: 'hinge-defined-marker'});
+      const title = el('title', {});
+      title.textContent = `M${m.id} 端i: 已設定塑鉸容量, Mp=${fromSI('moment', m.Mp_i).toFixed(2)}${mu}`;
+      c.appendChild(title);
+      put(c);
+    }
+    if (m.Mp_j != null) {
+      const [x, y] = toScreen(nj.x - ux * offset, nj.y - uy * offset, t);
+      const c = el('circle', {cx: x, cy: y, r: 7, class: 'hinge-defined-marker'});
+      const title = el('title', {});
+      title.textContent = `M${m.id} 端j: 已設定塑鉸容量, Mp=${fromSI('moment', m.Mp_j).toFixed(2)}${mu}`;
       c.appendChild(title);
       put(c);
     }
@@ -1963,6 +2003,7 @@ function renderMultiSelectPanel() {
   if (memberIds.length) {
     html += `<button id="ms_distload" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">⬇ 批次施加均佈載重</button>`;
     html += `<button id="ms_edit" style="width:100%;margin-bottom:0.4rem;background:#7c3aed;color:white;">✎ 批次編輯桿件(斷面/類型/釋放)</button>`;
+    html += `<button id="ms_hinge" style="width:100%;margin-bottom:0.4rem;background:#dc2626;color:white;">◎ 批次設定塑鉸容量(Pushover用)</button>`;
   }
   html += `<div class="row2"><button id="ms_delete" style="background:#dc2626;color:white;">刪除選取項目</button><button id="ms_cancel">取消</button></div></fieldset>`;
   panel.innerHTML = html;
@@ -1984,6 +2025,7 @@ function renderMultiSelectPanel() {
   if (memberIds.length) {
     document.getElementById('ms_distload').onclick = () => renderBatchDistLoadForm(memberIds);
     document.getElementById('ms_edit').onclick = () => renderBatchMemberEditForm(memberIds);
+    document.getElementById('ms_hinge').onclick = () => renderBatchHingeForm(memberIds);
   }
 }
 
@@ -2066,6 +2108,56 @@ function renderBatchMemberEditForm(memberIds) {
       if (rjVal !== '__keep__') m.release_j = rjVal === '1';
     }
     setStatus('已套用到 ' + memberIds.length + ' 根桿件');
+    clearMultiSelection();
+  };
+}
+
+function renderBatchHingeForm(memberIds) {
+  const panel = document.getElementById('propPanel');
+  panel.innerHTML = `<fieldset><legend>批次設定塑鉸容量(${memberIds.length} 根桿件)</legend>
+    <p class="hint">只對member_type='frame'的桿件生效, 只有做Pushover分析時才會用到。套用範圍選「兩端」時, 這批桿件的i端跟j端都會設成同一組數值(適合柱子這種兩端都要設塑鉸的情況); 選「只i端」/「只j端」時只改那一端, 另一端維持原本的值不動。</p>
+    <label>套用範圍</label>
+    <select id="bh_scope">
+      <option value="both">兩端(i端跟j端都套用)</option>
+      <option value="i">只i端</option>
+      <option value="j">只j端</option>
+    </select>
+    <label>降伏彎矩 Mp (${unitOf('moment')})</label>
+    <input id="bh_mp" type="number" step="any" placeholder="留空=不設塑鉸(該端永遠彈性)">
+    <label>降伏後轉角勁度 R (${unitOf('moment')}/rad)</label>
+    <input id="bh_r" type="number" step="any" placeholder="留空=不設塑鉸(該端永遠彈性)">
+    <div class="row2"><button id="bh_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bh_back">返回</button></div>
+    <button id="bh_clear" style="width:100%;margin-top:0.6rem;background:#dc2626;color:white;">清除這批桿件在套用範圍內的塑鉸設定</button>
+  </fieldset>`;
+  document.getElementById('bh_back').onclick = renderMultiSelectPanel;
+  document.getElementById('bh_apply').onclick = () => {
+    const scope = document.getElementById('bh_scope').value;
+    const mpRaw = document.getElementById('bh_mp').value;
+    const rRaw = document.getElementById('bh_r').value;
+    const mp = mpRaw === '' ? null : toSI('moment', parseFloat(mpRaw));
+    const r = rRaw === '' ? null : toSI('moment', parseFloat(rRaw));
+    let n = 0;
+    for (const id of memberIds) {
+      const m = model.members.find(x => x.id === id);
+      if (!m || m.member_type !== 'frame') continue;
+      if (scope === 'both' || scope === 'i') { m.Mp_i = mp; m.R_post_yield_i = r; }
+      if (scope === 'both' || scope === 'j') { m.Mp_j = mp; m.R_post_yield_j = r; }
+      n++;
+    }
+    setStatus('已套用塑鉸容量到 ' + n + ' 根桿件(' + (scope === 'both' ? '兩端' : scope === 'i' ? '只i端' : '只j端') + ')');
+    clearMultiSelection();
+  };
+  document.getElementById('bh_clear').onclick = () => {
+    const scope = document.getElementById('bh_scope').value;
+    let n = 0;
+    for (const id of memberIds) {
+      const m = model.members.find(x => x.id === id);
+      if (!m || m.member_type !== 'frame') continue;
+      if (scope === 'both' || scope === 'i') { m.Mp_i = null; m.R_post_yield_i = null; }
+      if (scope === 'both' || scope === 'j') { m.Mp_j = null; m.R_post_yield_j = null; }
+      n++;
+    }
+    setStatus('已清除 ' + n + ' 根桿件的塑鉸設定(' + (scope === 'both' ? '兩端' : scope === 'i' ? '只i端' : '只j端') + ')');
     clearMultiSelection();
   };
 }
