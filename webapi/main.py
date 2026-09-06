@@ -153,12 +153,13 @@ def _solve_pushover(payload: FrameIn):
             raise HTTPException(status_code=400, detail=f"重力預載階段求解失敗: {e}")
 
     try:
-        history_u, history_F, event_log, hs_final, mechanism = run_pushover(
+        history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
             f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
             target_total=payload.pushover_target, d_nominal=payload.pushover_step,
             base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
             use_pdelta=payload.pushover_use_pdelta,
             mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
+            include_snapshots=True,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -178,6 +179,17 @@ def _solve_pushover(payload: FrameIn):
          "yielded": [[mid, end_idx] for mid, end_idx in ev['yielded']]}
         for ev in event_log
     ]
+    # 逐步回放用: 每一步(跟history_u/history_F逐一對應, 已經是純Python
+    # list/float, 不含inf)的桿件端點力+塑鉸狀態。member_forces的key
+    # 統一轉成字串(JSON物件的key本來就只能是字串, 跟hinge_summary同一個
+    #處理方式)。
+    snapshots_out = [
+        {
+            "member_forces": {str(mid): f for mid, f in snap['member_forces'].items()},
+            "hinge_states": {str(mid): hs for mid, hs in snap['hinge_states'].items()},
+        }
+        for snap in snapshots
+    ]
 
     return {
         "analysis_type": "pushover",
@@ -186,6 +198,7 @@ def _solve_pushover(payload: FrameIn):
         "event_log": event_log_out,
         "mechanism_reached": bool(mechanism),
         "hinge_summary": hinge_summary,
+        "history_snapshots": snapshots_out,
     }
 
 

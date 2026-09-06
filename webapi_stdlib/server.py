@@ -119,12 +119,13 @@ def _solve_pushover_payload(payload: dict) -> dict:
     if has_gravity_loads:
         initial_cum_forces, _ = apply_gravity(f, hinge_states)
 
-    history_u, history_F, event_log, hs_final, mechanism = run_pushover(
+    history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
         f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
         target_total=target, d_nominal=step,
         base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
         use_pdelta=payload.get("pushover_use_pdelta", False),
         mechanism_ratio_limit=payload.get("pushover_mechanism_ratio_limit", 1e-8),
+        include_snapshots=True,
     )
 
     hinge_summary = {
@@ -142,6 +143,13 @@ def _solve_pushover_payload(payload: dict) -> dict:
          "yielded": [[mid, end_idx] for mid, end_idx in ev["yielded"]]}
         for ev in event_log
     ]
+    snapshots_out = [
+        {
+            "member_forces": {str(mid): f for mid, f in snap["member_forces"].items()},
+            "hinge_states": {str(mid): hs for mid, hs in snap["hinge_states"].items()},
+        }
+        for snap in snapshots
+    ]
 
     return {
         "analysis_type": "pushover",
@@ -150,6 +158,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         "event_log": event_log_out,
         "mechanism_reached": bool(mechanism),
         "hinge_summary": hinge_summary,
+        "history_snapshots": snapshots_out,
     }
 
 

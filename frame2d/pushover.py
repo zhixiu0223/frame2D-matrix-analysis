@@ -237,10 +237,21 @@ def apply_gravity(frame, hinge_states):
     return cum_forces, result
 
 
+def _snapshot(cum_forces, hinge_states):
+    """給定目前的cum_forces跟hinge_states, 回傳一份跟numpy/HingeState物件
+    完全脫鉤的純Python/list快照(不會被之後的原地修改牽動)——這是逐步
+    回放要顯示"當下彎矩分佈/塑鉸狀態"的資料來源。"""
+    return {
+        'member_forces': {mid: [float(v) for v in f] for mid, f in cum_forces.items()},
+        'hinge_states': {mid: {'yielded': list(hs.yielded), 'theta_p': [float(t) for t in hs.theta_p]}
+                          for mid, hs in hinge_states.items()},
+    }
+
+
 def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                   d_nominal, base_reaction_dofs, initial_cum_forces=None,
                   use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000,
-                  include_final_displacement=False):
+                  include_final_displacement=False, include_snapshots=False):
     """位移控制的遞增側推主迴圈。
 
     frame: 已定義節點/桿件/支承的Frame2D(側推的推力來自prescribed_dofs
@@ -267,10 +278,18 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         呼叫方式跟既有測試不受影響。True時額外多回傳最終的絕對位移向量
         u_full_cum(全域DOF編號, 跟frame.dofs_of()對應), 供後續需要畫
         最終變形形狀(例如疊加塑鉸圈圈)的呼叫端使用。
+    include_snapshots: False(預設)時不影響任何既有行為。True時額外多
+        回傳history_snapshots(list, 跟history_u/history_F逐一對應,
+        第0筆是u=0的初始狀態), 每筆是{'member_forces': {member_id:
+        [Fx1,Fy1,M1,Fx2,Fy2,M2]}, 'hinge_states': {member_id:
+        {'yielded':[bool,bool], 'theta_p':[float,float]}}}, 供"逐步
+        回放"這種需要看每一步當下彎矩分佈/塑鉸狀態的功能使用。
 
     回傳: history_u(np.array), history_F(np.array), event_log(list of dict),
         hinge_states(原地更新後的同一組物件), mechanism_reached(bool)
         [, u_full_cum(np.array) -- 只有include_final_displacement=True時]
+        [, history_snapshots(list) -- 只有include_snapshots=True時, 排在
+          u_full_cum後面, 不管include_final_displacement是不是True]
     """
     direction = np.array(direction, dtype=float)
     fixed_dofs = _fixed_dof_set(frame)
@@ -288,6 +307,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     history_F = [0.0]
     event_log = []
     mechanism_reached = False
+    history_snapshots = [_snapshot(cum_forces, hinge_states)] if include_snapshots else None
     u_full_cum = np.zeros(n_total)   # 累積絕對位移, 給_update_theta_p()算樑
                                       # 內部端點真正轉角用(不能只累積增量,
                                       # 因為beam_internal_rotation()的公式
@@ -344,6 +364,8 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             history_u.append(lam)
             history_F.append(F_base)
             event_log.append({'u': lam, 'F': F_base, 'yielded': newly_yielded})
+            if include_snapshots:
+                history_snapshots.append(_snapshot(cum_forces, hinge_states))
         else:
             for mid, df in df_by_member.items():
                 cum_forces[mid] += df
@@ -357,8 +379,12 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
             history_u.append(lam)
             history_F.append(F_base)
+            if include_snapshots:
+                history_snapshots.append(_snapshot(cum_forces, hinge_states))
 
+    result = [np.array(history_u), np.array(history_F), event_log, hinge_states, mechanism_reached]
     if include_final_displacement:
-        return (np.array(history_u), np.array(history_F), event_log,
-                hinge_states, mechanism_reached, u_full_cum)
-    return np.array(history_u), np.array(history_F), event_log, hinge_states, mechanism_reached
+        result.append(u_full_cum)
+    if include_snapshots:
+        result.append(history_snapshots)
+    return tuple(result)
