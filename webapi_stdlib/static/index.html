@@ -96,6 +96,13 @@
   .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
   .deformed-linear-line { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
+  .axisLine { stroke: #334155; stroke-width: 1.5; }
+  .axisTickLine { stroke: #cbd5e1; stroke-width: 1; }
+  .axisTickLabel { font-size: 16px; fill: #64748b; }
+  .axisTitle { font-size: 18px; fill: #334155; font-weight: bold; }
+  .pushoverCurveLine { stroke: #16a34a; stroke-width: 3; fill: none; }
+  .pushoverEventDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
+  .mechanismWarn { font-size: 18px; fill: #dc2626; font-weight: bold; }
   .diagram-fill { fill: rgba(37, 99, 235, 0.22); stroke: #2563eb; stroke-width: 1; }
   .diagram-fill.M { fill: rgba(220, 38, 38, 0.20); stroke: #dc2626; }
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
@@ -144,9 +151,22 @@
       <label class="snapLabel">分析<select id="analysisType" style="width:6.5rem;">
         <option value="linear">線性</option>
         <option value="pdelta">P-Delta</option>
+        <option value="pushover">Pushover</option>
       </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
+    </div>
+
+    <div id="pushoverConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel">控制節點<input id="pv_node" type="number" step="1" style="width:4rem;" placeholder="例如1"></label>
+      <label class="snapLabel">方向<select id="pv_dir" style="width:4rem;">
+        <option value="x">水平(x)</option>
+        <option value="y">垂直(y)</option>
+      </select></label>
+      <label class="snapLabel">目標位移<input id="pv_target" type="number" step="any" style="width:5rem;"></label>
+      <label class="snapLabel">步長<input id="pv_step" type="number" step="any" style="width:5rem;"></label>
+      <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> 同時考慮P-Delta</label>
+      <p class="hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。</p>
     </div>
 
     <!-- 視圖切換+疊加外力+縮放: 之前改成永遠顯示、不放進選單裡, 是
@@ -162,6 +182,7 @@
       <button data-view="N" class="viewBtn">N 圖(軸力)</button>
       <button data-view="V" class="viewBtn">V 圖(剪力)</button>
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
+      <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <span class="sep-v"></span>
       <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
       <label class="snapLabel"><input type="checkbox" id="overlayDimsToggle" checked>顯示尺寸/斷面</label>
@@ -722,6 +743,12 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
+  if (viewMode === 'pushover_curve') {
+    // 容量曲線是完全不同性質的圖(u vs F的歷程, 不是空間座標), 不套用
+    // 結構視圖那一套camera平移縮放/格線, 直接畫在固定的overlay圖層上。
+    drawPushoverCurve();
+    return;
+  }
   const t = getTransform(PAD_BY_VIEW[viewMode]);
   debugLog(`RENDER nodes=${model.nodes.length} ${model.nodes.map(n=>`N${n.id}(${n.x},${n.y})`).join(',')} | t={scale:${t.scale.toFixed(2)},cx:${t.cx.toFixed(2)},cy:${t.cy.toFixed(2)}} | camera={x:${camera.x.toFixed(1)},y:${camera.y.toFixed(1)},k:${camera.k.toFixed(2)}}`);
   if (document.getElementById('showGridToggle').checked) drawGrid(t);
@@ -757,6 +784,82 @@ function render() {
 // 兩端有小垂直/水平止線+置中的尺寸文字), 加上每根桿件旁邊標示目前
 // 用的斷面名稱 —— 這樣疊加在N/V/M/變形圖上時, 不用切回結構視圖也
 // 能看出整體大小跟每根桿件的斷面配置。
+// 容量曲線(Pushover的base shear vs 控制點位移): 完全不是空間座標圖,
+// 直接畫在固定螢幕座標的overlay圖層上, 不套用結構視圖那一套camera
+// 平移縮放。
+function drawPushoverCurve() {
+  if (!lastResult || lastResult.analysis_type !== 'pushover') {
+    drawNeedSolveMsg();
+    return;
+  }
+  const du = unitOf('disp'), fu = unitOf('force');
+  const uDisp = lastResult.history_u.map(v => fromSI('disp', v));
+  const FDisp = lastResult.history_F.map(v => fromSI('force', v));
+  const maxU = Math.max(...uDisp, 1e-9);
+  const maxF = Math.max(...FDisp, 1e-9);
+
+  const marginL = 100, marginR = 40, marginT = 70, marginB = 90;
+  const chartW = VB_W - marginL - marginR;
+  const chartH = VB_H - marginT - marginB;
+  const sx = (v) => marginL + (v / maxU) * chartW;
+  const sy = (v) => (VB_H - marginB) - (v / maxF) * chartH;
+
+  putOverlay(el('line', {x1: marginL, y1: VB_H - marginB, x2: marginL + chartW, y2: VB_H - marginB, class: 'axisLine'}));
+  putOverlay(el('line', {x1: marginL, y1: marginT, x2: marginL, y2: VB_H - marginB, class: 'axisLine'}));
+
+  // 5等分格線+刻度值(兩軸各自獨立比例, 不是空間格線, 用固定5等分
+  // 就好, 不用像結構圖那套格線抓「好看的間距」)
+  for (let i = 0; i <= 5; i++) {
+    const uVal = maxU * i / 5, fVal = maxF * i / 5;
+    const gx = sx(uVal), gy = sy(fVal);
+    putOverlay(el('line', {x1: gx, y1: marginT, x2: gx, y2: VB_H - marginB, class: 'axisTickLine'}));
+    putOverlay(el('line', {x1: marginL, y1: gy, x2: marginL + chartW, y2: gy, class: 'axisTickLine'}));
+    const tx = el('text', {x: gx, y: VB_H - marginB + 22, 'text-anchor': 'middle', class: 'axisTickLabel'});
+    tx.textContent = uVal.toFixed(3);
+    putOverlay(tx);
+    const ty = el('text', {x: marginL - 10, y: gy + 5, 'text-anchor': 'end', class: 'axisTickLabel'});
+    ty.textContent = fVal.toFixed(1);
+    putOverlay(ty);
+  }
+
+  const titleX = el('text', {x: marginL + chartW / 2, y: VB_H - marginB + 55, 'text-anchor': 'middle', class: 'axisTitle'});
+  titleX.textContent = `控制點位移 (${du})`;
+  putOverlay(titleX);
+  const titleY = el('text', {
+    x: 26, y: marginT + chartH / 2, 'text-anchor': 'middle', class: 'axisTitle',
+    transform: `rotate(-90, 26, ${marginT + chartH / 2})`,
+  });
+  titleY.textContent = `底剪力 (${fu})`;
+  putOverlay(titleY);
+
+  let pts = '';
+  for (let i = 0; i < uDisp.length; i++) pts += `${sx(uDisp[i])},${sy(FDisp[i])} `;
+  putOverlay(el('polyline', {points: pts.trim(), class: 'pushoverCurveLine'}));
+
+  // 每個降伏事件用紅點標出來, 滑鼠移上去(title)可以看是哪根桿件哪一端
+  for (const ev of lastResult.event_log) {
+    const cx = sx(fromSI('disp', ev.u)), cy = sy(fromSI('force', ev.F));
+    const dot = el('circle', {cx, cy, r: 6, class: 'pushoverEventDot'});
+    const title = el('title', {});
+    title.textContent = ev.yielded.map(([mid, endIdx]) => `M${mid} 端${endIdx === 0 ? 'i' : 'j'}降伏`).join(', ');
+    dot.appendChild(title);
+    putOverlay(dot);
+  }
+
+  const summary = el('text', {x: marginL, y: 30, class: 'axisTitle'});
+  const lastU = uDisp[uDisp.length - 1], lastF = FDisp[FDisp.length - 1];
+  summary.textContent = `最終位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
+    + `${lastResult.event_log.length}個降伏事件`
+    + (lastResult.mechanism_reached ? '(已形成機構)' : '');
+  putOverlay(summary);
+
+  if (lastResult.mechanism_reached) {
+    const warn = el('text', {x: marginL + chartW, y: 30, 'text-anchor': 'end', class: 'mechanismWarn'});
+    warn.textContent = '⚠ 已達側移機構, 側推中止';
+    putOverlay(warn);
+  }
+}
+
 function drawDimensionsAndSections(t) {
   for (const m of model.members) {
     const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
@@ -3006,22 +3109,58 @@ document.getElementById('btnTogglePostProcess').addEventListener('click', () => 
   bar.classList.toggle('open', willOpen);
   document.getElementById('btnTogglePostProcess').textContent = (willOpen ? '▾' : '▸') + ' 後處理';
 });
+document.getElementById('analysisType').addEventListener('change', (e) => {
+  const isPushover = e.target.value === 'pushover';
+  document.getElementById('pushoverConfigBar').style.display = isPushover ? 'block' : 'none';
+});
+
 document.getElementById('btnSolve').addEventListener('click', async () => {
   sanitizeModel();
   const analysisType = document.getElementById('analysisType').value;
-  setStatus(analysisType === 'pdelta' ? 'P-Delta疊代求解中...' : '求解中...');
+  const isPushover = analysisType === 'pushover';
+
+  let body;
+  if (isPushover) {
+    const controlNode = document.getElementById('pv_node').value;
+    const target = document.getElementById('pv_target').value;
+    const step = document.getElementById('pv_step').value;
+    if (controlNode === '' || target === '' || step === '') {
+      setStatus('Pushover需要填「控制節點」「目標位移」「步長」三個欄位');
+      return;
+    }
+    body = {
+      ...model, analysis_type: 'pushover',
+      pushover_control_node: parseInt(controlNode, 10),
+      pushover_direction: document.getElementById('pv_dir').value,
+      pushover_target: toSI('disp', parseFloat(target)),
+      pushover_step: toSI('disp', parseFloat(step)),
+      pushover_use_pdelta: document.getElementById('pv_pdelta').checked,
+    };
+  } else {
+    // model本身(存檔/匯出用的資料)不夾帶analysis_type/pushover設定,
+    // 只在送出求解請求的當下額外加, 避免「這次怎麼算」的選擇被誤存進
+    // 模型檔案裡(模型描述的是結構本身, 不是算法選擇)。
+    body = {...model, analysis_type: analysisType};
+  }
+
+  setStatus(analysisType === 'pdelta' ? 'P-Delta疊代求解中...' : isPushover ? 'Pushover遞增側推求解中...' : '求解中...');
   try {
     const res = await fetch('/solve', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      // model本身(存檔/匯出用的資料)不夾帶analysis_type, 只在送出求解
-      // 請求的當下額外加這一個欄位, 避免分析類型這種「這次怎麼算」的
-      // 選擇被誤存進模型檔案裡(模型描述的是結構本身, 不是算法選擇)。
-      body: JSON.stringify({...model, analysis_type: analysisType})
+      body: JSON.stringify(body)
     });
     if (!res.ok) { setStatus('API 錯誤: ' + await res.text()); return; }
     lastResult = await res.json();
-    setStatus(pdeltaStatusSuffix('完成'));
-    renderTables();
+    document.getElementById('btnViewPushover').style.display = isPushover ? '' : 'none';
+    if (isPushover) {
+      setStatus(pushoverStatusSuffix('完成'));
+      // renderTables()是節點/桿件的「單一狀態」結果表格, pushover回傳
+      // 的是一整條歷程(history_u/F), 沒有nodes/members這兩個欄位,
+      // 直接跳過(呼叫下去會因為lastResult.nodes是undefined而壞掉)。
+    } else {
+      setStatus(pdeltaStatusSuffix('完成'));
+      renderTables();
+    }
     // Solve成功後自動展開「後處理」區塊, 符合「建模->分析->看結果」
     // 的流程, 不用使用者自己再點一下才能切視圖看結果。
     const bar = document.getElementById('viewBar');
@@ -3029,9 +3168,24 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
       bar.classList.add('open');
       document.getElementById('btnTogglePostProcess').textContent = '▾ 後處理';
     }
+    if (isPushover) {
+      document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+      document.getElementById('btnViewPushover').classList.add('active');
+      viewMode = 'pushover_curve';
+    }
     render();
   } catch (e) { setStatus('連線失敗: ' + e.message); }
 });
+
+function pushoverStatusSuffix(base) {
+  const r = lastResult;
+  if (!r || r.analysis_type !== 'pushover') return base;
+  const du = unitOf('disp'), fu = unitOf('force');
+  const lastU = fromSI('disp', r.history_u[r.history_u.length - 1]);
+  const lastF = fromSI('force', r.history_F[r.history_F.length - 1]);
+  return `${base} ｜ 位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
+    + `${r.event_log.length}個降伏事件` + (r.mechanism_reached ? '(⚠已形成機構, 側推中止)' : '');
+}
 
 function pdeltaStatusSuffix(base) {
   // P-Delta求解成功後, 在狀態列直接顯示線性vs P-Delta的比較數字
@@ -3055,6 +3209,12 @@ function setStatus(s) {
 }
 
 function renderTables() {
+  if (!lastResult || lastResult.analysis_type === 'pushover') return;
+  // pushover回傳的是一整條歷程(history_u/F), 沒有nodes/members這兩個
+  // 陣列, 這個表格(單一狀態的節點/桿件結果)對它沒有意義, 直接跳過——
+  // 不只是solve按鈕那個呼叫點會跳過, 任何呼叫renderTables()的地方
+  // (例如切換顯示單位時)都要跳過, 所以在這裡統一擋, 不是在每個呼叫點
+  // 個別判斷。
   const dispUnit = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
   const nodeThead = document.querySelector('#nodeTable thead tr');
   nodeThead.innerHTML = `<th>node</th><th>ux(${dispUnit})</th><th>uy(${dispUnit})</th><th>rot</th><th>Rx(${fu})</th><th>Ry(${fu})</th><th>M(${mu})</th>`;
