@@ -95,6 +95,7 @@
   .member-line.faint { stroke: #cbd5e1; stroke-width: 1.5; }
   .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
+  .deformed-linear-line { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
   .diagram-fill { fill: rgba(37, 99, 235, 0.22); stroke: #2563eb; stroke-width: 1; }
   .diagram-fill.M { fill: rgba(220, 38, 38, 0.20); stroke: #dc2626; }
   .load-arrow { stroke: #dc2626; stroke-width: 2; }
@@ -140,6 +141,10 @@
       <button class="menuBtn" data-menu="query">🔎 查詢</button>
       <button class="menuBtn" data-menu="view">👁 顯示設定</button>
       <span class="sep-v"></span>
+      <label class="snapLabel">分析<select id="analysisType" style="width:6.5rem;">
+        <option value="linear">線性</option>
+        <option value="pdelta">P-Delta</option>
+      </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
     </div>
@@ -1545,6 +1550,23 @@ function drawDeformed(t) {
   const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#ea580c;`});
   lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
   putOverlay(lbl);
+  if (lastResult.deformed_linear) {
+    // P-Delta求解時才會有這個欄位: 用同一個deform_scale畫線性基準
+    // (灰色虛線, 在下層), 跟上面彩色實線的P-Delta變形疊在一起,
+    // 兩者差距就是真正的P-Delta放大效果, 不是各自縮放後看起來一樣大。
+    const lbl2 = el('text', {x: 42, y: 76, style: `font-size:${gridLabelSize}px;fill:#64748b;`});
+    lbl2.textContent = '虛線＝線性基準(同一放大倍率)';
+    putOverlay(lbl2);
+    for (const mid in lastResult.deformed_linear) {
+      const d = lastResult.deformed_linear[mid];
+      let pts = '';
+      for (let i = 0; i < d.X.length; i++) {
+        const [x, y] = toScreen(d.X[i], d.Y[i], t);
+        pts += `${x},${y} `;
+      }
+      put(el('polyline', {points: pts.trim(), class: 'deformed-linear-line'}));
+    }
+  }
   for (const mid in lastResult.deformed) {
     const d = lastResult.deformed[mid];
     let pts = '';
@@ -2953,14 +2975,19 @@ document.getElementById('btnTogglePostProcess').addEventListener('click', () => 
 });
 document.getElementById('btnSolve').addEventListener('click', async () => {
   sanitizeModel();
-  setStatus('求解中...');
+  const analysisType = document.getElementById('analysisType').value;
+  setStatus(analysisType === 'pdelta' ? 'P-Delta疊代求解中...' : '求解中...');
   try {
     const res = await fetch('/solve', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(model)
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      // model本身(存檔/匯出用的資料)不夾帶analysis_type, 只在送出求解
+      // 請求的當下額外加這一個欄位, 避免分析類型這種「這次怎麼算」的
+      // 選擇被誤存進模型檔案裡(模型描述的是結構本身, 不是算法選擇)。
+      body: JSON.stringify({...model, analysis_type: analysisType})
     });
     if (!res.ok) { setStatus('API 錯誤: ' + await res.text()); return; }
     lastResult = await res.json();
-    setStatus('完成');
+    setStatus(pdeltaStatusSuffix('完成'));
     renderTables();
     // Solve成功後自動展開「後處理」區塊, 符合「建模->分析->看結果」
     // 的流程, 不用使用者自己再點一下才能切視圖看結果。
@@ -2972,6 +2999,19 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
     render();
   } catch (e) { setStatus('連線失敗: ' + e.message); }
 });
+
+function pdeltaStatusSuffix(base) {
+  // P-Delta求解成功後, 在狀態列直接顯示線性vs P-Delta的比較數字
+  // ("有感覺的後處理", 不用另外開表格才看得到)。線性solve時
+  // lastResult.pdelta_comparison不存在, 原樣回傳base不受影響。
+  const c = lastResult && lastResult.pdelta_comparison;
+  if (!c) return base;
+  const du = unitOf('disp');
+  const amp = c.amplification == null ? 'N/A' : c.amplification.toFixed(3);
+  return `${base} ｜ 最大位移: 線性 ${fromSI('disp', c.max_disp_linear).toFixed(3)}${du} `
+    + `→ P-Delta ${fromSI('disp', c.max_disp_pdelta).toFixed(3)}${du}`
+    + `(放大 ×${amp}, 疊代${c.iterations}次)`;
+}
 
 function setStatus(s) {
   document.getElementById('status').textContent = s;

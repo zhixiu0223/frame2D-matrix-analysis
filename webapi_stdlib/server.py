@@ -17,9 +17,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from frame2d import Frame2D, solve
+from frame2d.dofmanager import solve_pdelta
 from frame2d.postprocess import member_internal_forces
 
-from .diagrams import build_diagrams_and_deformed
+from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
 from .query_point import query_point
@@ -58,16 +59,26 @@ def _build_frame(payload: dict) -> Frame2D:
     return f
 
 
-def _build_and_solve(payload: dict):
+def _build_and_solve(payload: dict, analysis_type: str = None):
     """_build_frame()+solve() 的共用包裝, 統一處理「模型內有殘留參照」
     這類錯誤(例如分割/刪除桿件後, 還留著指向舊桿件編號的均佈載重),
     這種情況下 frame2d 底層會丟出 KeyError(9) 這種只印一個數字的
     錯誤, 前端顯示出來完全看不懂在講什麼, 這裡轉成 ValueError 帶
     看得懂的訊息(KeyError 的 str() 只會印裸的 key 值, ValueError
-    才會把完整句子印出來)。"""
+    才會把完整句子印出來)。solve_pdelta()疊代不收斂丟出的RuntimeError
+    原樣往上冒出去, do_POST()那層統一當成400處理。
+
+    analysis_type: None時用payload.get('analysis_type', 'linear');
+    呼叫端可以明確覆寫(見_solve_payload裡pdelta額外算一次線性基準時
+    的用法)。"""
+    if analysis_type is None:
+        analysis_type = payload.get("analysis_type", "linear")
     f = _build_frame(payload)
     try:
-        result = solve(f)
+        if analysis_type == "pdelta":
+            result = solve_pdelta(f)
+        else:
+            result = solve(f)
     except KeyError as e:
         raise ValueError(
             f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照"
@@ -107,14 +118,35 @@ def _solve_payload(payload: dict) -> dict:
         })
 
     diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
+    analysis_type = payload.get("analysis_type", "linear")
 
-    return {
+    out = {
         "nodes": node_out,
         "members": member_out,
         "diagrams": diagrams,
         "deformed": deformed,
         "deform_scale": deform_scale,
+        "analysis_type": analysis_type,
     }
+
+    if analysis_type == "pdelta":
+        # 額外算一次純線性基準(P=0.0)做對照, 理由跟webapi/main.py同一段
+        # 註解一致: 線性理論上比pdelta更不容易發散, 這裡不特別catch,
+        # 讓例外照do_POST()既有的統一400處理走。
+        _, result_linear = _build_and_solve(payload, analysis_type="linear")
+        max_disp_linear = result_linear.max_displacement()
+        max_disp_pdelta = result.max_displacement()
+        v_linear = max_disp_linear.value if max_disp_linear is not None else 0.0
+        v_pdelta = max_disp_pdelta.value if max_disp_pdelta is not None else 0.0
+        out["pdelta_comparison"] = {
+            "max_disp_linear": float(v_linear),
+            "max_disp_pdelta": float(v_pdelta),
+            "amplification": float(v_pdelta / v_linear) if v_linear > 1e-12 else None,
+            "iterations": result.pdelta_iterations,
+        }
+        out["deformed_linear"] = build_deformed_with_scale(f, result_linear, deform_scale)
+
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):

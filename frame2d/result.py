@@ -29,6 +29,10 @@ class SolveResult:
                                         # 見query.py; 舊版solve()的呼叫端如果只用
                                         # displacements/reactions/member_results,
                                         # 不受這個新欄位影響)
+    pdelta_iterations: int = None      # solve_pdelta()疊代收斂用了幾輪(見
+                                        # dofmanager.py); solve()/solve_dofmanager()
+                                        # 呼叫端不會設定這個欄位, 維持None,
+                                        # 純新增欄位不影響任何既有呼叫端
 
     def member(self, member_id):
         """回傳這根桿件的便利查詢物件(見query.MemberQuery), 例如

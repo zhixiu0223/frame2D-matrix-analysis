@@ -384,6 +384,7 @@ def solve_pdelta(frame: Frame2D, max_iterations: int = 20, tol: float = 1e-6) ->
             max_rel_change = max(max_rel_change, abs(N_new - N_old) / denom)
 
         if not newly_slack and max_rel_change < tol:
+            result.pdelta_iterations = iteration + 1
             return result
 
         slack_cables |= newly_slack

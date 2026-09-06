@@ -13,10 +13,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from frame2d import Frame2D, solve
+from frame2d.dofmanager import solve_pdelta
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
-from .diagrams import build_diagrams_and_deformed
+from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
 from .query_point import query_point
@@ -63,9 +64,9 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     return f
 
 
-def _build_and_solve(payload: FrameIn):
-    """_build_frame()+solve() 的共用包裝, 統一處理兩類已知會從solve()
-    冒出來的錯誤:
+def _build_and_solve(payload: FrameIn, analysis_type: str = None):
+    """_build_frame()+solve() 的共用包裝, 統一處理已知會從solve()冒出來
+    的錯誤:
     1. KeyError: 「模型內有殘留的參照」(例如分割/刪除桿件後, 還留著
        指向舊桿件編號的均佈載重), frame2d底層會丟出KeyError(9)這種
        只印一個數字的錯誤, 前端顯示出來完全看不懂在講什麼, 這裡統一
@@ -74,10 +75,21 @@ def _build_and_solve(payload: FrameIn):
        載重(均佈載重/桿件集中力)」這個力學上的限制, 會丟出說明清楚
        的ValueError(2026-09修正, 見frame2d/dofmanager.py) —— 這個
        訊息本身已經寫得夠清楚, 直接原樣轉成400回傳, 不用像KeyError
-       那樣另外翻譯。"""
+       那樣另外翻譯。
+    3. RuntimeError: solve_pdelta()疊代不收斂(通常是軸力接近挫屈載重),
+       同樣直接把清楚的錯誤訊息轉成400。
+
+    analysis_type: None(預設)時用payload.analysis_type; 呼叫端(例如
+    /solve在analysis_type='pdelta'時額外算一次線性基準做比較)可以明確
+    覆寫, 不用複製一份payload。"""
+    if analysis_type is None:
+        analysis_type = payload.analysis_type
     f = _build_frame(payload)
     try:
-        result = solve(f)
+        if analysis_type == 'pdelta':
+            result = solve_pdelta(f)
+        else:
+            result = solve(f)
     except KeyError as e:
         raise HTTPException(
             status_code=400,
@@ -85,7 +97,7 @@ def _build_and_solve(payload: FrameIn):
                    f"(常見情況: 分割或刪除桿件後, 均佈載重/桿件集中力"
                    f"還留著指向舊桿件編號), 請檢查並移除",
         )
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return f, result
 
@@ -124,12 +136,37 @@ def solve_frame(payload: FrameIn):
     diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
 
     solve_out = SolveOut(nodes=node_out, members=member_out)
-    return {
+    out = {
         **solve_out.model_dump(),
         "diagrams": diagrams,
         "deformed": deformed,
         "deform_scale": deform_scale,
+        "analysis_type": payload.analysis_type,
     }
+
+    if payload.analysis_type == 'pdelta':
+        # 額外算一次純線性基準(P=0.0)做對照 -- 這裡不catch例外, 因為
+        # 前面的_build_and_solve(payload)已經用同一個f、同一個'pdelta'
+        # 跑過一次, 線性(P全部為0)理論上比pdelta更不容易發散/機構,
+        # 如果連線性都解不出來, 表示模型本身就有問題, 讓例外往上冒出去
+        # 用跟上面同一套HTTPException轉換邏輯處理即可。
+        _, result_linear = _build_and_solve(payload, analysis_type='linear')
+        max_disp_linear = result_linear.max_displacement()
+        max_disp_pdelta = result.max_displacement()
+        v_linear = max_disp_linear.value if max_disp_linear is not None else 0.0
+        v_pdelta = max_disp_pdelta.value if max_disp_pdelta is not None else 0.0
+        out["pdelta_comparison"] = {
+            "max_disp_linear": float(v_linear),
+            "max_disp_pdelta": float(v_pdelta),
+            "amplification": float(v_pdelta / v_linear) if v_linear > 1e-12 else None,
+            "iterations": result.pdelta_iterations,
+        }
+        # 疊圖用同一個deform_scale(來自pdelta結果, 通常較大)畫線性變形,
+        # 這樣兩條線畫在同一張圖上, 大小差異才是真的P-Delta放大效果,
+        # 不是各自套用自動縮放後看起來一樣大。
+        out["deformed_linear"] = build_deformed_with_scale(f, result_linear, deform_scale)
+
+    return out
 
 
 # ---------------- 存檔 / 讀檔(Save / Save As / Load / 刪除) ----------------

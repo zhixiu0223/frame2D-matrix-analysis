@@ -35,3 +35,13 @@ def build_diagrams_and_deformed(f, result, n_sample=21, target_fraction=0.15):
         deformed[mid] = {"X": [float(v) for v in X], "Y": [float(v) for v in Y]}
 
     return diagrams, deformed, deform_scale
+
+
+def build_deformed_with_scale(f, result, scale, n_sample=21):
+    """用外部指定的scale畫變形圖, 不自動算。定義同webapi/diagrams.py
+    (P-Delta比較時, 線性跟P-Delta要用同一個放大倍率疊圖比較)。"""
+    deformed = {}
+    for mid in f.members:
+        X, Y = member_deformed_shape(f, result, mid, scale=scale, n=n_sample)
+        deformed[mid] = {"X": [float(v) for v in X], "Y": [float(v) for v in Y]}
+    return deformed

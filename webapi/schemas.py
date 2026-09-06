@@ -89,6 +89,10 @@ class FrameIn(BaseModel):
     fbd_only: Optional[bool] = False
     """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
     跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""
+    analysis_type: Literal['linear', 'pdelta'] = 'linear'
+    """'linear'(預設, 完全等同舊行為)或'pdelta'(疊代更新軸力的線性化
+    P-Delta, 見frame2d.dofmanager.solve_pdelta)。舊的呼叫端不帶這個欄位
+    時預設'linear', /solve回傳格式完全不變, 不受影響。"""
 
 
 class NodeResultOut(BaseModel):

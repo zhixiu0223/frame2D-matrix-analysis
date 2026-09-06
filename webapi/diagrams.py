@@ -51,3 +51,16 @@ def build_diagrams_and_deformed(f, result, n_sample=21, target_fraction=0.15):
         deformed[mid] = {"X": [float(v) for v in X], "Y": [float(v) for v in Y]}
 
     return diagrams, deformed, deform_scale
+
+
+def build_deformed_with_scale(f, result, scale, n_sample=21):
+    """跟build_diagrams_and_deformed()的deformed部分一樣, 但用外部指定的
+    scale, 不自動算。用途: P-Delta比較時, 線性跟P-Delta兩個結果要用
+    「同一個」放大倍率畫在同一張圖上疊圖比較, 各自套用自動算出來的scale
+    會導致視覺上都一樣大, 看不出P-Delta真正被放大了多少——這是這個函式
+    存在的原因, 不是重複造輪子。"""
+    deformed = {}
+    for mid in f.members:
+        X, Y = member_deformed_shape(f, result, mid, scale=scale, n=n_sample)
+        deformed[mid] = {"X": [float(v) for v in X], "Y": [float(v) for v in Y]}
+    return deformed
