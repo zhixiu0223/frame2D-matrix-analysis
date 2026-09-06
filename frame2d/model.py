@@ -34,7 +34,14 @@ class Member:
     方便共用組裝程式碼, 不用另外做一套DOF系統。
     release_i/release_j: frame元素專用, 該端是否有內部鉸接(彎矩釋放M=0)。
     用靜力凝縮處理, 不改變DOF系統, 不用切節點就能表示"桿件端點是鉸接,
-    不是剛接"這件事。"""
+    不是剛接"這件事。
+    Mp_i/Mp_j/R_post_yield_i/R_post_yield_j: frame元素專用, 選用的塑性鉸
+    容量(見hinge.py的HingeState)。這是"這根桿件材料能承受多少"的結構性質,
+    跟release不同的地方是release是"永遠沒有勁度", 塑鉸是"降伏前有勁度、
+    降伏後換一個較軟的勁度"——所以這裡只存"容量"這個靜態資料, 不存"目前
+    有沒有降伏"這個分析過程中才會變化的狀態(那個狀態活在HingeState實例
+    裡, 由呼叫端在求解時自己建立/傳入, 不跟著Member這個結構描述走)。
+    預設None時完全不影響任何現有行為, 跟標準彈性frame元素一樣。"""
     id: int
     node_i: int      # 近端節點id
     node_j: int      # 遠端節點id
@@ -42,6 +49,10 @@ class Member:
     member_type: str = 'frame'   # 'frame' 或 'truss' 或 'cable'
     release_i: bool = False
     release_j: bool = False
+    Mp_i: float = None
+    Mp_j: float = None
+    R_post_yield_i: float = None
+    R_post_yield_j: float = None
 
 
 @dataclass
@@ -164,8 +175,11 @@ class Frame2D:
         return self
 
     def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame',
-                   release_i: bool = False, release_j: bool = False):
-        self.members[id] = Member(id, node_i, node_j, section, member_type, release_i, release_j)
+                   release_i: bool = False, release_j: bool = False,
+                   Mp_i: float = None, Mp_j: float = None,
+                   R_post_yield_i: float = None, R_post_yield_j: float = None):
+        self.members[id] = Member(id, node_i, node_j, section, member_type, release_i, release_j,
+                                   Mp_i, Mp_j, R_post_yield_i, R_post_yield_j)
         return self
 
     def add_truss(self, id: int, node_i: int, node_j: int, section: str):

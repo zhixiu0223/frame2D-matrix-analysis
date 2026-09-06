@@ -29,6 +29,7 @@ import numpy as np
 
 from .model import Frame2D
 from .result import MemberResult, SolveResult
+from .hinge import full_6x6_with_hinge, HingeState
 from .elements import (
     member_geometry,
     member_stiffness_local,
@@ -69,7 +70,8 @@ def build_dof_map(frame: Frame2D):
     return member_dofs, n_node_dof, n_extra_dof
 
 
-def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict = None) -> SolveResult:
+def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict = None,
+                            hinge_states: dict = None) -> SolveResult:
     """跑一次線性求解, slack_cables裡的cable member直接跳過(不貢獻勁度,
     end_forces_local設為0向量), 跟solve.py的_solve_once()是完全獨立寫的
     第二套求解路徑。
@@ -85,6 +87,13 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
     推導release專屬的Kg凝縮公式。這個做法跟portal-frame-pushover
     已用OpenSeesPy驗證過的hinge.py採用同一種簡化(P-Delta的Kg直接疊加,
     不管端點的降伏/釋放狀態), 不是重新發明。
+
+    hinge_states: 可選, {member_id: HingeState} -- 非None且該member_id
+    在字典裡時, 該frame元素改用hinge.full_6x6_with_hinge()組裝(靜力
+    凝聚的含鉸勁度矩陣), 取代標準member_stiffness_local(); 沒被指定的
+    member(包括不在字典裡、或member_type不是'frame')維持標準彈性行為。
+    這是Pushover Phase 2新增的參數, 預設None時完全不影響任何既有呼叫端
+    (solve_pdelta()目前還沒有用到這個參數, 塑鉸+P-Delta的組合是下一步)。
     """
     member_dofs, n_node_dof, n_extra_dof = build_dof_map(frame)
     n = n_node_dof + n_extra_dof
@@ -113,7 +122,11 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
             k_local = member_stiffness_local_truss(section.E, section.A, L)
         else:
             P = 0.0 if member_axial is None else member_axial.get(mid, 0.0)
-            k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)  # 標準版, release=False,False
+            if hinge_states is not None and mid in hinge_states:
+                k_local = full_6x6_with_hinge(section.E, section.A, section.I, L,
+                                               hinge_states[mid], P=P)
+            else:
+                k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)  # 標準版, release=False,False
 
         k_global = T.T @ k_local @ T
         idx = np.array(member_dofs[mid])
@@ -271,7 +284,11 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
             k_local = member_stiffness_local_truss(section.E, section.A, L)
         else:
             P = 0.0 if member_axial is None else member_axial.get(mid, 0.0)
-            k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)
+            if hinge_states is not None and mid in hinge_states:
+                k_local = full_6x6_with_hinge(section.E, section.A, section.I, L,
+                                               hinge_states[mid], P=P)
+            else:
+                k_local = member_stiffness_local(section.E, section.I, section.A, L, P=P)
         f_FE = fixed_end_local.get(mid, np.zeros(6))
         end_forces_local = k_local @ u_local - f_FE
         member_results[mid] = MemberResult(
@@ -393,3 +410,40 @@ def solve_pdelta(frame: Frame2D, max_iterations: int = 20, tol: float = 1e-6) ->
     raise RuntimeError(
         f"P-Delta疊代超過{max_iterations}次仍未收斂(軸力持續變化或cable持續"
         "鬆弛) -- 可能是軸力已經接近挫屈載重、或模型設計有問題, 請檢查。")
+
+
+def initial_hinge_states(frame: Frame2D) -> dict:
+    """掃描frame裡所有Mp_i不是None的frame元素, 幫每一根建一個全新的
+    HingeState(未降伏、塑性轉角0)。Mp_i是None的member(絕大多數,
+    沒設定塑鉸容量的一般彈性桿件)不會出現在回傳的字典裡。
+
+    這只是「建立初始狀態」的便利函式, 純函式、不修改frame也不做任何
+    求解——遞增側推時該怎麼逐步更新這個字典(降伏判斷、事件到事件)
+    是下一階段的工作, 這裡先提供這個起點。"""
+    hinge_states = {}
+    for mid, m in frame.members.items():
+        if m.Mp_i is None:
+            continue
+        hinge_states[mid] = HingeState(
+            Mp1=m.Mp_i, Mp2=m.Mp_j,
+            R_post_yield_1=m.R_post_yield_i, R_post_yield_2=m.R_post_yield_j,
+        )
+    return hinge_states
+
+
+def solve_with_hinges(frame: Frame2D, hinge_states: dict = None) -> SolveResult:
+    """單次求解(不遞增、不迭代), 套用給定的塑鉸狀態(hinge_states裡的
+    HingeState.yielded/current_R會直接反映在勁度矩陣裡)。
+
+    hinge_states為None時, 自動用initial_hinge_states(frame)建立一組全新
+    (全部未降伏)的狀態, 這種情況下等同於"帶塑鉸容量定義, 但目前都還在
+    彈性範圍內"的解, 應該跟solve_dofmanager()的結果非常接近(差異只來自
+    RIGID_FACTOR是很大但不是無限大的數值近似, 見hinge.py)。
+
+    這是Pushover Phase 2的building block: 給定「目前結構在哪個鉸狀態」,
+    解一次線性系統。遞增側推需要的「怎麼逐步找到下一個降伏事件、怎麼
+    更新這個字典」是Phase 3(下一階段)要做的載重控制迴圈, 這裡還沒有。
+    """
+    if hinge_states is None:
+        hinge_states = initial_hinge_states(frame)
+    return _solve_once_dofmanager(frame, slack_cables=set(), hinge_states=hinge_states)
