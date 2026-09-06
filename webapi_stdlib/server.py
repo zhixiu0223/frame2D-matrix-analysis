@@ -129,7 +129,8 @@ def _solve_pushover_payload(payload: dict) -> dict:
 
     hinge_summary = {
         str(mid): {
-            "Mp": [float(hs.Mp[0]), float(hs.Mp[1])],
+            "Mp": [None if math.isinf(hs.Mp[0]) else float(hs.Mp[0]),
+                   None if math.isinf(hs.Mp[1]) else float(hs.Mp[1])],
             "yielded": [bool(hs.yielded[0]), bool(hs.yielded[1])],
             "theta_p": [float(hs.theta_p[0]), float(hs.theta_p[1])],
             "performance_level": [hs.performance_level(0), hs.performance_level(1)],
