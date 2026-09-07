@@ -78,7 +78,16 @@
   .dropdownSection[open] { border-color: #93c5fd; }
   .dropdownBody { display: flex; gap: 0.3rem; flex-wrap: wrap; align-items: center; padding: 0 0.6rem 0.5rem; }
 
-  #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; }
+  #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; position: relative; }
+  #canvasWrap.fullscreenMode {
+    position: fixed; inset: 0; z-index: 10000; margin: 0; border: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #canvasWrap.fullscreenMode svg { width: 100%; height: 100%; max-height: 100vh; }
+  #btnFullscreenClose {
+    position: absolute; top: 0.6rem; right: 0.6rem; z-index: 10001;
+    background: #1f2937; color: white; border-radius: 6px; padding: 0.5rem 0.8rem;
+  }
   svg { width: 100%; height: auto; display: block; touch-action: none; }
   .node-circle { fill: #1f2937; stroke: #1f2937; stroke-width: 2; cursor: grab; }
   .node-circle.selected { fill: #2563eb; stroke: #2563eb; }
@@ -204,6 +213,7 @@
       <button id="btnZoomIn">🔍+</button>
       <button id="btnZoomOut">🔍-</button>
       <button id="btnZoomReset">⟲ 原大小</button>
+      <button id="btnFullscreen">⛶ 展開全螢幕</button>
     </div>
 
     <div id="menuPanel">
@@ -333,6 +343,7 @@
   </div>
 
   <div id="canvasWrap">
+    <button id="btnFullscreenClose" style="display:none;">✕ 關閉全螢幕</button>
     <svg id="svg" viewBox="0 0 800 1100">
       <g id="camera"><g id="content"></g></g>
       <g id="overlay"></g>
@@ -629,6 +640,25 @@ function zoomAt(p, factor) {
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1.3));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt({x: VB_W/2, y: VB_H/2}, 1/1.3));
 document.getElementById('btnZoomReset').addEventListener('click', () => { camera = {x:0,y:0,k:1}; resetTransform(); applyCameraTransform(); scheduleRender(); });
+
+// 展開全螢幕: 不用瀏覽器原生Fullscreen API(在部分手機瀏覽器/嵌入式
+// webview裡支援度不穩定、且需要使用者手勢觸發才能呼叫, 條件比較嚴),
+// 改用CSS把canvasWrap變成蓋滿整個畫面的position:fixed區塊, 各種環境
+// 都能穩定運作。進入全螢幕後畫面本身不會自動重新配置版面(viewBox還是
+// 原本的800x1100), 只是佔滿的螢幕空間變大, 看起來更清楚——這跟真正的
+// Fullscreen API效果類似, 但不依賴瀏覽器支援。
+document.getElementById('btnFullscreen').addEventListener('click', () => {
+  document.getElementById('canvasWrap').classList.add('fullscreenMode');
+  document.getElementById('btnFullscreenClose').style.display = '';
+  resetTransform();
+  scheduleRender();
+});
+document.getElementById('btnFullscreenClose').addEventListener('click', () => {
+  document.getElementById('canvasWrap').classList.remove('fullscreenMode');
+  document.getElementById('btnFullscreenClose').style.display = 'none';
+  resetTransform();
+  scheduleRender();
+});
 svg.addEventListener('wheel', (e) => {
   // 只認「有按著 Ctrl 鍵」的滾輪事件(桌機觸控板雙指縮放的標準訊號)。
   // 這件事很重要: 有些手機瀏覽器在觸控元素設了 touch-action:none 時,
@@ -767,7 +797,13 @@ function render() {
   // 反應「容量曲線那塊怎麼滑都滑不動頁面」真正的根因(不是JS事件裡漏了
   // 什麼判斷式), 每次render()都重新設定一次, 不管viewMode是怎麼被
   // 切換過去的都會生效。
-  svg.style.touchAction = (viewMode === 'pushover_curve') ? 'auto' : 'none';
+  // 容量曲線是固定螢幕座標圖層, 平移對它沒有視覺效果; 逐步回放雖然畫的
+  // 是真正的結構幾何(平移縮放理論上有意義), 但實際使用情境是「拖滑桿
+  // 一步步看, 不太需要一直手動平移」, 使用者反應這個視圖裡滑不動頁面
+  // 反而更困擾——兩者都改成'auto', 放棄單指拖曳平移這個視圖, 換成
+  // 讓瀏覽器原生捲動生效; 要縮放結構還是可以用🔍+/-/原大小這幾個按鈕,
+  // 沒有被這個改動影響。
+  svg.style.touchAction = (viewMode === 'pushover_curve' || viewMode === 'pushover_playback') ? 'auto' : 'none';
   if (viewMode === 'pushover_curve') {
     // 容量曲線是完全不同性質的圖(u vs F的歷程, 不是空間座標), 不套用
     // 結構視圖那一套camera平移縮放/格線, 直接畫在固定的overlay圖層上。
@@ -3198,13 +3234,14 @@ function lineSelect(lp1, lp2) {
 
 // ---------- 畫布事件(節點拖曳 / 新增 / 平移) ----------
 svg.addEventListener('pointerdown', (e) => {
-  if (viewMode === 'pushover_curve') return;
+  if (viewMode === 'pushover_curve' || viewMode === 'pushover_playback') return;
   // 容量曲線是完全畫在固定螢幕座標的overlay圖層(不受camera平移縮放
-  // 影響, 見drawPushoverCurve()), 所以在這個視圖裡用手指平移完全沒有
-  // 視覺效果——但下面這行e.preventDefault()原本會不分viewMode一律
-  // 擋掉瀏覽器原生的觸控捲動, 導致使用者在容量曲線這塊區域怎麼滑都
-  // 滑不動頁面(滑到邊邊、碰到SVG範圍外才滑得動)。這裡直接跳過整個
-  // 平移/新增/框選的處理, 讓瀏覽器原生的滾動正常運作。
+  // 影響, 見drawPushoverCurve()), 逐步回放則是使用者反應「用手指平移
+  // 反而讓頁面滑不動, 比較困擾」——兩者都跳過這裡的自訂平移邏輯,
+  // 改讓瀏覽器原生捲動生效(對應render()裡把touch-action設成'auto')。
+  // 如果JS這裡繼續搶著設定panState、去改camera.x/y, 會跟瀏覽器原生
+  // 捲動同時發生、互相打架, 所以要跟touch-action的改動一起做, 不能
+  // 只改CSS不改這裡。
   if (activePointers.size >= 2) return;
   if (dragNodeId !== null) return;
   e.preventDefault();
