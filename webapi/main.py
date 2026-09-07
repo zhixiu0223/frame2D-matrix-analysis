@@ -115,11 +115,28 @@ def _solve_pushover(payload: FrameIn):
     容量曲線(history_u/history_F)、每個降伏事件的清單、最終每個塑鉸的
     狀態摘要(Mp、降伏與否、累積塑性轉角、IO/LS/CP分類)、有沒有形成機構。
     """
-    if payload.pushover_control_node is None or payload.pushover_target is None \
-            or payload.pushover_step is None:
+    control_nodes = payload.pushover_control_nodes
+    if control_nodes is None:
+        if payload.pushover_control_node is None:
+            raise HTTPException(
+                status_code=400,
+                detail="pushover需要指定pushover_control_node(單點)或"
+                       "pushover_control_nodes(多點)其中一個",
+            )
+        control_nodes = [payload.pushover_control_node]
+    weights = payload.pushover_weights
+    if weights is None:
+        weights = [1.0] * len(control_nodes)
+    elif len(weights) != len(control_nodes):
         raise HTTPException(
             status_code=400,
-            detail="pushover需要指定pushover_control_node、pushover_target、pushover_step三個欄位",
+            detail=f"pushover_weights長度({len(weights)})必須跟"
+                   f"pushover_control_nodes長度({len(control_nodes)})一樣",
+        )
+    if payload.pushover_target is None or payload.pushover_step is None:
+        raise HTTPException(
+            status_code=400,
+            detail="pushover需要指定pushover_target、pushover_step兩個欄位",
         )
 
     f = _build_frame(payload)
@@ -133,11 +150,11 @@ def _solve_pushover(payload: FrameIn):
 
     local_idx = {'x': 0, 'y': 1}[payload.pushover_direction]
     try:
-        control_dof = f.dofs_of(payload.pushover_control_node)[local_idx]
-    except KeyError:
+        control_dofs = [f.dofs_of(n)[local_idx] for n in control_nodes]
+    except KeyError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"找不到pushover_control_node指定的節點id {payload.pushover_control_node}",
+            detail=f"找不到pushover_control_node(s)指定的節點id {e}",
         )
     # 底剪力用: 每個支承節點對應方向的反力DOF加總, 不用使用者自己指定
     # (支承是模型本身已經定義好的, 這裡自動抓, 減少一個容易配置錯的欄位)。
@@ -154,7 +171,7 @@ def _solve_pushover(payload: FrameIn):
 
     try:
         history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-            f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
+            f, hinge_states, prescribed_dofs=control_dofs, direction=weights,
             target_total=payload.pushover_target, d_nominal=payload.pushover_step,
             base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
             use_pdelta=payload.pushover_use_pdelta,

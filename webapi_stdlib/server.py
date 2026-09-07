@@ -94,11 +94,22 @@ def _build_and_solve(payload: dict, analysis_type: str = None):
 def _solve_pushover_payload(payload: dict) -> dict:
     """analysis_type='pushover'的獨立處理路徑, 邏輯跟webapi/main.py的
     _solve_pushover()完全一致, 只是輸入是普通dict。"""
-    control_node = payload.get("pushover_control_node")
+    control_nodes = payload.get("pushover_control_nodes")
+    if control_nodes is None:
+        control_node = payload.get("pushover_control_node")
+        if control_node is None:
+            raise ValueError("pushover需要指定pushover_control_node(單點)或pushover_control_nodes(多點)其中一個")
+        control_nodes = [control_node]
+    weights = payload.get("pushover_weights")
+    if weights is None:
+        weights = [1.0] * len(control_nodes)
+    elif len(weights) != len(control_nodes):
+        raise ValueError(f"pushover_weights長度({len(weights)})必須跟pushover_control_nodes長度({len(control_nodes)})一樣")
+
     target = payload.get("pushover_target")
     step = payload.get("pushover_step")
-    if control_node is None or target is None or step is None:
-        raise ValueError("pushover需要指定pushover_control_node、pushover_target、pushover_step三個欄位")
+    if target is None or step is None:
+        raise ValueError("pushover需要指定pushover_target、pushover_step兩個欄位")
 
     f = _build_frame(payload)
     hinge_states = initial_hinge_states(f)
@@ -110,7 +121,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
 
     direction_key = payload.get("pushover_direction", "x")
     local_idx = {"x": 0, "y": 1}[direction_key]
-    control_dof = f.dofs_of(control_node)[local_idx]
+    control_dofs = [f.dofs_of(n)[local_idx] for n in control_nodes]
     base_reaction_dofs = list(dict.fromkeys(
         f.dofs_of(s.node)[local_idx] for s in f.supports))
 
@@ -120,7 +131,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         initial_cum_forces, _ = apply_gravity(f, hinge_states)
 
     history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-        f, hinge_states, prescribed_dofs=[control_dof], direction=[1.0],
+        f, hinge_states, prescribed_dofs=control_dofs, direction=weights,
         target_total=target, d_nominal=step,
         base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
         use_pdelta=payload.get("pushover_use_pdelta", False),

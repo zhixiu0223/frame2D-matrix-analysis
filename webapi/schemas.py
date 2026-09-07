@@ -103,9 +103,22 @@ class FrameIn(BaseModel):
     見frame2d.pushover.run_pushover)。舊的呼叫端不帶這個欄位時預設
     'linear', /solve回傳格式完全不變, 不受影響。"""
     pushover_control_node: Optional[int] = None
-    """analysis_type='pushover'時必填: 側推控制點的節點id(位移控制,
-    這個節點會被強制推到pushover_target)。目前只支援單一控制點,
-    多點同向側推(例如兩根柱頂一起推)是未來擴充。"""
+    """analysis_type='pushover'時必填(除非用下面的pushover_control_nodes
+    指定多點): 側推控制點的節點id(這個節點會被強制推到pushover_target,
+    或是力控制時在這個點施加力)。"""
+    pushover_control_nodes: Optional[List[int]] = None
+    """多點側推用(例如同時推兩三個樓層做倒三角形/均勻型態): 節點id清單。
+    給了這個欄位時優先於pushover_control_node(單點), 兩者不會同時生效。
+    清單第一個節點是"參考點"——容量曲線的位移軸(history_u)固定回報
+    這個節點的位移, 不管它自己的權重是多少(業界慣例: 不管用哪種側推
+    型態, 容量曲線永遠看屋頂/最高樓層位移, 所以第一個節點通常應該填
+    屋頂節點)。"""
+    pushover_weights: Optional[List[float]] = None
+    """搭配pushover_control_nodes用, 跟它等長, 各節點的相對權重(位移
+    控制時是相對位移比例, 力控制時是相對力比例)。不給的話全部預設1.0
+    (等權重, 對應FEMA356/ASCE41兩種標準側推型態之一的"均勻型態");
+    要做"倒三角形型態"就照各樓層高度比例填權重, 例如三層樓
+    [0.33, 0.67, 1.0]。"""
     pushover_direction: Literal['x', 'y'] = 'x'
     """側推方向對應的自由度, 絕大多數情況是'x'(水平側推)。"""
     pushover_target: Optional[float] = None
@@ -121,11 +134,13 @@ class FrameIn(BaseModel):
     """機構偵測的縮聚剛度特徵值比例門檻, 見
     frame2d.pushover.check_mechanism()。一般不需要調整。"""
     pushover_control_mode: Literal['displacement', 'force'] = 'displacement'
-    """'displacement'(預設, 位移控制, 可以穿越極限承載力之後的軟化段)
-    或'force'(力控制, 直接施加已知的力, 主要用途是驗證彈性範圍內的結果
-    對不對得上手算——沒辦法穿越極限承載力之後的軟化段, 到達那個點會
-    優雅停止(mechanism_reached=True), 見frame2d.pushover.run_pushover()。
-    此時pushover_target/pushover_step代表的是力(N), 不是位移(m)。"""
+    """'displacement'(預設, 位移控制, 可以穿越極限承載力之後的軟化段,
+    但多點時是"強制固定相對位移比例", 不是規範標準做法)或'force'
+    (力控制, 直接施加已知的力, 多點時"固定力型態、位移形狀隨降伏自然
+    演化"才是FEMA356/ASCE41的標準做法——但沒辦法穿越極限承載力之後的
+    軟化段, 到達那個點會優雅停止(mechanism_reached=True), 見
+    frame2d.pushover.run_pushover()。此時pushover_target/pushover_step
+    代表的是力(N), 不是位移(m)。"""
 
 
 class NodeResultOut(BaseModel):
