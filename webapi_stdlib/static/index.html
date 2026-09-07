@@ -201,6 +201,14 @@
          那一段HTML附近而已)。 -->
     <div id="playbackBarAnchor"></div>
 
+    <div id="combinedConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel"><input type="checkbox" id="cc_N" checked> N圖(軸力)</label>
+      <label class="snapLabel"><input type="checkbox" id="cc_V" checked> V圖(剪力)</label>
+      <label class="snapLabel"><input type="checkbox" id="cc_M" checked> M圖(彎矩)</label>
+      <label class="snapLabel"><input type="checkbox" id="cc_deformed"> 變形圖</label>
+      <p class="hint" style="margin:0.3rem 0 0;">勾選要一起顯示的圖, 由上到下堆疊排列。單位只在每張圖的標題提示一次(例如「N圖(最大值25.16kN)」), 每個數值本身不重複標單位, 避免畫面太亂。</p>
+    </div>
+
     <!-- 視圖切換+疊加外力+縮放: 之前改成永遠顯示、不放進選單裡, 是
          為了避免每次切視圖都要先打開選單(蓋住畫布)才點得到。但這樣
          建模的時候(還沒要看N/V/M圖跟疊加比較)也一直佔用畫面空間,
@@ -216,6 +224,7 @@
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
+      <button data-view="combined" class="viewBtn">組合顯示</button>
       <span class="sep-v"></span>
       <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
       <label class="snapLabel"><input type="checkbox" id="overlayDimsToggle" checked>顯示尺寸/斷面</label>
@@ -568,6 +577,24 @@ function computeTransform(pad) {
   const scale = Math.min(availW / w, availH / h);
   return { scale, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, sx: VB_W / 2, sy: VB_H / 2 };
 }
+// 給「組合顯示」用: 跟computeTransform()同一套配合可視範圍的邏輯, 但
+// 目標矩形是viewBox裡的一小塊(例如堆疊顯示裡某一張圖專屬的橫條),
+// 不是整個VB_W x VB_H——sx,sy是這塊矩形的中心點(螢幕座標), availW/
+// availH是這塊矩形本身的寬高, 不是整個viewBox的寬高。
+function computeTransformForRect(pad, sx, sy, availW, availH) {
+  if (model.nodes.length <= 1) {
+    const minX = -1, maxX = 11, minY = -1, maxY = 11;
+    const w = maxX - minX, h = maxY - minY;
+    const scale = Math.min(availW * (1 - 2 * pad) / w, availH * (1 - 2 * pad) / h);
+    return { scale, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, sx, sy };
+  }
+  const xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = (maxX - minX) || 1, h = (maxY - minY) || 1;
+  const scale = Math.min(availW * (1 - 2 * pad) / w, availH * (1 - 2 * pad) / h);
+  return { scale, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, sx, sy };
+}
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
@@ -838,6 +865,15 @@ function render() {
     if (document.getElementById('showGridToggle').checked) drawGrid(tp);
     drawPushoverPlayback(tp);
     drawQueryMarker(tp);
+    return;
+  }
+  if (viewMode === 'combined') {
+    // 組合顯示: 每張圖各自有自己的橫條跟transform, 不是單一個t能代表
+    // 整個畫面, 所以在這裡直接分派、不往下走「取得單一transform t」
+    // 那條路——不畫格線(格線是配合單一結構視圖的比例尺輔助, 疊在
+    // 多張各自縮放的橫條上會很亂, 而且每張圖本身已經有數值標籤可以
+    // 判斷大小, 不需要格線)。
+    drawCombinedDiagrams();
     return;
   }
   const t = getTransform(PAD_BY_VIEW[viewMode]);
@@ -2008,16 +2044,21 @@ function drawMemberPointLoadIndicators(t) {
 }
 function fmt(v, digits) { return Math.abs(v) < 1e-9 ? '0' : v.toFixed(digits); }
 
-function drawDeformed(t) {
+function drawDeformed(t, labelY = 58, showUnitPerValue = true) {
   // 固定在畫面角落的疊加圖層(跟格線刻度同一套機制): 不會隨縮放跑掉/變大變小
-  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#ea580c;`});
-  lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`;
+  // labelY讓「組合顯示」可以把標題文字放在各自的橫條頂端, 不是永遠貼著
+  // 整個畫面的頂端(單一視圖時labelY維持預設58, 行為不變)。
+  let maxDisp = 1e-9;
+  for (const n of lastResult.nodes) maxDisp = Math.max(maxDisp, Math.hypot(n.ux, n.uy));
+  const lbl = el('text', {x: 42, y: labelY, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#ea580c;`});
+  lbl.textContent = `變形放大 ×${lastResult.deform_scale.toFixed(1)}(非真實比例)`
+    + (showUnitPerValue ? '' : `, 最大位移 ${dispStr(maxDisp, 1)}`);
   putOverlay(lbl);
   if (lastResult.deformed_linear) {
     // P-Delta求解時才會有這個欄位: 用同一個deform_scale畫線性基準
     // (灰色虛線, 在下層), 跟上面彩色實線的P-Delta變形疊在一起,
     // 兩者差距就是真正的P-Delta放大效果, 不是各自縮放後看起來一樣大。
-    const lbl2 = el('text', {x: 42, y: 76, style: `font-size:${gridLabelSize}px;fill:#64748b;`});
+    const lbl2 = el('text', {x: 42, y: labelY + 18, style: `font-size:${gridLabelSize}px;fill:#64748b;`});
     lbl2.textContent = '虛線＝線性基準(同一放大倍率)';
     putOverlay(lbl2);
     for (const mid in lastResult.deformed_linear) {
@@ -2039,7 +2080,10 @@ function drawDeformed(t) {
     }
     put(el('polyline', {points: pts.trim(), class: 'deformed-line'}));
   }
-  // 在每個節點標實際位移量(mm),不是放大後的畫面尺寸
+  // 在每個節點標實際位移量, 是否帶單位由showUnitPerValue決定(組合顯示
+  // 時單位只在上面的標題提示一次, 這裡改成只顯示裸數字, 避免每個節點
+  // 都重複同一個單位字樣, 畫面比較不亂——單一視圖(標準的「變形」分頁)
+  // 維持原本行為, 每個數字照樣帶單位)。
   const tryPlace = makeLabelPlacer(24);
   for (const n of lastResult.nodes) {
     const disp = Math.hypot(n.ux, n.uy);
@@ -2049,7 +2093,7 @@ function drawDeformed(t) {
     const [x, y] = toScreen(nn.x, nn.y, t);
     if (!tryPlace(x + 8, y + 14)) continue; // 跟已經放的標籤太近, 跳過避免重疊
     const lbl2 = el('text', {x: x + 8, y: y + 14, class: 'value-label', fill: '#ea580c', style: `font-size:${valueFontSize()}px`});
-    lbl2.textContent = `Δ=${dispStr(disp, 1)}`;
+    lbl2.textContent = showUnitPerValue ? `Δ=${dispStr(disp, 1)}` : fromSI('disp', disp).toFixed(1);
     put(lbl2);
   }
 }
@@ -2079,7 +2123,7 @@ function makeLabelPlacer(minDist) {
   };
 }
 
-function drawDiagram(t, kind) {
+function drawDiagram(t, kind, labelY = 58) {
   let maxAbs = 1e-9;
   for (const mid in lastResult.diagrams) {
     for (const v of lastResult.diagrams[mid][kind]) maxAbs = Math.max(maxAbs, Math.abs(v));
@@ -2088,7 +2132,7 @@ function drawDiagram(t, kind) {
   const strFn = kind === 'M' ? momentStr : forceStr;
   const tryPlace = makeLabelPlacer(24);
 
-  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
+  const lbl = el('text', {x: 42, y: labelY, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:${kind === 'M' ? '#dc2626' : '#2563eb'};`});
   lbl.textContent = `${kind} 圖 (最大值 ${strFn(maxAbs)})` + (kind === 'M' ? (document.getElementById('mDiagramSide').value === 'compression' ? ' — 畫在壓力側' : ' — 畫在拉力側') : '');
   putOverlay(lbl);
 
@@ -2127,6 +2171,50 @@ function drawDiagram(t, kind) {
       put(t2);
     }
   }
+}
+
+// 組合顯示: 把使用者勾選的幾張圖(N/V/M/變形)由上到下堆疊畫在同一個
+// viewBox裡, 各自用computeTransformForRect()配一塊自己的橫條——直接
+// 重用單一視圖已經驗證過的drawDiagram()/drawDeformed(), 不是另外寫
+// 一套繪圖邏輯, 只是給它們各自的橫條transform跟往下移動的labelY。
+// 已知限制(誠實記錄): 沒有做SVG clip-path裁切, 理論上振幅較極端的
+// 圖有可能在橫條邊界附近輕微溢出到相鄰橫條——每張圖的15%對角線振幅
+// 慣例配合橫條自己的縮小後scale, 實務上通常不會真的溢出, 但這不是
+// 數學上保證裁切乾淨的做法。
+function drawCombinedDiagrams() {
+  if (!lastResult) { drawNeedSolveMsg(); return; }
+  if (lastResult.analysis_type === 'pushover') { drawPushoverResultMissingMsg(); return; }
+
+  const kinds = [];
+  if (document.getElementById('cc_N').checked) kinds.push('N');
+  if (document.getElementById('cc_V').checked) kinds.push('V');
+  if (document.getElementById('cc_M').checked) kinds.push('M');
+  if (document.getElementById('cc_deformed').checked) kinds.push('deformed');
+
+  if (kinds.length === 0) {
+    const m = el('text', {x: 10, y: 22, 'font-size': 13, fill: '#dc2626'});
+    m.textContent = '請至少勾選一個要顯示的圖(N/V/M/變形)';
+    put(m);
+    return;
+  }
+
+  const n = kinds.length;
+  const gap = 8;
+  const bandH = (VB_H - gap * (n - 1)) / n;
+  kinds.forEach((kind, i) => {
+    const bandY = i * (bandH + gap);
+    const pad = kind === 'deformed' ? PAD_BY_VIEW.deformed : PAD_BY_VIEW[kind];
+    const t = computeTransformForRect(pad, VB_W / 2, bandY + bandH / 2, VB_W, bandH);
+    drawMembers(t, true);
+    if (kind === 'deformed') {
+      drawDeformed(t, bandY + 18, false);
+    } else {
+      drawDiagram(t, kind, bandY + 18);
+    }
+    if (i > 0) {
+      putOverlay(el('line', {x1: 0, y1: bandY - gap / 2, x2: VB_W, y2: bandY - gap / 2, stroke: '#e2e8f0', 'stroke-width': 1}));
+    }
+  });
 }
 
 // ---------- 選取與屬性面板 ----------
@@ -3544,9 +3632,13 @@ document.querySelectorAll('.viewBtn').forEach(btn => {
     btn.classList.add('active');
     viewMode = btn.dataset.view;
     document.getElementById('playbackBar').style.display = viewMode === 'pushover_playback' ? 'block' : 'none';
+    document.getElementById('combinedConfigBar').style.display = viewMode === 'combined' ? 'block' : 'none';
     if (viewMode === 'pushover_playback') updatePlaybackInfo();
     render();
   });
+});
+['cc_N', 'cc_V', 'cc_M', 'cc_deformed'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => { if (viewMode === 'combined') render(); });
 });
 
 // 新建/載入檔案時統一呼叫: 把視圖切回「結構/荷載」、分析類型切回線性、
@@ -3566,6 +3658,7 @@ function resetViewToStructure() {
   document.getElementById('btnViewPushover').style.display = 'none';
   document.getElementById('btnViewPlayback').style.display = 'none';
   document.getElementById('playbackBar').style.display = 'none';
+  document.getElementById('combinedConfigBar').style.display = 'none';
   pushoverStepIndex = 0;
 }
 
