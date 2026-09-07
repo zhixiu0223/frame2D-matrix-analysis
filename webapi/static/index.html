@@ -171,7 +171,8 @@
     </div>
 
     <div id="pushoverConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
-      <label class="snapLabel">控制節點<input id="pv_node" type="number" step="1" style="width:4rem;" placeholder="例如1"></label>
+      <label class="snapLabel">控制節點(逗號分隔)<input id="pv_nodes" type="text" style="width:6rem;" placeholder="例如6,7,8"></label>
+      <label class="snapLabel">權重(逗號分隔)<input id="pv_weights" type="text" style="width:6rem;" placeholder="留空=全部1.0"></label>
       <label class="snapLabel">方向<select id="pv_dir" style="width:4rem;">
         <option value="x">水平(x)</option>
         <option value="y">垂直(y)</option>
@@ -183,7 +184,7 @@
       <label class="snapLabel"><span id="pv_target_label">目標位移</span><input id="pv_target" type="number" step="any" style="width:5rem;"><span id="pv_target_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><span id="pv_step_label">步長</span><input id="pv_step" type="number" step="any" style="width:5rem;"><span id="pv_step_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> 同時考慮P-Delta</label>
-      <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。</p>
+      <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。多個控制節點時, 第一個節點是「參考點」——容量曲線的位移軸永遠回報這一點的位移(業界慣例: 不管用哪種側推型態, 都看屋頂/最高樓層位移, 所以第一個通常填屋頂節點)。權重留空=全部1.0(均勻型態); 要做倒三角形型態就照各樓層高度比例填, 例如三層樓填「0.33,0.67,1.0」。</p>
     </div>
 
     <div id="playbackBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
@@ -2791,6 +2792,12 @@ function _renderPropPanelInner() {
           <p class="hint">只有元素類型是frame時有意義, 只有做Pushover(遞增側推)分析時才會用到——線性/P-Delta分析完全忽略這裡的設定。留空(不填)代表這個端點永遠保持彈性、不會降伏。</p>
           <label>i端(N${m.node_i}) 降伏彎矩 Mp (${unitOf('moment')})</label>
           <input id="p_mp_i" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.Mp_i != null ? fromSI('moment', m.Mp_i) : ''}">
+          <label>或用降伏應力fy(${unitOf('E')}) × 塑性斷面模數Z(cm³)算Mp</label>
+          <div class="row2">
+            <input id="p_fy_i" type="number" step="any" placeholder="fy(可選)">
+            <input id="p_z_i" type="number" step="any" placeholder="Z, cm³(可選)">
+          </div>
+          <p class="hint" id="p_mp_i_fyz_hint"></p>
           <label>i端 降伏後轉角勁度 R (${unitOf('moment')}/rad) ／ 比例α(=R/彈性勁度)</label>
           <div class="row2">
             <input id="p_rpy_i" type="number" step="any" placeholder="直接填R" value="${m.R_post_yield_i != null ? fromSI('moment', m.R_post_yield_i) : ''}">
@@ -2799,13 +2806,19 @@ function _renderPropPanelInner() {
           <p class="hint" id="p_kelastic_i_hint"></p>
           <label>j端(N${m.node_j}) 降伏彎矩 Mp (${unitOf('moment')})</label>
           <input id="p_mp_j" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.Mp_j != null ? fromSI('moment', m.Mp_j) : ''}">
+          <label>或用降伏應力fy(${unitOf('E')}) × 塑性斷面模數Z(cm³)算Mp</label>
+          <div class="row2">
+            <input id="p_fy_j" type="number" step="any" placeholder="fy(可選)">
+            <input id="p_z_j" type="number" step="any" placeholder="Z, cm³(可選)">
+          </div>
+          <p class="hint" id="p_mp_j_fyz_hint"></p>
           <label>j端 降伏後轉角勁度 R (${unitOf('moment')}/rad) ／ 比例α(=R/彈性勁度)</label>
           <div class="row2">
             <input id="p_rpy_j" type="number" step="any" placeholder="直接填R" value="${m.R_post_yield_j != null ? fromSI('moment', m.R_post_yield_j) : ''}">
             <input id="p_ratio_j" type="number" step="any" placeholder="或填比例, 例如0.03">
           </div>
           <p class="hint" id="p_kelastic_j_hint"></p>
-          <p class="hint">R跟比例α會互相換算(填一個, 另一個自動算好), α是R相對於彈性彎曲勁度4EI/L的比例——業界常用的簡化做法是先抓1%~5%(即α=0.01~0.05)試算; α越小降伏後越軟(接近完全塑性), 太小(接近0)容易讓側推提早判定成機構。</p>
+          <p class="hint">Mp預設直接輸入(業界集中塑性鉸模型的標準做法, 假設斷面在鉸位置一到Mp就整個進入塑性, 不像纖維斷面模型那樣有從My到Mp漸進降伏的過程)——如果你比較習慣從材料降伏應力fy推算, 上面填fy跟塑性斷面模數Z, 會自動算出Mp=fy×Z填進降伏彎矩欄位(這是單向計算, 不能反推回fy/Z, 因為兩個未知數無法從一個Mp值唯一決定)。R跟比例α會互相換算(填一個, 另一個自動算好), α是R相對於彈性彎曲勁度4EI/L的比例——業界常用的簡化做法是先抓1%~5%(即α=0.01~0.05)試算; α越小降伏後越軟(接近完全塑性), 太小(接近0)容易讓側推提早判定成機構。</p>
           <button id="p_hinge_apply" style="width:100%;margin-top:0.6rem;background:#16a34a;color:white;">套用塑性鉸容量</button>
         </div>
         <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
@@ -2957,6 +2970,32 @@ function _renderPropPanelInner() {
       }
       wireHingeRatioSync('p_rpy_i', 'p_ratio_i', 'p_kelastic_i_hint');
       wireHingeRatioSync('p_rpy_j', 'p_ratio_j', 'p_kelastic_j_hint');
+
+      // fy×Z算Mp: 單向計算(填fy跟Z, 自動算出Mp填進降伏彎矩欄位), 不是
+      // 像R/比例α那樣雙向互算——因為Mp=fy*Z是兩個未知數的乘積, 光有
+      // Mp沒辦法唯一反推回fy單獨的值, 反過來雙向同步在數學上就是
+      // 不成立的, 這裡刻意只做fy,Z -> Mp這個方向。Z固定用cm³輸入
+      // (結構鋼常見的塑性斷面模數單位, 沒有另外納入單位設定系統,
+      // 只有這裡用cm³, 不是整個app的Z單位偏好)。
+      function wireFyZToMp(mpId, fyId, zId, hintId) {
+        const mpInput = document.getElementById(mpId);
+        const fyInput = document.getElementById(fyId);
+        const zInput = document.getElementById(zId);
+        const hint = document.getElementById(hintId);
+        const recompute = () => {
+          if (fyInput.value === '' || zInput.value === '') { hint.textContent = ''; return; }
+          const fy_SI = toSI('E', parseFloat(fyInput.value));   // fy跟E是同一種量綱(應力), 借用E的單位系統
+          const Z_SI = parseFloat(zInput.value) * 1e-6;          // cm^3 -> m^3
+          if (isNaN(fy_SI) || isNaN(Z_SI)) { hint.textContent = ''; return; }
+          const Mp_SI = fy_SI * Z_SI;
+          mpInput.value = fromSI('moment', Mp_SI).toFixed(4);
+          hint.textContent = `已用fy×Z算出Mp = ${fromSI('moment', Mp_SI).toFixed(4)} ${unitOf('moment')}(已自動填入上面的降伏彎矩欄位)`;
+        };
+        fyInput.addEventListener('input', recompute);
+        zInput.addEventListener('input', recompute);
+      }
+      wireFyZToMp('p_mp_i', 'p_fy_i', 'p_z_i', 'p_mp_i_fyz_hint');
+      wireFyZToMp('p_mp_j', 'p_fy_j', 'p_z_j', 'p_mp_j_fyz_hint');
     }
     document.getElementById('p_hinge_apply').onclick = () => {
       // 留空的欄位存成null(=不設塑鉸, 這個端點永遠彈性), 不是0
@@ -3745,18 +3784,33 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
 
   let body;
   if (isPushover) {
-    const controlNode = document.getElementById('pv_node').value;
+    const nodesRaw = document.getElementById('pv_nodes').value.trim();
+    const weightsRaw = document.getElementById('pv_weights').value.trim();
     const target = document.getElementById('pv_target').value;
     const step = document.getElementById('pv_step').value;
     const controlMode = document.getElementById('pv_mode').value;
-    if (controlNode === '' || target === '' || step === '') {
+    if (nodesRaw === '' || target === '' || step === '') {
       setStatus('Pushover需要填「控制節點」「' + (controlMode === 'force' ? '目標力' : '目標位移') + '」「' + (controlMode === 'force' ? '力步長' : '步長') + '」三個欄位');
       return;
+    }
+    const controlNodes = nodesRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseInt(s, 10));
+    if (controlNodes.some(n => isNaN(n))) {
+      setStatus('控制節點格式錯誤, 應該是逗號分隔的節點編號, 例如 6,7,8');
+      return;
+    }
+    let weights = null;
+    if (weightsRaw !== '') {
+      weights = weightsRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseFloat(s));
+      if (weights.some(w => isNaN(w)) || weights.length !== controlNodes.length) {
+        setStatus('權重格式錯誤, 應該是跟控制節點數量一樣多、逗號分隔的數字, 或整個留空(=全部1.0)');
+        return;
+      }
     }
     const unitKind = controlMode === 'force' ? 'force' : 'disp';
     body = {
       ...model, analysis_type: 'pushover',
-      pushover_control_node: parseInt(controlNode, 10),
+      pushover_control_nodes: controlNodes,
+      pushover_weights: weights,
       pushover_direction: document.getElementById('pv_dir').value,
       pushover_control_mode: controlMode,
       pushover_target: toSI(unitKind, parseFloat(target)),
