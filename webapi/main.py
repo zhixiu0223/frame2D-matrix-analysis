@@ -159,6 +159,7 @@ def _solve_pushover(payload: FrameIn):
             base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
             use_pdelta=payload.pushover_use_pdelta,
             mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
+            control_mode=payload.pushover_control_mode,
             include_snapshots=True,
         )
     except RuntimeError as e:

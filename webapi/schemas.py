@@ -120,6 +120,12 @@ class FrameIn(BaseModel):
     pushover_mechanism_ratio_limit: float = 1e-8
     """機構偵測的縮聚剛度特徵值比例門檻, 見
     frame2d.pushover.check_mechanism()。一般不需要調整。"""
+    pushover_control_mode: Literal['displacement', 'force'] = 'displacement'
+    """'displacement'(預設, 位移控制, 可以穿越極限承載力之後的軟化段)
+    或'force'(力控制, 直接施加已知的力, 主要用途是驗證彈性範圍內的結果
+    對不對得上手算——沒辦法穿越極限承載力之後的軟化段, 到達那個點會
+    優雅停止(mechanism_reached=True), 見frame2d.pushover.run_pushover()。
+    此時pushover_target/pushover_step代表的是力(N), 不是位移(m)。"""
 
 
 class NodeResultOut(BaseModel):

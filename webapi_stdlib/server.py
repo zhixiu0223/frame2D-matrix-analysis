@@ -125,6 +125,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
         use_pdelta=payload.get("pushover_use_pdelta", False),
         mechanism_ratio_limit=payload.get("pushover_mechanism_ratio_limit", 1e-8),
+        control_mode=payload.get("pushover_control_mode", "displacement"),
         include_snapshots=True,
     )
 

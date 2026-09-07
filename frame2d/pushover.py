@@ -113,6 +113,42 @@ def solve_displacement_increment(K, prescribed_dofs, du_prescribed, fixed_dofs):
     return du_full
 
 
+def solve_force_increment(K, load_dofs, dF_prescribed, fixed_dofs):
+    """力控制版的增量求解: 給定力增量dF(施加在load_dofs上), 解出所有
+    非固定自由度的位移增量。跟位移控制不同的地方: 力控制沒有"受控但
+    不求解"這個中間類別, 除了固定的自由度以外全部都是要解的自由度,
+    load_dofs只是"外力施加在哪裡", 不是"這個自由度的位移已知"。
+
+    這個函式沒有辦法解過極限承載力(peak)之後的軟化段——一旦切線
+    剛度矩陣不再正定, K_ff會奇異或病態, 直接丟RuntimeError, 這是力
+    控制方法本身的極限, 不是bug(這也是run_pushover()預設用位移控制
+    的原因: 位移控制在軟化段依然穩定可解, 力控制不行)。這個函式主要
+    用途是驗證彈性範圍內的結果對不對得上手算, 不是用來找極限承載力。
+    """
+    n = K.shape[0]
+    all_dofs = set(range(n))
+    free_dofs = sorted(all_dofs - fixed_dofs)
+
+    dF_full = np.zeros(n)
+    for d, val in zip(load_dofs, dF_prescribed):
+        dF_full[d] += val
+
+    du_full = np.zeros(n)
+    if len(free_dofs) > 0:
+        K_ff = K[np.ix_(free_dofs, free_dofs)]
+        rhs = dF_full[free_dofs]
+        try:
+            du_free = np.linalg.solve(K_ff, rhs)
+        except np.linalg.LinAlgError:
+            raise RuntimeError(
+                "勁度矩陣奇異或接近奇異, 無法求解增量 -- 結構可能已經達到或"
+                "超過極限承載力(力控制無法穿越peak之後的軟化段, 建議改用"
+                "位移控制才能繼續往下推)。")
+        for d, val in zip(free_dofs, du_free):
+            du_full[d] = val
+    return du_full
+
+
 def _member_force_increments(frame, member_T, member_dofs, member_L, hinge_states, axial_forces, du_full):
     """給定全域位移增量, 回傳每個元素局部座標下的內力增量
     {member_id: 6-vector}(對truss/cable也一併算出, 只是它們沒有塑鉸,
@@ -251,27 +287,31 @@ def _snapshot(cum_forces, hinge_states):
 def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                   d_nominal, base_reaction_dofs, initial_cum_forces=None,
                   use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000,
-                  include_final_displacement=False, include_snapshots=False):
-    """位移控制的遞增側推主迴圈。
+                  include_final_displacement=False, include_snapshots=False,
+                  control_mode='displacement'):
+    """遞增側推主迴圈, 支援位移控制(預設)或力控制。
 
     frame: 已定義節點/桿件/支承的Frame2D(側推的推力來自prescribed_dofs
-        被強制位移, 不是外加point_load; 重力階段的point_load在
-        apply_gravity()另外處理)
+        被強制位移或施加力增量, 不是外加point_load; 重力階段的
+        point_load在apply_gravity()另外處理)
     hinge_states: {member_id: HingeState}, 通常從hinge.initial_hinge_states(frame)
         取得, 也可以是apply_gravity()跑完後(仍未降伏)的同一組物件——這個
         函式會直接原地修改傳進來的HingeState(設定yielded), 呼叫端要自己
         決定要不要事先複製一份
-    prescribed_dofs: 受控自由度清單(全域dof編號, 例如[frame.dofs_of(roof_node)[0]])
+    prescribed_dofs: 受控自由度清單(全域dof編號, 例如[frame.dofs_of(roof_node)[0]])——
+        位移控制時是"被強制位移的自由度", 力控制時是"外力施加的自由度"
     direction: 對應prescribed_dofs的方向係數(例如[1.0]表示單點控制, 或
-        [1.0, 1.0]表示兩個控制點同向等量推)
-    target_total: 目標總側推位移量
-    d_nominal: 名目步長(沒有事件發生時每步走多少)
+        [1.0, 1.0]表示兩個控制點同向等量推/等量施力)
+    target_total: 位移控制時是目標總側推位移量; 力控制時是目標總施加力
+    d_nominal: 名目步長(沒有事件發生時每步走多少); 位移控制時是位移
+        增量, 力控制時是力增量
     base_reaction_dofs: 用來加總算底剪力的自由度(例如各支承節點的水平DOF)
     initial_cum_forces: apply_gravity()算出的初始元素內力, None代表從零
         開始(無重力預載)
     use_pdelta: 是否把frame元素目前軸力組進幾何剛度矩陣(P-Delta), 軸力
         代表值取該元素node_j端(拉力為正)
-    mechanism_ratio_limit: 縮聚剛度最小/最大特徵值比例低於此值視為已達機構
+    mechanism_ratio_limit: 位移控制下, 縮聚剛度最小/最大特徵值比例低於
+        此值視為已達機構(力控制不用這個判斷, 見下面control_mode說明)
     max_steps: 安全閥(避免d_nominal設太小或有bug時無窮迴圈), 超過直接
         raise, 不會被誤判成"正常跑完"
     include_final_displacement: False(預設)時回傳5個值, 完全等同原本的
@@ -284,8 +324,19 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         [Fx1,Fy1,M1,Fx2,Fy2,M2]}, 'hinge_states': {member_id:
         {'yielded':[bool,bool], 'theta_p':[float,float]}}}, 供"逐步
         回放"這種需要看每一步當下彎矩分佈/塑鉸狀態的功能使用。
+    control_mode: 'displacement'(預設, 完全等同原本行為)或'force'。
+        force模式下沒有辦法解過極限承載力之後的軟化段(切線剛度矩陣
+        一旦不再正定就會直接RuntimeError被這裡包成"已達機構"提前結束,
+        不是bug——這是力控制方法本身的極限), 主要用途是驗證彈性範圍
+        內的結果直接對得上手算(施加已知的力, 解出轉角, 不用像位移
+        控制那樣先猜位移再看對應多少力)。force模式下不會呼叫
+        check_mechanism()(那是針對位移控制的"受控vs自由"DOF切分設計
+        的判斷, 力控制沒有這個切分——所有非固定自由度都是要解的自由度)。
 
-    回傳: history_u(np.array), history_F(np.array), event_log(list of dict),
+    回傳: history_u(np.array, 這裡永遠是prescribed_dofs[0]這個自由度
+        實際的累積位移, 不管control_mode是哪一種——位移控制下這個值
+        直接等於施加的位移增量累加; 力控制下這個值是解出來的結果),
+        history_F(np.array, 底剪力), event_log(list of dict),
         hinge_states(原地更新後的同一組物件), mechanism_reached(bool)
         [, u_full_cum(np.array) -- 只有include_final_displacement=True時]
         [, history_snapshots(list) -- 只有include_snapshots=True時, 排在
@@ -295,6 +346,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     fixed_dofs = _fixed_dof_set(frame)
     _, n_node_dof, n_extra_dof = build_dof_map(frame)
     n_total = n_node_dof + n_extra_dof
+    control_dof0 = prescribed_dofs[0]
 
     if initial_cum_forces is None:
         cum_forces = {mid: np.zeros(6) for mid in frame.members}
@@ -302,7 +354,10 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         cum_forces = {mid: np.array(f, dtype=float) for mid, f in initial_cum_forces.items()}
     cum_reaction = np.zeros(n_total)
 
-    lam = 0.0
+    u_control_cum = 0.0   # prescribed_dofs[0]的實際累積位移(兩種控制模式
+                           # 都從du_full裡直接讀這個自由度的值, 不是假設
+                           # 它等於施加的增量本身——位移控制下兩者剛好
+                           # 相等, 力控制下這個值本來就是解出來的結果)
     history_u = [0.0]
     history_F = [0.0]
     event_log = []
@@ -315,6 +370,11 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
 
     def current_axial_forces():
         return {mid: f[3] for mid, f in cum_forces.items()}   # 拉力為正(端j的Fx)
+
+    def solve_increment(K, amount):
+        if control_mode == 'force':
+            return solve_force_increment(K, prescribed_dofs, direction * amount, fixed_dofs)
+        return solve_displacement_increment(K, prescribed_dofs, direction * amount, fixed_dofs)
 
     remaining = target_total
     steps = 0
@@ -329,11 +389,17 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         K, member_dofs, member_T, member_L = _assemble_stiffness_with_hinges(
             frame, hinge_states, axial_forces=axial)
 
-        if check_mechanism(K, prescribed_dofs, fixed_dofs, mechanism_ratio_limit):
+        if control_mode == 'displacement' and check_mechanism(K, prescribed_dofs, fixed_dofs, mechanism_ratio_limit):
             mechanism_reached = True
             break
 
-        du_full = solve_displacement_increment(K, prescribed_dofs, direction * d_step, fixed_dofs)
+        try:
+            du_full = solve_increment(K, d_step)
+        except RuntimeError:
+            if control_mode == 'force':
+                mechanism_reached = True
+                break
+            raise
         df_by_member = _member_force_increments(frame, member_T, member_dofs, member_L,
                                                  hinge_states, axial, du_full)
         events = _find_crossing_events(hinge_states, cum_forces, df_by_member)
@@ -341,7 +407,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         if events:
             ratio_min = min(r for r, _, _ in events)
             d_sub = ratio_min * d_step
-            du_full_sub = solve_displacement_increment(K, prescribed_dofs, direction * d_sub, fixed_dofs)
+            du_full_sub = solve_increment(K, d_sub)
             df_by_member_sub = _member_force_increments(frame, member_T, member_dofs, member_L,
                                                           hinge_states, axial, du_full_sub)
 
@@ -349,7 +415,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                 cum_forces[mid] += df
             cum_reaction += K @ du_full_sub
             u_full_cum += du_full_sub
-            lam += d_sub
+            u_control_cum += du_full_sub[control_dof0]
             remaining -= d_sub
 
             newly_yielded = []
@@ -361,9 +427,9 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full_cum)
 
             F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
-            history_u.append(lam)
+            history_u.append(u_control_cum)
             history_F.append(F_base)
-            event_log.append({'u': lam, 'F': F_base, 'yielded': newly_yielded})
+            event_log.append({'u': u_control_cum, 'F': F_base, 'yielded': newly_yielded})
             if include_snapshots:
                 history_snapshots.append(_snapshot(cum_forces, hinge_states))
         else:
@@ -371,13 +437,13 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                 cum_forces[mid] += df
             cum_reaction += K @ du_full
             u_full_cum += du_full
-            lam += d_step
+            u_control_cum += du_full[control_dof0]
             remaining -= d_step
 
             _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full_cum)
 
             F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
-            history_u.append(lam)
+            history_u.append(u_control_cum)
             history_F.append(F_base)
             if include_snapshots:
                 history_snapshots.append(_snapshot(cum_forces, hinge_states))
