@@ -81,9 +81,10 @@
   #canvasWrap { border: 1px solid #ccc; background: #fdfdfd; overflow: hidden; touch-action: none; margin-top: 0.5rem; position: relative; }
   #canvasWrap.fullscreenMode {
     position: fixed; inset: 0; z-index: 10000; margin: 0; border: none;
-    display: flex; align-items: center; justify-content: center;
+    display: flex; flex-direction: column;
   }
-  #canvasWrap.fullscreenMode svg { width: 100%; height: 100%; max-height: 100vh; }
+  #canvasWrap.fullscreenMode svg { flex: 1 1 auto; min-height: 0; width: 100%; height: auto; }
+  #canvasWrap.fullscreenMode #playbackBar { flex-shrink: 0; }
   #btnFullscreenClose {
     position: absolute; top: 0.6rem; right: 0.6rem; z-index: 10001;
     background: #1f2937; color: white; border-radius: 6px; padding: 0.5rem 0.8rem;
@@ -175,10 +176,14 @@
         <option value="x">水平(x)</option>
         <option value="y">垂直(y)</option>
       </select></label>
-      <label class="snapLabel">目標位移<input id="pv_target" type="number" step="any" style="width:5rem;"><span id="pv_target_unit" class="hint" style="margin-left:0.2rem;"></span></label>
-      <label class="snapLabel">步長<input id="pv_step" type="number" step="any" style="width:5rem;"><span id="pv_step_unit" class="hint" style="margin-left:0.2rem;"></span></label>
+      <label class="snapLabel">控制方式<select id="pv_mode" style="width:6rem;">
+        <option value="displacement">位移控制</option>
+        <option value="force">力控制</option>
+      </select></label>
+      <label class="snapLabel"><span id="pv_target_label">目標位移</span><input id="pv_target" type="number" step="any" style="width:5rem;"><span id="pv_target_unit" class="hint" style="margin-left:0.2rem;"></span></label>
+      <label class="snapLabel"><span id="pv_step_label">步長</span><input id="pv_step" type="number" step="any" style="width:5rem;"><span id="pv_step_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> 同時考慮P-Delta</label>
-      <p class="hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。</p>
+      <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。</p>
     </div>
 
     <div id="playbackBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
@@ -190,6 +195,11 @@
       <p id="pb_info" class="hint" style="margin:0.3rem 0 0;font-weight:bold;"></p>
       <p class="hint" style="margin:0.2rem 0 0;">拖動滑桿或按左右箭頭一步一步看: 桿件顏色深淺代表當下彎矩大小, 圈圈是塑鉸狀態(藍色虛線=彈性, 紅色=已降伏, 大小隨累積塑性轉角變化)。這裡的桿件位置是原始(未變形)幾何, 不是變形後的形狀。</p>
     </div>
+    <!-- 全螢幕模式時playbackBar會被JS動態搬進canvasWrap裡(見
+         btnFullscreen的click handler), 這個空div是搬回來的定位點
+         (JS用insertBefore把playbackBar放回這裡, 不是憑感覺塞回原本
+         那一段HTML附近而已)。 -->
+    <div id="playbackBarAnchor"></div>
 
     <!-- 視圖切換+疊加外力+縮放: 之前改成永遠顯示、不放進選單裡, 是
          為了避免每次切視圖都要先打開選單(蓋住畫布)才點得到。但這樣
@@ -650,12 +660,23 @@ document.getElementById('btnZoomReset').addEventListener('click', () => { camera
 document.getElementById('btnFullscreen').addEventListener('click', () => {
   document.getElementById('canvasWrap').classList.add('fullscreenMode');
   document.getElementById('btnFullscreenClose').style.display = '';
+  // playbackBar原本在畫面上方(隔著一整個menuPanel跟canvasWrap不相鄰),
+  // 全螢幕時canvasWrap會蓋滿整個畫面、把它擋住——所以全螢幕時要把
+  // playbackBar這個DOM節點直接搬進canvasWrap裡(不是複製一份, 是移動
+  // 同一個節點, 上面的slider/按鈕的事件監聽器都還在, 不用重新綁定),
+  // 這樣Pushover逐步回放在全螢幕時才操作得到; 離開全螢幕時再搬回
+  // playbackBarAnchor那個位置。
+  const bar = document.getElementById('playbackBar');
+  document.getElementById('canvasWrap').appendChild(bar);
   resetTransform();
   scheduleRender();
 });
 document.getElementById('btnFullscreenClose').addEventListener('click', () => {
   document.getElementById('canvasWrap').classList.remove('fullscreenMode');
   document.getElementById('btnFullscreenClose').style.display = 'none';
+  const bar = document.getElementById('playbackBar');
+  const anchor = document.getElementById('playbackBarAnchor');
+  anchor.parentNode.insertBefore(bar, anchor);
   resetTransform();
   scheduleRender();
 });
@@ -3425,7 +3446,7 @@ document.getElementById('momentArcScale').addEventListener('input', () => {
 });
 document.getElementById('loadLabelFontSize').addEventListener('change', render);
 document.getElementById('valueLabelFontSize').addEventListener('change', render);
-['unitE', 'unitI', 'unitA', 'unitDisp'].forEach(id => {
+['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
@@ -3433,11 +3454,18 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
   });
 });
 function updatePushoverUnitLabels() {
-  const du = unitOf('disp');
-  document.getElementById('pv_target_unit').textContent = du;
-  document.getElementById('pv_step_unit').textContent = du;
+  const isForce = document.getElementById('pv_mode').value === 'force';
+  const u = isForce ? unitOf('force') : unitOf('disp');
+  document.getElementById('pv_target_unit').textContent = u;
+  document.getElementById('pv_step_unit').textContent = u;
+  document.getElementById('pv_target_label').textContent = isForce ? '目標力' : '目標位移';
+  document.getElementById('pv_step_label').textContent = isForce ? '力步長' : '步長';
+  document.getElementById('pv_mode_hint').textContent = isForce
+    ? '力控制: 直接施加已知的力, 適合驗證彈性範圍內的結果對不對得上手算。沒辦法穿越極限承載力之後的軟化段, 到那個點會優雅停止, 不是crash。目標力/力步長單位跟上面「顯示設定」選的力單位一致。'
+    : '位移/步長單位跟上面「顯示設定」選的位移單位一致。控制節點會被強制推到「目標位移」, 側推方向可以跟建模時的支承/幾何不一致(但通常是水平)。';
 }
 updatePushoverUnitLabels();
+document.getElementById('pv_mode').addEventListener('change', updatePushoverUnitLabels);
 document.getElementById('statusCopyBtn').addEventListener('click', async () => {
   const text = document.getElementById('status').textContent;
   try {
@@ -3627,16 +3655,19 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
     const controlNode = document.getElementById('pv_node').value;
     const target = document.getElementById('pv_target').value;
     const step = document.getElementById('pv_step').value;
+    const controlMode = document.getElementById('pv_mode').value;
     if (controlNode === '' || target === '' || step === '') {
-      setStatus('Pushover需要填「控制節點」「目標位移」「步長」三個欄位');
+      setStatus('Pushover需要填「控制節點」「' + (controlMode === 'force' ? '目標力' : '目標位移') + '」「' + (controlMode === 'force' ? '力步長' : '步長') + '」三個欄位');
       return;
     }
+    const unitKind = controlMode === 'force' ? 'force' : 'disp';
     body = {
       ...model, analysis_type: 'pushover',
       pushover_control_node: parseInt(controlNode, 10),
       pushover_direction: document.getElementById('pv_dir').value,
-      pushover_target: toSI('disp', parseFloat(target)),
-      pushover_step: toSI('disp', parseFloat(step)),
+      pushover_control_mode: controlMode,
+      pushover_target: toSI(unitKind, parseFloat(target)),
+      pushover_step: toSI(unitKind, parseFloat(step)),
       pushover_use_pdelta: document.getElementById('pv_pdelta').checked,
     };
   } else {
