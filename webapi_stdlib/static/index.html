@@ -184,6 +184,7 @@
       <label class="snapLabel"><span id="pv_target_label">目標位移</span><input id="pv_target" type="number" step="any" style="width:5rem;"><span id="pv_target_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><span id="pv_step_label">步長</span><input id="pv_step" type="number" step="any" style="width:5rem;"><span id="pv_step_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> 同時考慮P-Delta</label>
+      <label class="snapLabel"><input id="pv_geomupdate" type="checkbox" style="width:auto;"> 幾何更新(每步用當下變形後幾何, 較接近大變形真實行為)</label>
       <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。多個控制節點時, 第一個節點是「參考點」——容量曲線的位移軸永遠回報這一點的位移(業界慣例: 不管用哪種側推型態, 都看屋頂/最高樓層位移, 所以第一個通常填屋頂節點)。權重留空=全部1.0(均勻型態); 要做倒三角形型態就照各樓層高度比例填, 例如三層樓填「0.33,0.67,1.0」。</p>
     </div>
 
@@ -3864,6 +3865,7 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
       pushover_target: toSI(unitKind, parseFloat(target)),
       pushover_step: toSI(unitKind, parseFloat(step)),
       pushover_use_pdelta: document.getElementById('pv_pdelta').checked,
+      pushover_geometry_update: document.getElementById('pv_geomupdate').checked,
     };
   } else {
     // model本身(存檔/匯出用的資料)不夾帶analysis_type/pushover設定,
@@ -3915,7 +3917,8 @@ function pushoverStatusSuffix(base) {
   const du = unitOf('disp'), fu = unitOf('force');
   const lastU = fromSI('disp', r.history_u[r.history_u.length - 1]);
   const lastF = fromSI('force', r.history_F[r.history_F.length - 1]);
-  return `${base} ｜ 位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
+  const geomTag = document.getElementById('pv_geomupdate').checked ? '幾何更新' : '線性化P-Delta幾何';
+  return `${base}(${geomTag}) ｜ 位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
     + `${r.event_log.length}個降伏事件` + (r.mechanism_reached ? '(⚠已形成機構, 側推中止)' : '')
     + ' ｜ 切到「結構/荷載」分頁可以看塑鉸圈圈(藍色虛線=彈性, 紅色=已降伏)';
 }
