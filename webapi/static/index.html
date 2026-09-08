@@ -2463,7 +2463,7 @@ function renderBatchMemberEditForm(memberIds) {
 function renderBatchHingeForm(memberIds) {
   const panel = document.getElementById('propPanel');
   panel.innerHTML = `<fieldset><legend>批次設定塑鉸容量(${memberIds.length} 根桿件)</legend>
-    <p class="hint">只對member_type='frame'的桿件生效, 只有做Pushover分析時才會用到。套用範圍選「兩端」時, 這批桿件的i端跟j端都會設成同一組數值(適合柱子這種兩端都要設塑鉸的情況); 選「只i端」/「只j端」時只改那一端, 另一端維持原本的值不動。</p>
+    <p class="hint">只對member_type='frame'的桿件生效, 只有做Pushover分析時才會用到。套用範圍選「兩端」時, 這批桿件的i端跟j端都會設成同一組數值(適合柱子這種兩端都要設塑鉸的情況); 選「只i端」/「只j端」時只改那一端, 另一端維持原本的值不動。如果套用範圍包含的某一端本身已經有release(鉸接), 那一端會自動跳過(彎矩恆為0, 設塑鉸容量沒有意義)。</p>
     <label>套用範圍</label>
     <select id="bh_scope">
       <option value="both">兩端(i端跟j端都套用)</option>
@@ -2472,14 +2472,20 @@ function renderBatchHingeForm(memberIds) {
     </select>
     <label>降伏彎矩 Mp (${unitOf('moment')})</label>
     <input id="bh_mp" type="number" step="any" placeholder="留空=不設塑鉸(該端永遠彈性)">
+    <label>或用降伏應力fy(${unitOf('E')}) × 塑性斷面模數Z(cm³)算Mp</label>
+    <div class="row2">
+      <input id="bh_fy" type="number" step="any" placeholder="fy(可選)">
+      <input id="bh_z" type="number" step="any" placeholder="Z, cm³(可選)">
+    </div>
+    <p class="hint" id="bh_mp_fyz_hint"></p>
     <label>降伏後轉角勁度輸入方式</label>
     <select id="bh_r_mode">
+      <option value="ratio" selected>填比例α(每根桿件各自用自己的彈性勁度換算, 較合理)</option>
       <option value="absolute">直接填R(所有桿件套用同一個R值)</option>
-      <option value="ratio">填比例α(每根桿件各自用自己的4EI/L換算, 較合理)</option>
     </select>
-    <label id="bh_r_label">降伏後轉角勁度 R (${unitOf('moment')}/rad)</label>
-    <input id="bh_r" type="number" step="any" placeholder="留空=不設塑鉸(該端永遠彈性)">
-    <p class="hint" id="bh_r_hint"></p>
+    <label id="bh_r_label">比例α(=R/該桿件自己的彈性勁度)</label>
+    <input id="bh_r" type="number" step="any" placeholder="例如0.03">
+    <p class="hint" id="bh_r_hint">每根桿件的R會各自用自己的section(E,I)、實際桿長L、以及對面端點有沒有release(有的話用3EI/L, 沒有用4EI/L, 兩種公式對應的物理情況不同)算出各自的彈性勁度再乘上這個比例, 不是套同一個R值——桿件長度/斷面/release狀態不同時, 這樣算出來的R才合理。</p>
     <div class="row2"><button id="bh_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bh_back">返回</button></div>
     <button id="bh_clear" style="width:100%;margin-top:0.6rem;background:#dc2626;color:white;">清除這批桿件在套用範圍內的塑鉸設定</button>
   </fieldset>`;
@@ -2487,13 +2493,28 @@ function renderBatchHingeForm(memberIds) {
   document.getElementById('bh_r_mode').addEventListener('change', (e) => {
     const isRatio = e.target.value === 'ratio';
     document.getElementById('bh_r_label').textContent = isRatio
-      ? '比例α(=R/該桿件自己的4EI/L)'
+      ? '比例α(=R/該桿件自己的彈性勁度)'
       : `降伏後轉角勁度 R (${unitOf('moment')}/rad)`;
     document.getElementById('bh_r').placeholder = isRatio ? '例如0.03' : '留空=不設塑鉸(該端永遠彈性)';
     document.getElementById('bh_r_hint').textContent = isRatio
-      ? '每根桿件的R會各自用自己的section(E,I)跟實際桿長L算4EI/L再乘上這個比例, 不是套同一個R值——桿件長度/斷面不同時, 這樣算出來的R才合理。'
+      ? '每根桿件的R會各自用自己的section(E,I)、實際桿長L、以及對面端點有沒有release算出各自的彈性勁度再乘上這個比例, 不是套同一個R值——桿件長度/斷面/release狀態不同時, 這樣算出來的R才合理。'
       : '';
   });
+  // fy×Z算Mp(單向計算, 理由跟單一桿件表單一樣: Mp=fy*Z是兩個未知數的
+  // 乘積, 光有Mp沒辦法唯一反推fy/Z, 所以只能fy,Z->Mp這個方向)。
+  document.getElementById('bh_fy').addEventListener('input', updateBhMpFromFyZ);
+  document.getElementById('bh_z').addEventListener('input', updateBhMpFromFyZ);
+  function updateBhMpFromFyZ() {
+    const fyRaw = document.getElementById('bh_fy').value, zRaw = document.getElementById('bh_z').value;
+    const hint = document.getElementById('bh_mp_fyz_hint');
+    if (fyRaw === '' || zRaw === '') { hint.textContent = ''; return; }
+    const fy_SI = toSI('E', parseFloat(fyRaw));
+    const Z_SI = parseFloat(zRaw) * 1e-6;
+    if (isNaN(fy_SI) || isNaN(Z_SI)) { hint.textContent = ''; return; }
+    const Mp_SI = fy_SI * Z_SI;
+    document.getElementById('bh_mp').value = fromSI('moment', Mp_SI).toFixed(4);
+    hint.textContent = `已用fy×Z算出Mp = ${fromSI('moment', Mp_SI).toFixed(4)} ${unitOf('moment')}(已自動填入上面的降伏彎矩欄位)`;
+  }
   document.getElementById('bh_apply').onclick = () => {
     const scope = document.getElementById('bh_scope').value;
     const mode = document.getElementById('bh_r_mode').value;
@@ -2502,26 +2523,34 @@ function renderBatchHingeForm(memberIds) {
     const mp = mpRaw === '' ? null : toSI('moment', parseFloat(mpRaw));
     const rAbsolute = (mode === 'absolute' && rRaw !== '') ? toSI('moment', parseFloat(rRaw)) : null;
     const ratio = (mode === 'ratio' && rRaw !== '') ? parseFloat(rRaw) : null;
-    let n = 0;
+    let n = 0, skippedReleased = 0;
     for (const id of memberIds) {
       const m = model.members.find(x => x.id === id);
       if (!m || m.member_type !== 'frame') continue;
-      let r = null;
-      if (rRaw === '') {
-        r = null;   // 留空: 這批一律清成不設塑鉸(該端永遠彈性)
-      } else if (mode === 'absolute') {
-        r = rAbsolute;
-      } else {
-        const sec = model.sections.find(s => s.name === m.section);
-        const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
-        const L = (ni && nj) ? Math.hypot(nj.x - ni.x, nj.y - ni.y) : 0;
-        r = (sec && L > 0) ? ratio * (4 * sec.E * sec.I / L) : null;
+      const sec = model.sections.find(s => s.name === m.section);
+      const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+      const L = (ni && nj) ? Math.hypot(nj.x - ni.x, nj.y - ni.y) : 0;
+
+      function computeR(farReleased) {
+        if (rRaw === '') return null;   // 留空: 一律清成不設塑鉸(該端永遠彈性)
+        if (mode === 'absolute') return rAbsolute;
+        if (!sec || L <= 0) return null;
+        const K_elastic = (farReleased ? 3 : 4) * sec.E * sec.I / L;
+        return ratio * K_elastic;
       }
-      if (scope === 'both' || scope === 'i') { m.Mp_i = mp; m.R_post_yield_i = r; }
-      if (scope === 'both' || scope === 'j') { m.Mp_j = mp; m.R_post_yield_j = r; }
+
+      if (scope === 'both' || scope === 'i') {
+        if (m.release_i) { skippedReleased++; }
+        else { m.Mp_i = mp; m.R_post_yield_i = computeR(m.release_j); }
+      }
+      if (scope === 'both' || scope === 'j') {
+        if (m.release_j) { skippedReleased++; }
+        else { m.Mp_j = mp; m.R_post_yield_j = computeR(m.release_i); }
+      }
       n++;
     }
-    setStatus('已套用塑鉸容量到 ' + n + ' 根桿件(' + (scope === 'both' ? '兩端' : scope === 'i' ? '只i端' : '只j端') + ')');
+    setStatus('已套用塑鉸容量到 ' + n + ' 根桿件(' + (scope === 'both' ? '兩端' : scope === 'i' ? '只i端' : '只j端') + ')'
+      + (skippedReleased > 0 ? `; 另外${skippedReleased}個端點本身已經是release, 已自動跳過(設定了也不會有效果)` : ''));
     clearMultiSelection();
   };
   document.getElementById('bh_clear').onclick = () => {
@@ -2933,26 +2962,45 @@ function _renderPropPanelInner() {
       sec.A = toSI('A', parseFloat(document.getElementById('p_A').value));
       render();
     };
-    // 塑性鉸的R(降伏後轉角勁度)跟α(比例=R/彈性彎曲勁度4EI/L)互相換算:
-    // 填一個, 另一個自動算出來, 讓使用者不用自己拿計算機算4EI/L。
-    // K_elastic只在member_type==='frame'且桿長>0時有意義, 跟elements.py
-    // 的4EI/L是同一個公式(教科書標準值, 不是隨便取的參考值)。
+    // 塑性鉸的R(降伏後轉角勁度)跟α(比例=R/彈性彎曲勁度)互相換算:
+    // 填一個, 另一個自動算出來, 讓使用者不用自己拿計算機算。
+    // 參考彈性勁度不是不分青紅皂白都用4EI/L: 4EI/L是"對面那一端也剛接"
+    // 的標準值, 如果對面那一端(遠端)有release(鉸接), 這一端真正的彈性
+    // 彎曲勁度是3EI/L(遠端鉸接的教科書減縮公式), 不是4EI/L——之前這裡
+    // 沒分這兩種情況, 統一用4EI/L, 對有release的桿件會算出偏高的參考值
+    // (影響的只是"填比例時换算出來的R建議值", 不影響其他任何求解邏輯)。
     {
       const memberNi = nodeById(m.node_i), memberNj = nodeById(m.node_j);
       const memberL = (memberNi && memberNj) ? Math.hypot(memberNj.x - memberNi.x, memberNj.y - memberNi.y) : 0;
-      const K_elastic = (m.member_type === 'frame' && memberL > 0) ? 4 * sec.E * sec.I / memberL : null;
       const mu = unitOf('moment');
 
-      function wireHingeRatioSync(rId, ratioId, hintId) {
+      // farReleased: 這一端的"對面端點"是否有release(鉸接)——決定要用
+      // 3EI/L(遠端鉸接的減縮公式)還是4EI/L(遠端剛接的標準公式)。
+      function kElasticFor(farReleased) {
+        if (m.member_type !== 'frame' || memberL <= 0) return null;
+        return (farReleased ? 3 : 4) * sec.E * sec.I / memberL;
+      }
+
+      function wireHingeRatioSync(rId, ratioId, hintId, thisEndReleased, farReleased) {
         const rInput = document.getElementById(rId);
         const ratioInput = document.getElementById(ratioId);
         const hint = document.getElementById(hintId);
+        const K_elastic = kElasticFor(farReleased);
+        if (thisEndReleased) {
+          // 這一端本身就已經是release(鉸接), 彎矩在這裡永遠是0, 不管
+          // 塑鉸容量設多少都不會觸發降伏——設定了也是白設, 直接提醒
+          // 使用者, 不要讓他以為填了數字就有效果。
+          hint.textContent = '⚠ 這一端本身已經是release(鉸接), 彎矩恆為0, 塑鉸容量設定不會有任何效果';
+          rInput.disabled = true;
+          ratioInput.disabled = true;
+          return;
+        }
         if (!K_elastic) {
           hint.textContent = m.member_type !== 'frame' ? '(只有frame元素有塑鉸容量的概念)' : '';
           ratioInput.disabled = true;
           return;
         }
-        hint.textContent = `參考彈性彎曲勁度 4EI/L ≈ ${fromSI('moment', K_elastic).toFixed(2)} ${mu}/rad`;
+        hint.textContent = `參考彈性彎曲勁度 ${farReleased ? '3EI/L(對面端點有release, 用遠端鉸接的減縮公式)' : '4EI/L'} ≈ ${fromSI('moment', K_elastic).toFixed(2)} ${mu}/rad`;
         if (rInput.value !== '') {
           const R_SI = toSI('moment', parseFloat(rInput.value));
           if (!isNaN(R_SI)) ratioInput.value = (R_SI / K_elastic).toFixed(4);
@@ -2968,8 +3016,8 @@ function _renderPropPanelInner() {
           if (!isNaN(ratio)) rInput.value = fromSI('moment', ratio * K_elastic).toFixed(4);
         });
       }
-      wireHingeRatioSync('p_rpy_i', 'p_ratio_i', 'p_kelastic_i_hint');
-      wireHingeRatioSync('p_rpy_j', 'p_ratio_j', 'p_kelastic_j_hint');
+      wireHingeRatioSync('p_rpy_i', 'p_ratio_i', 'p_kelastic_i_hint', m.release_i, m.release_j);
+      wireHingeRatioSync('p_rpy_j', 'p_ratio_j', 'p_kelastic_j_hint', m.release_j, m.release_i);
 
       // fy×Z算Mp: 單向計算(填fy跟Z, 自動算出Mp填進降伏彎矩欄位), 不是
       // 像R/比例α那樣雙向互算——因為Mp=fy*Z是兩個未知數的乘積, 光有
