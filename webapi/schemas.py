@@ -141,6 +141,13 @@ class FrameIn(BaseModel):
     軟化段, 到達那個點會優雅停止(mechanism_reached=True), 見
     frame2d.pushover.run_pushover()。此時pushover_target/pushover_step
     代表的是力(N), 不是位移(m)。"""
+    pushover_geometry_update: bool = False
+    """False(預設, 完全等同原本行為, 全程用最初始的未變形幾何組裝勁度
+    矩陣, 只靠線性化的P-Delta修正項近似大變形效應)或True(每一步用目前
+    累積變形後的節點位置重新算桿件長度/角度, Updated Lagrangian的
+    基本精神, 比線性化P-Delta更接近大變形時的真實行為, 但不是完整的
+    co-rotational大轉角分析)。見frame2d.pushover.run_pushover()的
+    geometry_update參數說明。"""
 
 
 class NodeResultOut(BaseModel):

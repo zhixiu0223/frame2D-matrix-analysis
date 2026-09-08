@@ -51,11 +51,45 @@ def _fixed_dof_set(frame):
     return fixed
 
 
-def _assemble_stiffness_with_hinges(frame, hinge_states, axial_forces=None):
+def _member_geometry_updated(frame, m, u_full_cum):
+    """跟elements.member_geometry()一樣算L跟angle, 但用"目前累積變形後"
+    的節點座標(原始座標+u_full_cum裡對應的ux,uy), 不是frame.nodes裡
+    固定不變的原始座標。這是"幾何更新"(geometry-updating)側推模式的
+    核心: 每一步都用上一步結束時真正的變形位置重新算桿件幾何, 不是
+    全程都凍結在最初始的未變形幾何上——後者(凍結幾何, 只疊加跟軸力
+    成正比的Kg修正項)就是預設的線性化P-Delta做法, 這裡是另一種模式。
+
+    已知限制(誠實記錄, 不誇大): 這裡只更新了"用哪個幾何組裝勁度矩陣"
+    這一件事(Updated Lagrangian的基本精神), 沒有做完整的co-rotational
+    大轉角處理(例如沒有把桿件自己的剛體轉動從局部變形裡分離出來),
+    也沒有在每個增量步內做真正的Newton-Raphson平衡疊代去消除殘餘力
+    (跟不開這個選項時同一套"每步凍結切線剛度、只解一次線性方程式"
+    的疊代格式一樣, 只是這次切線剛度用的幾何會更新)。對變形沒有大到
+    需要考慮桿件本身大幅轉動的情況, 這個近似已經比完全凍結幾何更接近
+    真實行為; 但不是完整意義上的大變形非線性分析。"""
+    ni = frame.nodes[m.node_i]
+    nj = frame.nodes[m.node_j]
+    dofs_i = frame.dofs_of(m.node_i)
+    dofs_j = frame.dofs_of(m.node_j)
+    xi = ni.x + u_full_cum[dofs_i[0]]
+    yi = ni.y + u_full_cum[dofs_i[1]]
+    xj = nj.x + u_full_cum[dofs_j[0]]
+    yj = nj.y + u_full_cum[dofs_j[1]]
+    L = np.hypot(xj - xi, yj - yi)
+    angle = np.arctan2(yj - yi, xj - xi)
+    return L, angle
+
+
+def _assemble_stiffness_with_hinges(frame, hinge_states, axial_forces=None, u_full_cum=None):
     """組裝含鉸(+選用P-Delta)的全域勁度矩陣, 純粹供側推增量分析用,
     不含任何載重/邊界條件。
 
     axial_forces: 可選, {member_id: N(拉力為正)}, 用於P-Delta。
+    u_full_cum: 可選, 目前累積的絕對位移向量——給了這個, 桿件的L跟
+        angle會用"目前變形後"的節點位置重新算(見_member_geometry_updated()),
+        不是frame.nodes裡固定的原始座標。這是"幾何更新"模式用的參數,
+        預設None時完全等同於原本行為(用原始未變形幾何), 不影響任何
+        既有呼叫端。
 
     回傳: K, member_dofs, member_T, member_L(供後續增量內力回算用)。
     """
@@ -66,9 +100,12 @@ def _assemble_stiffness_with_hinges(frame, hinge_states, axial_forces=None):
     member_L = {}
     for mid, m in frame.members.items():
         section = frame.sections[m.section]
-        node_i = frame.nodes[m.node_i]
-        node_j = frame.nodes[m.node_j]
-        L, angle = member_geometry(node_i, node_j)
+        if u_full_cum is not None:
+            L, angle = _member_geometry_updated(frame, m, u_full_cum)
+        else:
+            node_i = frame.nodes[m.node_i]
+            node_j = frame.nodes[m.node_j]
+            L, angle = member_geometry(node_i, node_j)
         T = transformation_matrix(angle)
         member_T[mid] = T
         member_L[mid] = L
@@ -288,7 +325,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                   d_nominal, base_reaction_dofs, initial_cum_forces=None,
                   use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000,
                   include_final_displacement=False, include_snapshots=False,
-                  control_mode='displacement'):
+                  control_mode='displacement', geometry_update=False):
     """遞增側推主迴圈, 支援位移控制(預設)或力控制。
 
     frame: 已定義節點/桿件/支承的Frame2D(側推的推力來自prescribed_dofs
@@ -332,6 +369,16 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         控制那樣先猜位移再看對應多少力)。force模式下不會呼叫
         check_mechanism()(那是針對位移控制的"受控vs自由"DOF切分設計
         的判斷, 力控制沒有這個切分——所有非固定自由度都是要解的自由度)。
+    geometry_update: False(預設, 完全等同原本行為, 全程用最初始的
+        未變形幾何組裝勁度矩陣)或True(每一步用"目前累積變形後"的節點
+        位置重新算桿件長度/角度, 見_member_geometry_updated())。這是
+        Updated Lagrangian的基本精神(用當下真實變形的幾何建立切線
+        剛度), 比預設的線性化P-Delta(幾何凍結、只疊加軸力修正項)更
+        接近大變形時的真實行為, 但不是完整的co-rotational大轉角分析
+        (沒有把桿件自己的剛體轉動獨立分離出來處理, 每個增量步也還是
+        只解一次線性方程式、不是真正疊代到殘餘力歸零的Newton-Raphson)。
+        兩種模式在變形不大時應該給出幾乎相同的結果(幾何本來就沒怎麼變),
+        變形越大差異會越明顯。
 
     回傳: history_u(np.array, 這裡永遠是prescribed_dofs[0]這個自由度
         實際的累積位移, 不管control_mode是哪一種——位移控制下這個值
@@ -387,7 +434,8 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         d_step = min(d_nominal, remaining)
         axial = current_axial_forces() if use_pdelta else None
         K, member_dofs, member_T, member_L = _assemble_stiffness_with_hinges(
-            frame, hinge_states, axial_forces=axial)
+            frame, hinge_states, axial_forces=axial,
+            u_full_cum=(u_full_cum if geometry_update else None))
 
         if control_mode == 'displacement' and check_mechanism(K, prescribed_dofs, fixed_dofs, mechanism_ratio_limit):
             mechanism_reached = True

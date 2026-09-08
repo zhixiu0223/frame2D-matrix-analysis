@@ -137,6 +137,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         use_pdelta=payload.get("pushover_use_pdelta", False),
         mechanism_ratio_limit=payload.get("pushover_mechanism_ratio_limit", 1e-8),
         control_mode=payload.get("pushover_control_mode", "displacement"),
+        geometry_update=payload.get("pushover_geometry_update", False),
         include_snapshots=True,
     )
 

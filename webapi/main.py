@@ -177,6 +177,7 @@ def _solve_pushover(payload: FrameIn):
             use_pdelta=payload.pushover_use_pdelta,
             mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
             control_mode=payload.pushover_control_mode,
+            geometry_update=payload.pushover_geometry_update,
             include_snapshots=True,
         )
     except RuntimeError as e:
