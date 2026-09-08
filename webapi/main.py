@@ -20,7 +20,7 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -105,15 +105,12 @@ def _build_and_solve(payload: FrameIn, analysis_type: str = None):
     return f, result
 
 
-def _solve_pushover(payload: FrameIn):
-    """analysis_type='pushover'的獨立處理路徑, 不跟_build_and_solve()共用
-    (那個函式的dispatch邏輯是linear/pdelta二選一, pushover是完全不同的
-    位移控制+event-to-event流程, 混在一起會讓兩邊都難懂)。
-
-    回傳跟linear/pdelta的/solve完全不同的形狀(沒有nodes/members/diagrams/
-    deformed, 因為那些是"單一狀態的解", pushover的重點是"一整條歷程"):
-    容量曲線(history_u/history_F)、每個降伏事件的清單、最終每個塑鉸的
-    狀態摘要(Mp、降伏與否、累積塑性轉角、IO/LS/CP分類)、有沒有形成機構。
+def _prepare_pushover_run(payload: FrameIn):
+    """/solve(pushover)跟/export/pdf(pushover)共用的前置邏輯: 檢核欄位、
+    建frame、算控制點/底反力DOF、視情況跑重力預載階段。回傳一個dict,
+    可以直接展開餵給run_pushover()(**kwargs), 呼叫端自己決定要不要
+    額外加include_snapshots/include_final_displacement等旗標——這裡
+    只負責"跑pushover需要的固定部分", 不管呼叫端想要哪些額外的回傳值。
     """
     control_nodes = payload.pushover_control_nodes
     if control_nodes is None:
@@ -156,8 +153,6 @@ def _solve_pushover(payload: FrameIn):
             status_code=400,
             detail=f"找不到pushover_control_node(s)指定的節點id {e}",
         )
-    # 底剪力用: 每個支承節點對應方向的反力DOF加總, 不用使用者自己指定
-    # (支承是模型本身已經定義好的, 這裡自動抓, 減少一個容易配置錯的欄位)。
     base_reaction_dofs = list(dict.fromkeys(
         f.dofs_of(s.node)[local_idx] for s in f.supports))
 
@@ -169,21 +164,23 @@ def _solve_pushover(payload: FrameIn):
         except (ValueError, KeyError, RuntimeError) as e:
             raise HTTPException(status_code=400, detail=f"重力預載階段求解失敗: {e}")
 
-    try:
-        history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-            f, hinge_states, prescribed_dofs=control_dofs, direction=weights,
-            target_total=payload.pushover_target, d_nominal=payload.pushover_step,
-            base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
-            use_pdelta=payload.pushover_use_pdelta,
-            mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
-            control_mode=payload.pushover_control_mode,
-            geometry_update=payload.pushover_geometry_update,
-            include_snapshots=True,
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return f, dict(
+        frame=f, hinge_states=hinge_states, prescribed_dofs=control_dofs, direction=weights,
+        target_total=payload.pushover_target, d_nominal=payload.pushover_step,
+        base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
+        use_pdelta=payload.pushover_use_pdelta,
+        mechanism_ratio_limit=payload.pushover_mechanism_ratio_limit,
+        control_mode=payload.pushover_control_mode,
+        geometry_update=payload.pushover_geometry_update,
+    )
 
-    hinge_summary = {
+
+def _build_hinge_summary(hs_final):
+    """把{member_id: HingeState}轉成JSON安全的摘要dict(Mp的inf轉成None,
+    見infinity-json-bugfix那個修正)。/solve(pushover)跟/export/pdf
+    (pushover)都要用到同一份塑鉸狀態摘要, 抽出來共用, 不要兩邊分別維護
+    同一段轉換邏輯。"""
+    return {
         str(mid): {
             "Mp": [None if math.isinf(hs.Mp[0]) else float(hs.Mp[0]),
                    None if math.isinf(hs.Mp[1]) else float(hs.Mp[1])],
@@ -193,11 +190,38 @@ def _solve_pushover(payload: FrameIn):
         }
         for mid, hs in hs_final.items()
     }
-    event_log_out = [
+
+
+def _build_event_log_out(event_log):
+    """把run_pushover()回傳的event_log(內部list of dict, 值可能是
+    numpy純量)轉成JSON安全的list of dict。"""
+    return [
         {"u": float(ev['u']), "F": float(ev['F']),
          "yielded": [[mid, end_idx] for mid, end_idx in ev['yielded']]}
         for ev in event_log
     ]
+
+
+def _solve_pushover(payload: FrameIn):
+    """analysis_type='pushover'的獨立處理路徑, 不跟_build_and_solve()共用
+    (那個函式的dispatch邏輯是linear/pdelta二選一, pushover是完全不同的
+    位移控制+event-to-event流程, 混在一起會讓兩邊都難懂)。
+
+    回傳跟linear/pdelta的/solve完全不同的形狀(沒有nodes/members/diagrams/
+    deformed, 因為那些是"單一狀態的解", pushover的重點是"一整條歷程"):
+    容量曲線(history_u/history_F)、每個降伏事件的清單、最終每個塑鉸的
+    狀態摘要(Mp、降伏與否、累積塑性轉角、IO/LS/CP分類)、有沒有形成機構。
+    """
+    f, run_kwargs = _prepare_pushover_run(payload)
+    try:
+        history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
+            include_snapshots=True, **run_kwargs)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    hinge_summary = _build_hinge_summary(hs_final)
+    event_log_out = _build_event_log_out(event_log)
+
     # 逐步回放用: 每一步(跟history_u/history_F逐一對應, 已經是純Python
     # list/float, 不含inf)的桿件端點力+塑鉸狀態。member_forces的key
     # 統一轉成字串(JSON物件的key本來就只能是字串, 跟hinge_summary同一個
@@ -330,8 +354,53 @@ def delete_model(name: str):
 
 # ---------------- PDF 匯出(重用 plotting.py 的 plot_all) ----------------
 
+def _export_pushover_pdf(payload: FrameIn) -> bytes:
+    """analysis_type='pushover'時/export/pdf走的路徑: 重新跑一次pushover
+    (拿到最終狀態需要的內力/位移/反力, 這幾個/solve的JSON回應裡沒有
+    完整保留——history_snapshots雖然有每一步的內力, 但沒有最終的完整
+    反力向量跟絕對位移向量, 這裡額外開include_final_displacement/
+    include_final_reactions/include_max_rotation三個旗標拿到)。跟
+    _solve_pushover()共用_prepare_pushover_run()這段前置邏輯, 不用
+    兩邊分別維護。"""
+    f, run_kwargs = _prepare_pushover_run(payload)
+    try:
+        (history_u, history_F, event_log, hs_final, mechanism,
+         u_full_cum, snapshots, cum_reaction, max_rotation) = run_pushover(
+            include_final_displacement=True, include_snapshots=True,
+            include_final_reactions=True, include_max_rotation=True, **run_kwargs)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    pushover_result = {
+        "history_u": history_u, "history_F": history_F,
+        "event_log": _build_event_log_out(event_log),
+        "hinge_summary": _build_hinge_summary(hs_final),
+        "mechanism_reached": bool(mechanism),
+        "cum_forces": snapshots[-1]["member_forces"],
+        "u_full_cum": u_full_cum,
+        "cum_reaction": cum_reaction,
+    }
+    return build_pushover_pdf_report(f, pushover_result, units=payload.units)
+
+
 @app.post("/export/pdf")
 def export_pdf(payload: FrameIn):
+    if payload.analysis_type == 'pushover':
+        try:
+            pdf_bytes = _export_pushover_pdf(payload)
+        except KeyError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="frame2d_pushover_report.pdf"'},
+        )
+
     f = _build_frame(payload)
     try:
         pdf_bytes = build_pdf_report(f, units=payload.units, member_ids=payload.member_ids,

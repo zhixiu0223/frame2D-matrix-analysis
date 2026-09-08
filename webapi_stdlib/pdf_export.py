@@ -18,6 +18,7 @@ import io
 import matplotlib
 matplotlib.use("Agg")
 
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -218,10 +219,16 @@ def build_input_data_pages(f, units=None):
     member_rows = [[
         str(m.id), str(m.node_i), str(m.node_j), m.section, m.member_type,
         "yes" if m.release_i else "no", "yes" if m.release_j else "no",
+        _fmt(_from_si(units, "moment", m.Mp_i, "N·m")) if m.Mp_i is not None else "-",
+        _fmt(_from_si(units, "moment", m.R_post_yield_i, "N·m")) if m.R_post_yield_i is not None else "-",
+        _fmt(_from_si(units, "moment", m.Mp_j, "N·m")) if m.Mp_j is not None else "-",
+        _fmt(_from_si(units, "moment", m.R_post_yield_j, "N·m")) if m.R_post_yield_j is not None else "-",
     ] for m in members]
     support_rows = [[str(s.node), _fmt(s.ux), _fmt(s.uy), _fmt(s.rot)] for s in supports]
     page2 = _table_page("Input Data (2/3): Member Connectivity / Support Conditions", [
-        ("Member Connectivity", ["Member ID", "Node i", "Node j", "Section", "Type", "Release i", "Release j"], member_rows),
+        (f"Member Connectivity (plastic hinge capacity: Mp/R in {mu}, blank = never yields -- see Pushover section)",
+         ["Member ID", "Node i", "Node j", "Section", "Type", "Release i", "Release j",
+          f"Mp_i ({mu})", f"R_i ({mu}/rad)", f"Mp_j ({mu})", f"R_j ({mu}/rad)"], member_rows),
         ("Support Conditions (m, rad; blank = free, 0 = fixed, nonzero = prescribed displacement)",
          ["Node ID", "ux (m)", "uy (m)", "rot (rad)"], support_rows),
     ])
@@ -298,6 +305,143 @@ def build_fbd_images_archive(f, member_ids, units=None) -> bytes:
             fig.savefig(img_buf, format="png", dpi=150, bbox_inches="tight")
             plt.close(fig)
             zf.writestr(f"member_{mid}_fbd.png", img_buf.getvalue())
+    return buf.getvalue()
+
+
+def _pushover_final_solve_result(f, cum_forces, u_full_cum, cum_reaction):
+    """從Pushover最後一步的累積內力/位移/反力, 組出一個標準的SolveResult,
+    直接餵給plot_all()/plot_diagram()/plot_deformed()——這幾個函式本來
+    就是拿(frame, result)當參數, 不管result是"線性solve()算出來的"還是
+    "Pushover最後一步的狀態", 只要end_forces_local跟displacements的
+    符號慣例一致就能正常運作。已經確認過cum_forces跟MemberResult.
+    end_forces_local是同一種原始慣例(都是k_local@u_local直接算出來的,
+    沒有另外做符號校正), 不需要額外轉換。
+
+    L/angle用未變形的原始幾何(跟frame.members當初定義的一樣), 不是
+    Pushover過程中(如果開了geometry_update)每一步重算的變形後幾何——
+    這裡刻意畫的是"最終那一步的內力/位移狀態長什麼樣子", 用原始幾何
+    畫圖比較符合"疊在結構原始外形上看內力分布"這個報告用途的直覺,
+    不是要重現geometry_update內部計算時用的每一步幾何。
+    """
+    from frame2d.result import SolveResult, MemberResult
+    from frame2d.elements import member_geometry
+    member_results = {}
+    for mid, m in f.members.items():
+        ni, nj = f.nodes[m.node_i], f.nodes[m.node_j]
+        L, angle = member_geometry(ni, nj)
+        member_results[mid] = MemberResult(
+            member_id=mid, L=L, angle=angle,
+            end_forces_local=np.array(cum_forces[mid], dtype=float), slack=False,
+        )
+    return SolveResult(displacements=u_full_cum, reactions=cum_reaction,
+                        member_results=member_results, frame=f)
+
+
+def build_pushover_capacity_curve_page(history_u, history_F, event_log, mechanism_reached,
+                                        du_factor=1.0, du_unit="m", fu_factor=1.0, fu_unit="N",
+                                        figsize=(14, 9)):
+    """容量曲線(控制點位移 vs 底剪力)圖表頁, 降伏事件用紅點標出。"""
+    u_disp = np.array(history_u) * du_factor
+    F_disp = np.array(history_F) * fu_factor
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(u_disp, F_disp, color="#16a34a", linewidth=2)
+    if event_log:
+        ev_u = [ev["u"] * du_factor for ev in event_log]
+        ev_F = [ev["F"] * fu_factor for ev in event_log]
+        ax.scatter(ev_u, ev_F, color="#dc2626", zorder=5, s=30, label="Yield event")
+        ax.legend(loc="lower right")
+    ax.set_xlabel(f"Control point displacement ({du_unit})")
+    ax.set_ylabel(f"Base shear ({fu_unit})")
+    title = f"Capacity Curve -- final: u={u_disp[-1]:.3f}{du_unit}, F={F_disp[-1]:.3f}{fu_unit}, {len(event_log)} yield events"
+    if mechanism_reached:
+        title += " [MECHANISM REACHED -- pushover stopped early]"
+    ax.set_title(title, fontsize=11, fontweight="bold")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def build_pushover_hinge_pages(event_log, hinge_summary, du_factor=1.0, du_unit="m",
+                                fu_factor=1.0, fu_unit="N", mu_factor=1.0, mu_unit="N·m",
+                                figsize=(14, 9)):
+    """降伏事件清單 + 最終塑鉸狀態兩張表格頁——讓看報告的人可以查到
+    「哪根桿件哪一端、在容量曲線的哪個位置降伏」, 不用只能從圖上目測
+    紅點對應到哪裡。"""
+    event_rows = []
+    for i, ev in enumerate(event_log):
+        yielded_str = ", ".join(f"M{mid} end {'i' if e == 0 else 'j'}" for mid, e in ev["yielded"])
+        event_rows.append([str(i + 1), _fmt(ev["u"] * du_factor, 4), _fmt(ev["F"] * fu_factor, 3), yielded_str])
+    page1 = _table_page("Pushover Results (1/2): Yield Event Sequence", [
+        (f"Yield events in order (displacement in {du_unit}, base shear in {fu_unit})",
+         ["#", f"Displacement ({du_unit})", f"Base Shear ({fu_unit})", "Yielded member end(s)"], event_rows),
+    ], figsize=figsize)
+
+    hinge_rows = []
+    for mid_str in sorted(hinge_summary.keys(), key=lambda x: int(x)):
+        hs = hinge_summary[mid_str]
+        for end_idx, end_label in [(0, "i"), (1, "j")]:
+            if hs["Mp"][end_idx] is None:
+                continue
+            hinge_rows.append([
+                mid_str, end_label, _fmt(hs["Mp"][end_idx] * mu_factor, 3),
+                "yes" if hs["yielded"][end_idx] else "no",
+                _fmt(hs["theta_p"][end_idx], 5),
+                hs["performance_level"][end_idx] or "-",
+            ])
+    page2 = _table_page("Pushover Results (2/2): Final Hinge State", [
+        (f"Final state of every defined plastic hinge (Mp in {mu_unit})",
+         ["Member", "End", f"Mp ({mu_unit})", "Yielded", "Cumulative θp (rad)", "Performance Level"], hinge_rows),
+    ], figsize=figsize)
+    return [page1, page2]
+
+
+def build_pushover_pdf_report(f, pushover_result, units=None) -> bytes:
+    """Pushover結果的PDF報告: 完整輸入資料(含塑鉸容量) + 容量曲線圖 +
+    降伏事件清單 + 最終塑鉸狀態表 + 最後一步的結構/變形/N/V/M總覽圖
+    (直接重用plot_all(), 見_pushover_final_solve_result())——讓看報告
+    的人不用另外拿到原始檔案就能重新檢驗整個側推過程跟結果。
+
+    pushover_result: dict, 至少要有 history_u/history_F/event_log/
+        hinge_summary/mechanism_reached/cum_forces/u_full_cum/cum_reaction
+        這幾個key(webapi/main.py的_export_pushover_pdf()負責準備這個
+        dict, 直接來自run_pushover()的回傳值)。
+
+    已知限制(誠實記錄): 最後一步的N/V/M/變形圖用的是"最終那一步的內力
+    狀態", 不是像容量曲線那樣涵蓋整個歷程——想看中間某一步的狀態,
+    現在只有網頁上的「Pushover回放」看得到, PDF匯出目前只有最終狀態。
+    """
+    fu, ff, mu, mf = _force_moment_factors(units)
+    du, df = _disp_factor(units)
+
+    result = _pushover_final_solve_result(
+        f, pushover_result["cum_forces"], pushover_result["u_full_cum"], pushover_result["cum_reaction"])
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = plot_all(f, result, figsize=(14, 9), force_factor=ff, force_unit=fu,
+                       moment_factor=mf, moment_unit=mu, disp_factor=df, disp_unit=du)
+        fig.suptitle("Pushover -- Final Step Overview (structure / deformed shape / N / V / M)",
+                     fontsize=12, fontweight="bold", y=1.03)
+        fig.subplots_adjust(top=0.90)
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        curve_fig = build_pushover_capacity_curve_page(
+            pushover_result["history_u"], pushover_result["history_F"], pushover_result["event_log"],
+            pushover_result["mechanism_reached"], du_factor=df, du_unit=du, fu_factor=ff, fu_unit=fu)
+        pdf.savefig(curve_fig)
+        plt.close(curve_fig)
+
+        for page_fig in build_pushover_hinge_pages(
+                pushover_result["event_log"], pushover_result["hinge_summary"],
+                du_factor=df, du_unit=du, fu_factor=ff, fu_unit=fu, mu_factor=mf, mu_unit=mu):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
+        for page_fig in build_input_data_pages(f, units):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
     return buf.getvalue()
 
 

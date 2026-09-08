@@ -23,7 +23,7 @@ from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -91,9 +91,34 @@ def _build_and_solve(payload: dict, analysis_type: str = None):
     return f, result
 
 
-def _solve_pushover_payload(payload: dict) -> dict:
-    """analysis_type='pushover'的獨立處理路徑, 邏輯跟webapi/main.py的
-    _solve_pushover()完全一致, 只是輸入是普通dict。"""
+def _build_hinge_summary(hs_final):
+    """跟webapi/main.py同名函式邏輯一致(把{member_id: HingeState}轉成
+    JSON安全的摘要dict), /solve(pushover)跟/export/pdf(pushover)共用。"""
+    return {
+        str(mid): {
+            "Mp": [None if math.isinf(hs.Mp[0]) else float(hs.Mp[0]),
+                   None if math.isinf(hs.Mp[1]) else float(hs.Mp[1])],
+            "yielded": [bool(hs.yielded[0]), bool(hs.yielded[1])],
+            "theta_p": [float(hs.theta_p[0]), float(hs.theta_p[1])],
+            "performance_level": [hs.performance_level(0), hs.performance_level(1)],
+        }
+        for mid, hs in hs_final.items()
+    }
+
+
+def _build_event_log_out(event_log):
+    """跟webapi/main.py同名函式邏輯一致。"""
+    return [
+        {"u": float(ev["u"]), "F": float(ev["F"]),
+         "yielded": [[mid, end_idx] for mid, end_idx in ev["yielded"]]}
+        for ev in event_log
+    ]
+
+
+def _prepare_pushover_run(payload: dict):
+    """跟webapi/main.py的_prepare_pushover_run()邏輯一致, 輸入是dict
+    (這個檔案不用Pydantic的FrameIn)。回傳(f, run_kwargs), run_kwargs
+    可以直接**展開餵給run_pushover()。"""
     control_nodes = payload.get("pushover_control_nodes")
     if control_nodes is None:
         control_node = payload.get("pushover_control_node")
@@ -130,32 +155,26 @@ def _solve_pushover_payload(payload: dict) -> dict:
     if has_gravity_loads:
         initial_cum_forces, _ = apply_gravity(f, hinge_states)
 
-    history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-        f, hinge_states, prescribed_dofs=control_dofs, direction=weights,
+    return f, dict(
+        frame=f, hinge_states=hinge_states, prescribed_dofs=control_dofs, direction=weights,
         target_total=target, d_nominal=step,
         base_reaction_dofs=base_reaction_dofs, initial_cum_forces=initial_cum_forces,
         use_pdelta=payload.get("pushover_use_pdelta", False),
         mechanism_ratio_limit=payload.get("pushover_mechanism_ratio_limit", 1e-8),
         control_mode=payload.get("pushover_control_mode", "displacement"),
         geometry_update=payload.get("pushover_geometry_update", False),
-        include_snapshots=True,
     )
 
-    hinge_summary = {
-        str(mid): {
-            "Mp": [None if math.isinf(hs.Mp[0]) else float(hs.Mp[0]),
-                   None if math.isinf(hs.Mp[1]) else float(hs.Mp[1])],
-            "yielded": [bool(hs.yielded[0]), bool(hs.yielded[1])],
-            "theta_p": [float(hs.theta_p[0]), float(hs.theta_p[1])],
-            "performance_level": [hs.performance_level(0), hs.performance_level(1)],
-        }
-        for mid, hs in hs_final.items()
-    }
-    event_log_out = [
-        {"u": float(ev["u"]), "F": float(ev["F"]),
-         "yielded": [[mid, end_idx] for mid, end_idx in ev["yielded"]]}
-        for ev in event_log
-    ]
+
+def _solve_pushover_payload(payload: dict) -> dict:
+    """analysis_type='pushover'的獨立處理路徑, 邏輯跟webapi/main.py的
+    _solve_pushover()完全一致, 只是輸入是普通dict。"""
+    f, run_kwargs = _prepare_pushover_run(payload)
+    history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
+        include_snapshots=True, **run_kwargs)
+
+    hinge_summary = _build_hinge_summary(hs_final)
+    event_log_out = _build_event_log_out(event_log)
     snapshots_out = [
         {
             "member_forces": {str(mid): f for mid, f in snap["member_forces"].items()},
@@ -173,6 +192,26 @@ def _solve_pushover_payload(payload: dict) -> dict:
         "hinge_summary": hinge_summary,
         "history_snapshots": snapshots_out,
     }
+
+
+def _export_pushover_pdf(payload: dict) -> bytes:
+    """跟webapi/main.py的_export_pushover_pdf()邏輯一致, 輸入是dict。"""
+    f, run_kwargs = _prepare_pushover_run(payload)
+    (history_u, history_F, event_log, hs_final, mechanism,
+     u_full_cum, snapshots, cum_reaction, max_rotation) = run_pushover(
+        include_final_displacement=True, include_snapshots=True,
+        include_final_reactions=True, include_max_rotation=True, **run_kwargs)
+
+    pushover_result = {
+        "history_u": history_u, "history_F": history_F,
+        "event_log": _build_event_log_out(event_log),
+        "hinge_summary": _build_hinge_summary(hs_final),
+        "mechanism_reached": bool(mechanism),
+        "cum_forces": snapshots[-1]["member_forces"],
+        "u_full_cum": u_full_cum,
+        "cum_reaction": cum_reaction,
+    }
+    return build_pushover_pdf_report(f, pushover_result, units=payload.get("units"))
 
 
 def _solve_payload(payload: dict) -> dict:
@@ -292,6 +331,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/export/pdf":
             try:
                 payload = self._read_json_body()
+                if payload.get("analysis_type") == "pushover":
+                    try:
+                        pdf_bytes = _export_pushover_pdf(payload)
+                    except KeyError as e:
+                        raise ValueError(
+                            f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除"
+                        )
+                    self._send_bytes(pdf_bytes, "application/pdf",
+                                      extra_headers={"Content-Disposition": 'attachment; filename="frame2d_pushover_report.pdf"'})
+                    return
                 f = _build_frame(payload)
                 try:
                     pdf_bytes = build_pdf_report(f, units=payload.get("units"), member_ids=payload.get("member_ids"),
