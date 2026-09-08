@@ -4101,8 +4101,24 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
   for (const n of model.nodes) md += `| ${n.id} | ${n.x} | ${n.y} |\n`;
   md += `\n### 斷面性質\n\n| 名稱 | E (${eu}) | I (${iu}) | A (${au}) |\n|---|---|---|---|\n`;
   for (const s of model.sections) md += `| ${s.name} | ${fromSI('E', s.E)} | ${fromSI('I', s.I)} | ${fromSI('A', s.A)} |\n`;
-  md += `\n### 桿件連接\n\n| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 |\n|---|---|---|---|---|---|---|\n`;
-  for (const m of model.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
+  // 桿件連接表加上塑鉸容量(Mp/R): Pushover驗證最重要的輸入之一, 之前
+  // 這裡完全沒有匯出, 別人光看這份報告根本不知道你哪根桿件哪一端設了
+  // 塑鉸、Mp跟R各是多少, 沒辦法真的重新檢驗你的過程。
+  const anyHinge = model.members.some(m => m.Mp_i != null || m.Mp_j != null);
+  md += `\n### 桿件連接${anyHinge ? '(含塑鉸容量, Mp單位' + mu + ', R單位' + mu + '/rad)' : ''}\n\n`;
+  if (anyHinge) {
+    md += `| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 | Mp_i | R_i | Mp_j | R_j |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
+    for (const m of model.members) {
+      md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j}`
+        + ` | ${m.Mp_i != null ? fromSI('moment', m.Mp_i).toFixed(3) : '-'}`
+        + ` | ${m.R_post_yield_i != null ? fromSI('moment', m.R_post_yield_i).toFixed(3) : '-'}`
+        + ` | ${m.Mp_j != null ? fromSI('moment', m.Mp_j).toFixed(3) : '-'}`
+        + ` | ${m.R_post_yield_j != null ? fromSI('moment', m.R_post_yield_j).toFixed(3) : '-'} |\n`;
+    }
+  } else {
+    md += `| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 |\n|---|---|---|---|---|---|---|\n`;
+    for (const m of model.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
+  }
   md += `\n### 支承條件(空白=自由, 0=固定, 非0=強制位移, m/rad)\n\n| node | ux | uy | rot |\n|---|---|---|---|\n`;
   for (const s of model.supports) md += `| ${s.node} | ${s.ux ?? ''} | ${s.uy ?? ''} | ${s.rot ?? ''} |\n`;
   if (model.point_loads.length) {
@@ -4118,17 +4134,53 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
     for (const p of model.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx !== undefined && p.fx !== null ? fromSI('force', p.fx) : '-'} | ${p.fy !== undefined && p.fy !== null ? fromSI('force', p.fy) : '-'} | ${p.F !== undefined && p.F !== null ? fromSI('force', p.F) : '-'} | ${p.angle_deg ?? '-'} | ${fromSI('moment', p.m)} |\n`;
   }
 
-  md += `\n## 節點結果\n\n`;
-  md += `| node | ux (${du}) | uy (${du}) | rot (rad) | Rx (${fu}) | Ry (${fu}) | M (${mu}) |\n`;
-  md += `|---|---|---|---|---|---|---|\n`;
-  for (const n of lastResult.nodes) {
-    md += `| ${n.node} | ${fromSI('disp', n.ux).toExponential(3)} | ${fromSI('disp', n.uy).toExponential(3)} | ${n.rot.toExponential(3)} | ${fromSI('force', n.Rx).toFixed(3)} | ${fromSI('force', n.Ry).toFixed(3)} | ${fromSI('moment', n.M).toFixed(3)} |\n`;
-  }
-  md += `\n## 桿件端內力\n\n`;
-  md += `| member | L (m) | 角度(度) | N1 (${fu}) | V1 (${fu}) | M1 (${mu}) | N2 (${fu}) | V2 (${fu}) | M2 (${mu}) |\n`;
-  md += `|---|---|---|---|---|---|---|---|---|\n`;
-  for (const m of lastResult.members) {
-    md += `| ${m.member_id} | ${m.L.toFixed(3)} | ${m.angle_deg.toFixed(1)} | ${fromSI('force', m.N1).toFixed(3)} | ${fromSI('force', m.V1).toFixed(3)} | ${fromSI('moment', m.M1).toFixed(3)} | ${fromSI('force', m.N2).toFixed(3)} | ${fromSI('force', m.V2).toFixed(3)} | ${fromSI('moment', m.M2).toFixed(3)} |\n`;
+  if (lastResult.analysis_type === 'pushover') {
+    // Pushover的結果是一整條歷程, 不是單一狀態的節點/桿件表——跟
+    // linear/pdelta完全不同的內容, 之前這裡完全沒有分支處理, 直接用
+    // lastResult.nodes(pushover回傳裡根本沒有這個欄位)會直接crash,
+    // 使用者點了「匯出Markdown」什麼事都不會發生(沒有錯誤訊息,
+    // 因為例外被瀏覽器事件系統吞掉了, 從使用者角度看就是按了沒反應)。
+    md += `\n## Pushover 側推結果\n\n`;
+    const lastU = fromSI('disp', lastResult.history_u[lastResult.history_u.length - 1]);
+    const lastF = fromSI('force', lastResult.history_F[lastResult.history_F.length - 1]);
+    md += `最終位移 ${lastU.toFixed(3)} ${du}, 底剪力 ${lastF.toFixed(3)} ${fu}, `
+      + `${lastResult.event_log.length} 個降伏事件`
+      + (lastResult.mechanism_reached ? ', **已形成側移機構, 側推提前中止**' : '') + '\n\n';
+
+    md += `### 容量曲線(控制點位移 vs 底剪力)\n\n| 步驟 | 位移 (${du}) | 底剪力 (${fu}) |\n|---|---|---|\n`;
+    for (let i = 0; i < lastResult.history_u.length; i++) {
+      md += `| ${i + 1} | ${fromSI('disp', lastResult.history_u[i]).toFixed(4)} | ${fromSI('force', lastResult.history_F[i]).toFixed(3)} |\n`;
+    }
+
+    if (lastResult.event_log.length) {
+      md += `\n### 降伏事件清單\n\n| # | 位移 (${du}) | 底剪力 (${fu}) | 降伏的桿件端點 |\n|---|---|---|---|\n`;
+      lastResult.event_log.forEach((ev, i) => {
+        const yielded = ev.yielded.map(([mid, e]) => `M${mid}端${e === 0 ? 'i' : 'j'}`).join(', ');
+        md += `| ${i + 1} | ${fromSI('disp', ev.u).toFixed(4)} | ${fromSI('force', ev.F).toFixed(3)} | ${yielded} |\n`;
+      });
+    }
+
+    md += `\n### 最終塑鉸狀態\n\n| member | 端 | Mp (${mu}) | 是否降伏 | 累積塑性轉角θp (rad) | 性能等級 |\n|---|---|---|---|---|---|\n`;
+    for (const midStr in lastResult.hinge_summary) {
+      const hs = lastResult.hinge_summary[midStr];
+      for (const endIdx of [0, 1]) {
+        if (hs.Mp[endIdx] == null) continue;
+        md += `| ${midStr} | ${endIdx === 0 ? 'i' : 'j'} | ${fromSI('moment', hs.Mp[endIdx]).toFixed(3)} | ${hs.yielded[endIdx] ? '是' : '否'} | ${hs.theta_p[endIdx].toFixed(5)} | ${hs.performance_level[endIdx] ?? '-'} |\n`;
+      }
+    }
+  } else {
+    md += `\n## 節點結果\n\n`;
+    md += `| node | ux (${du}) | uy (${du}) | rot (rad) | Rx (${fu}) | Ry (${fu}) | M (${mu}) |\n`;
+    md += `|---|---|---|---|---|---|---|\n`;
+    for (const n of lastResult.nodes) {
+      md += `| ${n.node} | ${fromSI('disp', n.ux).toExponential(3)} | ${fromSI('disp', n.uy).toExponential(3)} | ${n.rot.toExponential(3)} | ${fromSI('force', n.Rx).toFixed(3)} | ${fromSI('force', n.Ry).toFixed(3)} | ${fromSI('moment', n.M).toFixed(3)} |\n`;
+    }
+    md += `\n## 桿件端內力\n\n`;
+    md += `| member | L (m) | 角度(度) | N1 (${fu}) | V1 (${fu}) | M1 (${mu}) | N2 (${fu}) | V2 (${fu}) | M2 (${mu}) |\n`;
+    md += `|---|---|---|---|---|---|---|---|---|\n`;
+    for (const m of lastResult.members) {
+      md += `| ${m.member_id} | ${m.L.toFixed(3)} | ${m.angle_deg.toFixed(1)} | ${fromSI('force', m.N1).toFixed(3)} | ${fromSI('force', m.V1).toFixed(3)} | ${fromSI('moment', m.M1).toFixed(3)} | ${fromSI('force', m.N2).toFixed(3)} | ${fromSI('force', m.V2).toFixed(3)} | ${fromSI('moment', m.M2).toFixed(3)} |\n`;
+    }
   }
   const blob = new Blob([md], {type: 'text/markdown'});
   downloadBlob(blob, (currentName || 'frame2d_result') + '.md');
