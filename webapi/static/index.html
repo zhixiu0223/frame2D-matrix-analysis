@@ -332,23 +332,23 @@
         <details class="dropdownSection">
           <summary>單位設定</summary>
           <div class="dropdownBody">
-            <label class="snapLabel">E單位<select id="unitE" style="width:5rem;">
-              <option value="Pa">Pa</option><option value="MPa">MPa</option><option value="GPa" selected>GPa</option>
+            <label class="snapLabel">E單位<select id="unitE" style="width:8rem;">
+              <option value="Pa">Pa(=1 N/m²)</option><option value="MPa">MPa(=10⁶ Pa)</option><option value="GPa" selected>GPa(=10⁹ Pa)</option>
             </select></label>
-            <label class="snapLabel">I單位<select id="unitI" style="width:5rem;">
-              <option value="m4">m⁴</option><option value="mm4" selected>mm⁴</option><option value="cm4">cm⁴</option>
+            <label class="snapLabel">I單位<select id="unitI" style="width:9rem;">
+              <option value="m4">m⁴(基準)</option><option value="mm4" selected>mm⁴(=10⁻¹² m⁴)</option><option value="cm4">cm⁴(=10⁻⁸ m⁴)</option>
             </select></label>
-            <label class="snapLabel">A單位<select id="unitA" style="width:5rem;">
-              <option value="m2" selected>m²</option><option value="mm2">mm²</option><option value="cm2">cm²</option>
+            <label class="snapLabel">A單位<select id="unitA" style="width:9rem;">
+              <option value="m2" selected>m²(基準)</option><option value="mm2">mm²(=10⁻⁶ m²)</option><option value="cm2">cm²(=10⁻⁴ m²)</option>
             </select></label>
-            <label class="snapLabel">位移單位<select id="unitDisp" style="width:5rem;">
-              <option value="m">m</option><option value="cm">cm</option><option value="mm" selected>mm</option>
+            <label class="snapLabel">位移單位<select id="unitDisp" style="width:8.5rem;">
+              <option value="m">m(基準)</option><option value="cm">cm(=10⁻² m)</option><option value="mm" selected>mm(=10⁻³ m)</option>
             </select></label>
-            <label class="snapLabel">力單位<select id="unitForce" style="width:5rem;">
-              <option value="N">N</option><option value="kN" selected>kN</option>
+            <label class="snapLabel">力單位<select id="unitForce" style="width:8rem;">
+              <option value="N">N(基準)</option><option value="kN" selected>kN(=10³ N)</option>
             </select></label>
-            <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:5.5rem;">
-              <option value="N·m">N·m</option><option value="kN·m" selected>kN·m</option>
+            <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:8.5rem;">
+              <option value="N·m">N·m(基準)</option><option value="kN·m" selected>kN·m(=10³ N·m)</option>
             </select></label>
             <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
             <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
