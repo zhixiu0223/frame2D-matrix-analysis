@@ -325,7 +325,8 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
                   d_nominal, base_reaction_dofs, initial_cum_forces=None,
                   use_pdelta=False, mechanism_ratio_limit=1e-8, max_steps=100000,
                   include_final_displacement=False, include_snapshots=False,
-                  control_mode='displacement', geometry_update=False):
+                  control_mode='displacement', geometry_update=False,
+                  include_final_reactions=False, include_max_rotation=False):
     """遞增側推主迴圈, 支援位移控制(預設)或力控制。
 
     frame: 已定義節點/桿件/支承的Frame2D(側推的推力來自prescribed_dofs
@@ -386,8 +387,16 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
         history_F(np.array, 底剪力), event_log(list of dict),
         hinge_states(原地更新後的同一組物件), mechanism_reached(bool)
         [, u_full_cum(np.array) -- 只有include_final_displacement=True時]
-        [, history_snapshots(list) -- 只有include_snapshots=True時, 排在
-          u_full_cum後面, 不管include_final_displacement是不是True]
+        [, history_snapshots(list) -- 只有include_snapshots=True時]
+        [, cum_reaction(np.array) -- 只有include_final_reactions=True時,
+          全域自由度反力向量, 供畫最終狀態的結構/內力圖用]
+        [, max_rotation(float) -- 只有include_max_rotation=True時, 所有
+          節點裡最大的轉角絕對值(rad)——超過大約0.1rad(約5.7度)代表
+          這次結果已經超出小角度假設的有效範圍, 不管有沒有開P-Delta/
+          geometry_update都不可信, 見對話紀錄裡實際案例逼出來的發現]
+        (以上四個都是選用的, 依序append在後面, 不管哪個組合都是同一個
+        固定順序: final_displacement, snapshots, final_reactions,
+        max_rotation)
     """
     direction = np.array(direction, dtype=float)
     fixed_dofs = _fixed_dof_set(frame)
@@ -496,9 +505,21 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             if include_snapshots:
                 history_snapshots.append(_snapshot(cum_forces, hinge_states))
 
+    # 轉角自由度是dofs_of()回傳的第三個(index 2), 也就是每個節點的
+    # 全域dof編號裡mod 3餘2的那些——檢查有沒有任何節點轉角超過小角度
+    # 假設的合理範圍(0.1rad約5.7度): 我們的彎曲公式(跟所有標準線彈性
+    # 梁元素一樣)是建立在"轉角很小"這個前提上的, 一旦轉角真的變大,
+    # 不管有沒有開geometry_update, 結果都已經超出模型的有效範圍——這是
+    # 真實案例逼出來的發現(見對話紀錄), 不是憑空假設的邊界條件。
+    max_rotation = float(np.max(np.abs(u_full_cum[2:n_node_dof:3]))) if n_node_dof >= 3 else 0.0
+
     result = [np.array(history_u), np.array(history_F), event_log, hinge_states, mechanism_reached]
     if include_final_displacement:
         result.append(u_full_cum)
     if include_snapshots:
         result.append(history_snapshots)
+    if include_final_reactions:
+        result.append(cum_reaction)
+    if include_max_rotation:
+        result.append(max_rotation)
     return tuple(result)

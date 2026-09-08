@@ -82,3 +82,23 @@ assert snapshots[0]['hinge_states'][0]['theta_p'] == [0.0, 0.0], (
 print("PASS: 快照是深拷貝, 後續修改hinge_states不會牽動已經記錄的舊快照\n")
 
 print("PASS: 逐步回放快照所有案例通過")
+
+
+# ---- 案例E: include_final_reactions跟include_max_rotation兩個新flag ----
+print("=== 案例E: include_final_reactions/include_max_rotation ===")
+f3 = cantilever_column()
+hs3 = initial_hinge_states(f3)
+u3, F3, ev3, hs3f, mech3, u_full3, react3, maxrot3 = run_pushover(
+    f3, hs3, prescribed_dofs=[f3.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.03, d_nominal=0.005, base_reaction_dofs=[f3.dofs_of(0)[0]],
+    include_final_displacement=True, include_final_reactions=True, include_max_rotation=True,
+)
+assert react3.shape == u_full3.shape, "cum_reaction應該跟u_full_cum一樣長(都是全域dof向量)"
+assert np.isclose(-react3[f3.dofs_of(0)[0]], F3[-1], rtol=1e-6), (
+    "cum_reaction在支承自由度的值, 加總起來應該跟history_F的最後一項(底剪力)一致"
+)
+assert maxrot3 >= 0, "max_rotation應該是非負值(絕對值)"
+print(f"PASS: cum_reaction長度正確、跟底剪力一致({-react3[f3.dofs_of(0)[0]]:.4f}≈{F3[-1]:.4f}), "
+      f"max_rotation={maxrot3:.5f}rad(非負)\n")
+
+print("PASS: 逐步回放快照所有案例通過(含新增的final_reactions/max_rotation)")
