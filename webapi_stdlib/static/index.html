@@ -3629,6 +3629,48 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
     updatePushoverUnitLabels();      // Pushover設定列的「目標位移」「步長」單位標籤也要跟著換
   });
 });
+// 從Pushover設定列目前的欄位值組出送給/solve或/export/pdf的payload,
+// 兩個地方都要送同一組pushover_*欄位, 抽出來共用避免兩邊分別維護、
+// 互相漂移。驗證失敗時用setStatus()顯示錯誤訊息並回傳null, 呼叫端
+// 檢查到null就直接return, 不要送出請求。
+function buildPushoverPayload() {
+  const nodesRaw = document.getElementById('pv_nodes').value.trim();
+  const weightsRaw = document.getElementById('pv_weights').value.trim();
+  const target = document.getElementById('pv_target').value;
+  const step = document.getElementById('pv_step').value;
+  const controlMode = document.getElementById('pv_mode').value;
+  if (nodesRaw === '' || target === '' || step === '') {
+    setStatus('Pushover需要填「控制節點」「' + (controlMode === 'force' ? '目標力' : '目標位移') + '」「' + (controlMode === 'force' ? '力步長' : '步長') + '」三個欄位');
+    return null;
+  }
+  const controlNodes = nodesRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseInt(s, 10));
+  if (controlNodes.some(n => isNaN(n))) {
+    setStatus('控制節點格式錯誤, 應該是逗號分隔的節點編號, 例如 6,7,8');
+    return null;
+  }
+  let weights = null;
+  if (weightsRaw !== '') {
+    weights = weightsRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseFloat(s));
+    if (weights.some(w => isNaN(w)) || weights.length !== controlNodes.length) {
+      setStatus('權重格式錯誤, 應該是跟控制節點數量一樣多、逗號分隔的數字, 或整個留空(=全部1.0)');
+      return null;
+    }
+  }
+  const unitKind = controlMode === 'force' ? 'force' : 'disp';
+  return {
+    ...model, analysis_type: 'pushover',
+    pushover_control_nodes: controlNodes,
+    pushover_weights: weights,
+    pushover_direction: document.getElementById('pv_dir').value,
+    pushover_control_mode: controlMode,
+    pushover_target: toSI(unitKind, parseFloat(target)),
+    pushover_step: toSI(unitKind, parseFloat(step)),
+    pushover_use_pdelta: document.getElementById('pv_pdelta').checked,
+    pushover_geometry_update: document.getElementById('pv_geomupdate').checked,
+    units: currentUnitsPayload(),
+  };
+}
+
 function updatePushoverUnitLabels() {
   const isForce = document.getElementById('pv_mode').value === 'force';
   const u = isForce ? unitOf('force') : unitOf('disp');
@@ -3833,40 +3875,8 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
 
   let body;
   if (isPushover) {
-    const nodesRaw = document.getElementById('pv_nodes').value.trim();
-    const weightsRaw = document.getElementById('pv_weights').value.trim();
-    const target = document.getElementById('pv_target').value;
-    const step = document.getElementById('pv_step').value;
-    const controlMode = document.getElementById('pv_mode').value;
-    if (nodesRaw === '' || target === '' || step === '') {
-      setStatus('Pushover需要填「控制節點」「' + (controlMode === 'force' ? '目標力' : '目標位移') + '」「' + (controlMode === 'force' ? '力步長' : '步長') + '」三個欄位');
-      return;
-    }
-    const controlNodes = nodesRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseInt(s, 10));
-    if (controlNodes.some(n => isNaN(n))) {
-      setStatus('控制節點格式錯誤, 應該是逗號分隔的節點編號, 例如 6,7,8');
-      return;
-    }
-    let weights = null;
-    if (weightsRaw !== '') {
-      weights = weightsRaw.split(',').map(s => s.trim()).filter(s => s !== '').map(s => parseFloat(s));
-      if (weights.some(w => isNaN(w)) || weights.length !== controlNodes.length) {
-        setStatus('權重格式錯誤, 應該是跟控制節點數量一樣多、逗號分隔的數字, 或整個留空(=全部1.0)');
-        return;
-      }
-    }
-    const unitKind = controlMode === 'force' ? 'force' : 'disp';
-    body = {
-      ...model, analysis_type: 'pushover',
-      pushover_control_nodes: controlNodes,
-      pushover_weights: weights,
-      pushover_direction: document.getElementById('pv_dir').value,
-      pushover_control_mode: controlMode,
-      pushover_target: toSI(unitKind, parseFloat(target)),
-      pushover_step: toSI(unitKind, parseFloat(step)),
-      pushover_use_pdelta: document.getElementById('pv_pdelta').checked,
-      pushover_geometry_update: document.getElementById('pv_geomupdate').checked,
-    };
+    body = buildPushoverPayload();
+    if (!body) return;   // buildPushoverPayload()已經用setStatus()顯示錯誤訊息
   } else {
     // model本身(存檔/匯出用的資料)不夾帶analysis_type/pushover設定,
     // 只在送出求解請求的當下額外加, 避免「這次怎麼算」的選擇被誤存進
@@ -4334,18 +4344,27 @@ document.getElementById('fbdPreviewExportImages').addEventListener('click', asyn
 });
 document.getElementById('btnExportPdf').addEventListener('click', async () => {
   sanitizeModel();
-  setStatus('產生 PDF 中...');
+  const isPushoverResult = lastResult && lastResult.analysis_type === 'pushover';
+  setStatus(isPushoverResult ? '產生Pushover PDF報告中...' : '產生 PDF 中...');
   try {
     // 把目前「顯示設定」選的單位一起送給後端, 讓PDF報告顯示的數字/
     // 單位標籤跟畫面上看到的一致, 不用另外猜這份報告是SI還是別的
-    // 單位基準。
-    const payload = {...model, units: currentUnitsPayload()};
+    // 單位基準。Pushover結果要另外送pushover_*那組欄位(控制節點/目標/
+    // 控制方式等), 跟/solve送的是同一組, 用buildPushoverPayload()共用,
+    // 不用兩邊分別維護。
+    let payload;
+    if (isPushoverResult) {
+      payload = buildPushoverPayload();
+      if (!payload) return;
+    } else {
+      payload = {...model, units: currentUnitsPayload()};
+    }
     const res = await fetch('/export/pdf', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
     if (!res.ok) { setStatus('PDF 產生失敗: ' + await res.text()); return; }
     const blob = await res.blob();
-    downloadBlob(blob, (currentName || 'frame2d_report') + '.pdf');
+    downloadBlob(blob, (currentName || 'frame2d_report') + (isPushoverResult ? '_pushover' : '') + '.pdf');
     setStatus('PDF 已下載');
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
 });
