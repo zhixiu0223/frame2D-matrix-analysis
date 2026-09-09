@@ -24,3 +24,4 @@ venv/
 
 # Generated plots
 examples/output_plots/
+saved_models/

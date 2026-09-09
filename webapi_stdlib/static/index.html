@@ -199,7 +199,14 @@
         <button id="pb_next" style="padding:0.3rem 0.6rem;">▶</button>
       </div>
       <p id="pb_info" class="hint" style="margin:0.3rem 0 0;font-weight:bold;"></p>
-      <p class="hint" style="margin:0.2rem 0 0;">拖動滑桿或按左右箭頭一步一步看: 桿件顏色深淺代表當下彎矩大小, 圈圈是塑鉸狀態(藍色虛線=彈性, 紅色=已降伏, 大小隨累積塑性轉角變化)。這裡的桿件位置是原始(未變形)幾何, 不是變形後的形狀。</p>
+      <label class="snapLabel"><input type="checkbox" id="pb_accurate"> 顯示這一步精確的N/V/M/變形圖(較慢, 需要連線, 下面勾選要顯示哪些)</label>
+      <div id="pb_accurate_kinds" style="display:none;">
+        <label class="snapLabel"><input type="checkbox" id="pb_cc_N" checked> N圖</label>
+        <label class="snapLabel"><input type="checkbox" id="pb_cc_V" checked> V圖</label>
+        <label class="snapLabel"><input type="checkbox" id="pb_cc_M" checked> M圖</label>
+        <label class="snapLabel"><input type="checkbox" id="pb_cc_deformed" checked> 變形圖</label>
+      </div>
+      <p class="hint" style="margin:0.2rem 0 0;">拖動滑桿或按左右箭頭一步一步看: 桿件顏色深淺代表當下彎矩大小, 圈圈是塑鉸狀態(藍色虛線=彈性, 紅色=已降伏, 大小隨累積塑性轉角變化)。這裡的桿件位置是原始(未變形)幾何, 不是變形後的形狀——上面勾選「精確N/V/M/變形圖」才會看到真正變形後的形狀跟精確內力分佈(不是簡化的顏色示意)。</p>
     </div>
     <!-- 全螢幕模式時playbackBar會被JS動態搬進canvasWrap裡(見
          btnFullscreen的click handler), 這個空div是搬回來的定位點
@@ -482,6 +489,8 @@ let selected = null;        // {type:'node'|'member', id}
 let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面上標記)
 let viewMode = 'structure';
 let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
+let pushoverStepCache = {};  // 索引(數字) -> /pushover_step_diagrams的回應, 避免同一步重複打API
+let pushoverStepFetchInFlight = null;  // 目前正在抓的步驟索引(避免同一步驟重複同時發出好幾個請求)
 let addMode = null;         // null | 'node' | 'member'
 let selectMode = null;      // null | 'rect' | 'line' -- 方框/直線批次選取模式
 let marqueeState = null;    // {mode, startWorld, curWorld} -- 拖曳選取框/選取線進行中
@@ -869,7 +878,11 @@ function render() {
     // 視圖比較像, 所以不比照pushover_curve整個跳過transform。
     const tp = getTransform(PAD_BY_VIEW.structure);
     if (document.getElementById('showGridToggle').checked) drawGrid(tp);
-    drawPushoverPlayback(tp);
+    if (document.getElementById('pb_accurate').checked) {
+      drawPushoverStepAccurate(tp);
+    } else {
+      drawPushoverPlayback(tp);
+    }
     drawQueryMarker(tp);
     return;
   }
@@ -1097,6 +1110,85 @@ function drawPushoverPlayback(t) {
   drawPushoverCurveInset(idx);
 }
 
+// 精確版逐步回放: 不用簡化的顏色示意, 改成真的呼叫/pushover_step_
+// diagrams, 用跟線性分析同一套精確積分方法算出這一步的N/V/M圖跟
+// 真正變形後的形狀, 重用drawCombinedDiagrams()(組合顯示那套已經
+// 驗證過的疊圖邏輯), 不用另外刻一份繪圖程式。資料要透過網路請求,
+// 是非同步的——這一函式如果發現目前這一步的資料還沒抓回來, 會先
+// 觸發抓取(抓完會自動呼叫render()再畫一次), 這一幀先退回舊的簡化
+// 版當作暫時畫面, 不會整個空白。
+function drawPushoverStepAccurate(t) {
+  if (!lastResult || !lastResult.history_snapshots) { drawNeedSolveMsg(); return; }
+  const idx = Math.max(0, Math.min(pushoverStepIndex, lastResult.history_snapshots.length - 1));
+  const stepData = pushoverStepCache[idx];
+  if (!stepData) {
+    ensurePushoverStepData(idx);
+    if (document.getElementById('showGridToggle').checked) drawGrid(t);
+    drawPushoverPlayback(t);
+    const msg = el('text', {x: 10, y: 40, 'font-size': 13, fill: '#2563eb', 'font-weight': 'bold'});
+    msg.textContent = '正在載入這一步的精確N/V/M/變形圖...(暫時顯示簡化版)';
+    putOverlay(msg);
+    return;
+  }
+  // 暫時把lastResult换成長得像線性結果的樣子(diagrams/deformed/
+  // deform_scale/analysis_type), 重用drawCombinedDiagrams()畫完之後
+  // 換回來——這幾個是drawCombinedDiagrams()/drawDiagram()/drawDeformed()
+  // 內部直接讀lastResult.xxx用的, 不是用參數傳入, 所以用這種方式重用
+  // 最省事, 不用把那幾個函式簽名都改掉。
+  const saved = {
+    diagrams: lastResult.diagrams, deformed: lastResult.deformed,
+    deform_scale: lastResult.deform_scale, analysis_type: lastResult.analysis_type,
+    nodes: lastResult.nodes, members: lastResult.members,
+  };
+  lastResult.diagrams = stepData.diagrams;
+  lastResult.deformed = stepData.deformed;
+  lastResult.deform_scale = stepData.deform_scale;
+  lastResult.analysis_type = 'linear';
+  lastResult.nodes = stepData.nodes;
+  lastResult.members = stepData.members;
+  try {
+    drawCombinedDiagrams('pb_cc_');
+  } finally {
+    lastResult.diagrams = saved.diagrams;
+    lastResult.deformed = saved.deformed;
+    lastResult.deform_scale = saved.deform_scale;
+    lastResult.analysis_type = saved.analysis_type;
+    lastResult.nodes = saved.nodes;
+    lastResult.members = saved.members;
+  }
+}
+
+// 向/pushover_step_diagrams要某一步的精確圖, 抓回來存進pushoverStepCache
+// (同一步只抓一次, 不會重複打)。抓完成功會自動呼叫render()——這時候
+// drawPushoverStepAccurate()會發現pushoverStepCache[idx]已經有資料了,
+// 改用精確版重畫一次, 使用者不用自己再手動觸發。
+async function ensurePushoverStepData(idx) {
+  if (pushoverStepCache[idx] || pushoverStepFetchInFlight === idx) return;
+  if (!lastResult || !lastResult.history_snapshots || !lastResult.history_snapshots[idx]) return;
+  const snap = lastResult.history_snapshots[idx];
+  pushoverStepFetchInFlight = idx;
+  try {
+    const res = await fetch('/pushover_step_diagrams', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        ...model,
+        pushover_step_member_forces: snap.member_forces,
+        pushover_step_u_full: snap.u_full,
+      }),
+    });
+    if (!res.ok) {
+      setStatus('這一步的精確圖載入失敗: ' + await res.text());
+      return;
+    }
+    pushoverStepCache[idx] = await res.json();
+    if (pushoverStepIndex === idx && viewMode === 'pushover_playback') render();
+  } catch (e) {
+    setStatus('這一步的精確圖載入失敗: ' + e.message);
+  } finally {
+    pushoverStepFetchInFlight = null;
+  }
+}
+
 // 容量曲線縮圖, 疊在逐步回放畫面的右上角(固定螢幕座標, 不受camera
 // 平移縮放影響, 拖曳/縮放結構的時候縮圖位置不會跑掉)。這是為了讓
 // 使用者不用切分頁就能同時看到「現在這一步在容量曲線的哪個位置」跟
@@ -1174,6 +1266,15 @@ document.getElementById('pb_prev').addEventListener('click', () => {
 document.getElementById('pb_next').addEventListener('click', () => {
   const max = (lastResult && lastResult.history_snapshots) ? lastResult.history_snapshots.length - 1 : 0;
   if (pushoverStepIndex < max) { pushoverStepIndex++; updatePlaybackInfo(); render(); }
+});
+document.getElementById('pb_accurate').addEventListener('change', (e) => {
+  document.getElementById('pb_accurate_kinds').style.display = e.target.checked ? 'block' : 'none';
+  render();
+});
+['pb_cc_N', 'pb_cc_V', 'pb_cc_M', 'pb_cc_deformed'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (viewMode === 'pushover_playback' && document.getElementById('pb_accurate').checked) render();
+  });
 });
 
 function drawDimensionsAndSections(t) {
@@ -2187,15 +2288,20 @@ function drawDiagram(t, kind, labelY = 58) {
 // 圖有可能在橫條邊界附近輕微溢出到相鄰橫條——每張圖的15%對角線振幅
 // 慣例配合橫條自己的縮小後scale, 實務上通常不會真的溢出, 但這不是
 // 數學上保證裁切乾淨的做法。
-function drawCombinedDiagrams() {
+function drawCombinedDiagrams(checkboxPrefix = 'cc_') {
+  // checkboxPrefix: 讓「組合顯示」分頁(cc_N/cc_V/cc_M/cc_deformed)跟
+  // Pushover回放分頁(pb_cc_N/pb_cc_V/pb_cc_M/pb_cc_deformed)可以各自
+  // 獨立勾選要顯示哪些圖, 同時重用同一套繪圖邏輯, 不用複製一份——兩邊
+  // 用不同id前綴的checkbox, 避免同一個id出現兩次(DOM id重複會讓
+  // getElementById()只抓得到第一個, 是很容易犯的錯)。
   if (!lastResult) { drawNeedSolveMsg(); return; }
   if (lastResult.analysis_type === 'pushover') { drawPushoverResultMissingMsg(); return; }
 
   const kinds = [];
-  if (document.getElementById('cc_N').checked) kinds.push('N');
-  if (document.getElementById('cc_V').checked) kinds.push('V');
-  if (document.getElementById('cc_M').checked) kinds.push('M');
-  if (document.getElementById('cc_deformed').checked) kinds.push('deformed');
+  if (document.getElementById(checkboxPrefix + 'N').checked) kinds.push('N');
+  if (document.getElementById(checkboxPrefix + 'V').checked) kinds.push('V');
+  if (document.getElementById(checkboxPrefix + 'M').checked) kinds.push('M');
+  if (document.getElementById(checkboxPrefix + 'deformed').checked) kinds.push('deformed');
 
   if (kinds.length === 0) {
     const m = el('text', {x: 10, y: 22, 'font-size': 13, fill: '#dc2626'});
@@ -3795,6 +3901,7 @@ function resetViewToStructure() {
   document.getElementById('playbackBar').style.display = 'none';
   document.getElementById('combinedConfigBar').style.display = 'none';
   pushoverStepIndex = 0;
+  pushoverStepCache = {};
 }
 
 const MODE_BUTTONS = {node: 'btnAddNode', member: 'btnAddMember', rect: 'btnSelectRect', line: 'btnSelectLine'};
@@ -3901,6 +4008,7 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
     document.getElementById('btnViewPlayback').style.display = isPushover ? '' : 'none';
     if (isPushover) {
       pushoverStepIndex = 0;
+      pushoverStepCache = {};
       setStatus(pushoverStatusSuffix('完成'));
       // renderTables()是節點/桿件的「單一狀態」結果表格, pushover回傳
       // 的是一整條歷程(history_u/F), 沒有nodes/members這兩個欄位,
