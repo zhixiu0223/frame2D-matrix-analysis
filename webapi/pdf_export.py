@@ -373,6 +373,50 @@ def build_pushover_capacity_curve_page(history_u, history_F, event_log, mechanis
     return fig
 
 
+def build_pushover_hinge_diagram(f, hinge_summary, figsize=(11, 8.5)):
+    """結構圖疊塑鉸圈圈, 跟網頁上「結構/荷載」分頁看到的畫法對應:
+    藍色虛線空心圈=有設定塑鉸容量但這一步(這裡固定是最終狀態)還沒
+    降伏, 紅色實心圈=已經降伏(半徑隨累積塑性轉角θp變大)。讓看報告的
+    人不用自己對照桿件編號表格, 一眼就能看出「哪裡形成了塑鉸」。
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    plot_structure(f, ax=ax, show_node_ids=True, show_member_ids=False, show_dimensions=False)
+
+    for mid_str, hs in hinge_summary.items():
+        mid = int(mid_str)
+        if mid not in f.members:
+            continue
+        m = f.members[mid]
+        ni, nj = f.nodes[m.node_i], f.nodes[m.node_j]
+        dx, dy = nj.x - ni.x, nj.y - ni.y
+        L = (dx ** 2 + dy ** 2) ** 0.5 or 1.0
+        ux, uy = dx / L, dy / L
+        offset = min(0.5, L * 0.18)
+        ends = [(0, ni.x + ux * offset, ni.y + uy * offset, "i"),
+                (1, nj.x - ux * offset, nj.y - uy * offset, "j")]
+        for end_idx, ex, ey, label in ends:
+            if hs["Mp"][end_idx] is None:
+                continue
+            yielded = hs["yielded"][end_idx]
+            theta_p = hs["theta_p"][end_idx]
+            r = min(0.08 + theta_p * 3.5, 0.30) if yielded else 0.08   # 資料座標(m), 跟畫布比例配合過
+            if yielded:
+                ax.add_patch(plt.Circle((ex, ey), r, facecolor="#dc2626", edgecolor="#dc2626",
+                                         alpha=0.35, zorder=6))
+            else:
+                ax.add_patch(plt.Circle((ex, ey), r, facecolor="#2563eb", edgecolor="#2563eb",
+                                         alpha=0.15, linestyle="--", linewidth=1.2, zorder=6))
+
+    n_yielded = sum(1 for hs in hinge_summary.values() for e in (0, 1) if hs["yielded"][e])
+    n_defined = sum(1 for hs in hinge_summary.values() for e in (0, 1) if hs["Mp"][e] is not None)
+    ax.set_title(
+        f"Final Plastic Hinge Locations (blue dashed = defined, not yet yielded; "
+        f"red filled = yielded, {n_yielded}/{n_defined} hinges yielded)",
+        fontsize=10, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
 def build_pushover_hinge_pages(event_log, hinge_summary, du_factor=1.0, du_unit="m",
                                 fu_factor=1.0, fu_unit="N", mu_factor=1.0, mu_unit="N·m",
                                 figsize=(14, 9)):
@@ -445,6 +489,10 @@ def build_pushover_pdf_report(f, pushover_result, units=None) -> bytes:
             max_rotation=pushover_result.get("max_rotation"))
         pdf.savefig(curve_fig)
         plt.close(curve_fig)
+
+        hinge_diagram_fig = build_pushover_hinge_diagram(f, pushover_result["hinge_summary"])
+        pdf.savefig(hinge_diagram_fig)
+        plt.close(hinge_diagram_fig)
 
         for page_fig in build_pushover_hinge_pages(
                 pushover_result["event_log"], pushover_result["hinge_summary"],
