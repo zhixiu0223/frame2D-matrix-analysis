@@ -8,6 +8,7 @@ frame2d 的最小 Web API 層。
 import math
 from pathlib import Path
 
+import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,7 +21,7 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report, _pushover_final_solve_result
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -246,6 +247,7 @@ def _solve_pushover(payload: FrameIn):
         {
             "member_forces": {str(mid): f for mid, f in snap['member_forces'].items()},
             "hinge_states": {str(mid): hs for mid, hs in snap['hinge_states'].items()},
+            **({"u_full": snap['u_full']} if 'u_full' in snap else {}),
         }
         for snap in snapshots
     ]
@@ -330,6 +332,76 @@ def solve_frame(payload: FrameIn):
         out["deformed_linear"] = build_deformed_with_scale(f, result_linear, deform_scale)
 
     return out
+
+
+@app.post("/pushover_step_diagrams")
+def pushover_step_diagrams(payload: FrameIn):
+    """Pushover逐步回放要看某一步精確N/V/M圖+真正變形後形狀時用:
+    不重新跑一次側推, 直接拿前端已經有的那一步快照(pushover_step_
+    member_forces/pushover_step_u_full, 來自/solve pushover回應裡
+    history_snapshots[i]的原始內容)組一個假的SolveResult, 餵給跟
+    線性分析同一套build_diagrams_and_deformed()——這樣算出來的N/V/M
+    分佈跟變形曲線, 是用postprocess.py裡已經驗證過的精確積分方法,
+    不是逐步回放原本那種"只用桿件端點值線性內插"的簡化畫法, 對桿件
+    內部有分布載重的情況才會精確。
+
+    回傳形狀刻意跟/solve(線性)的回應一致(nodes/members/diagrams/
+    deformed/deform_scale), 前端可以直接重用既有的組合顯示/N/V/M/
+    變形圖繪製邏輯, 不用另外寫一套。
+
+    反力(Rx/Ry/M)這裡固定回傳0——因為快照只存了桿件內力跟位移場,
+    沒有存每一步的完整反力向量, 而反力不影響diagrams/deformed的計算
+    (只有節點結果表格會顯示反力, 這裡就顯示不出來, 這是刻意的取捨:
+    不想為了這個而讓每一步快照的資料量再變大)。
+    """
+    if payload.pushover_step_member_forces is None or payload.pushover_step_u_full is None:
+        raise HTTPException(
+            status_code=400,
+            detail="pushover_step_diagrams需要pushover_step_member_forces跟"
+                   "pushover_step_u_full兩個欄位(從history_snapshots某一步"
+                   "的原始內容直接傳過來)",
+        )
+    f = _build_frame(payload)
+    try:
+        cum_forces = {int(mid): np.array(vals, dtype=float)
+                      for mid, vals in payload.pushover_step_member_forces.items()}
+        u_full = np.array(payload.pushover_step_u_full, dtype=float)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"pushover_step資料格式錯誤: {e}")
+
+    missing = set(f.members.keys()) - set(cum_forces.keys())
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"pushover_step_member_forces缺少桿件{sorted(missing)}的資料, "
+                   f"模型跟快照對不起來(常見情況: 傳錯了/solve送出當時的model)",
+        )
+
+    result = _pushover_final_solve_result(f, cum_forces, u_full, np.zeros_like(u_full))
+    diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
+
+    node_out = []
+    for n in payload.nodes:
+        ux_i, uy_i, rot_i = f.dofs_of(n.id)
+        node_out.append({
+            "node": n.id, "ux": float(u_full[ux_i]), "uy": float(u_full[uy_i]), "rot": float(u_full[rot_i]),
+            "Rx": 0.0, "Ry": 0.0, "M": 0.0,
+        })
+    member_out = []
+    for mid, mr in result.member_results.items():
+        x, N, V, M = member_internal_forces(f, result, mid, n=2)
+        member_out.append({
+            "member_id": mid, "L": float(mr.L), "angle_deg": float(math.degrees(mr.angle)),
+            "N1": float(N[0]), "V1": float(V[0]), "M1": float(M[0]),
+            "N2": float(N[-1]), "V2": float(V[-1]), "M2": float(M[-1]),
+            "slack": bool(mr.slack),
+        })
+
+    return {
+        "nodes": node_out, "members": member_out,
+        "diagrams": diagrams, "deformed": deformed, "deform_scale": deform_scale,
+        "analysis_type": "pushover_step",
+    }
 
 
 # ---------------- 存檔 / 讀檔(Save / Save As / Load / 刪除) ----------------

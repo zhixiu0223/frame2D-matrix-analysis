@@ -310,15 +310,22 @@ def apply_gravity(frame, hinge_states):
     return cum_forces, result
 
 
-def _snapshot(cum_forces, hinge_states):
+def _snapshot(cum_forces, hinge_states, u_full_cum=None):
     """給定目前的cum_forces跟hinge_states, 回傳一份跟numpy/HingeState物件
     完全脫鉤的純Python/list快照(不會被之後的原地修改牽動)——這是逐步
-    回放要顯示"當下彎矩分佈/塑鉸狀態"的資料來源。"""
-    return {
+    回放要顯示"當下彎矩分佈/塑鉸狀態"的資料來源。
+
+    u_full_cum: 可選, 給了的話一併存進快照(轉成純Python list)——這是
+    逐步回放要畫"這一步真正的變形形狀+精確N/V/M圖"用的, 不給的話
+    快照裡就沒有這個key(舊的呼叫端/測試不受影響)。"""
+    snap = {
         'member_forces': {mid: [float(v) for v in f] for mid, f in cum_forces.items()},
         'hinge_states': {mid: {'yielded': list(hs.yielded), 'theta_p': [float(t) for t in hs.theta_p]}
                           for mid, hs in hinge_states.items()},
     }
+    if u_full_cum is not None:
+        snap['u_full'] = [float(v) for v in u_full_cum]
+    return snap
 
 
 def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
@@ -418,11 +425,11 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     history_F = [0.0]
     event_log = []
     mechanism_reached = False
-    history_snapshots = [_snapshot(cum_forces, hinge_states)] if include_snapshots else None
     u_full_cum = np.zeros(n_total)   # 累積絕對位移, 給_update_theta_p()算樑
                                       # 內部端點真正轉角用(不能只累積增量,
                                       # 因為beam_internal_rotation()的公式
                                       # 需要目前絕對的v1,theta1,v2,theta2)
+    history_snapshots = [_snapshot(cum_forces, hinge_states, u_full_cum)] if include_snapshots else None
 
     def current_axial_forces():
         return {mid: f[3] for mid, f in cum_forces.items()}   # 拉力為正(端j的Fx)
@@ -488,7 +495,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             history_F.append(F_base)
             event_log.append({'u': u_control_cum, 'F': F_base, 'yielded': newly_yielded})
             if include_snapshots:
-                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+                history_snapshots.append(_snapshot(cum_forces, hinge_states, u_full_cum))
         else:
             for mid, df in df_by_member.items():
                 cum_forces[mid] += df
@@ -503,7 +510,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
             history_u.append(u_control_cum)
             history_F.append(F_base)
             if include_snapshots:
-                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+                history_snapshots.append(_snapshot(cum_forces, hinge_states, u_full_cum))
 
     # 轉角自由度是dofs_of()回傳的第三個(index 2), 也就是每個節點的
     # 全域dof編號裡mod 3餘2的那些——檢查有沒有任何節點轉角超過小角度
@@ -642,8 +649,8 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
     history_F = [0.0]
     event_log = []
     mechanism_reached = False
-    history_snapshots = [_snapshot(cum_forces, hinge_states)] if include_snapshots else None
     u_full_cum = np.zeros(n_total)
+    history_snapshots = [_snapshot(cum_forces, hinge_states, u_full_cum)] if include_snapshots else None
 
     remaining = target_total
     steps = 0
@@ -695,7 +702,7 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
             history_F.append(F_base)
             event_log.append({'u': u_control_cum, 'F': F_base, 'yielded': newly_yielded})
             if include_snapshots:
-                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+                history_snapshots.append(_snapshot(cum_forces, hinge_states, u_full_cum))
         else:
             for mid, df in df_by_member.items():
                 cum_forces[mid] += df
@@ -710,7 +717,7 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
             history_u.append(u_control_cum)
             history_F.append(F_base)
             if include_snapshots:
-                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+                history_snapshots.append(_snapshot(cum_forces, hinge_states, u_full_cum))
 
     max_rotation = float(np.max(np.abs(u_full_cum[2:n_node_dof:3]))) if n_node_dof >= 3 else 0.0
 

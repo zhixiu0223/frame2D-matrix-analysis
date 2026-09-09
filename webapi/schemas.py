@@ -3,7 +3,7 @@ Pydantic 輸入/輸出模型 -- 把 frame2d 的 dataclass 包一層,做 JSON API
 不改動 frame2d 核心程式碼,這層只負責「JSON <-> Frame2D / SolveResult」的轉換,
 欄位名稱/預設值刻意跟 frame2d/model.py 的 dataclass 保持一致,方便對照。
 """
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict
 from pydantic import BaseModel, Field
 
 
@@ -94,6 +94,14 @@ class FrameIn(BaseModel):
     /preview/fbd、/export/fbd_images這三個端點會用到: 每根桿件
     附一張自由體圖(含旁邊的結構縮圖, 驗證Fx/Fy/M平衡)。其他端點
     忽略。"""
+    pushover_step_member_forces: Optional[Dict[str, List[float]]] = None
+    """只有/pushover_step_diagrams這個端點會用到: 從Pushover回放某一步
+    的快照(history_snapshots[i].member_forces)直接原封不動傳回來,
+    key是桿件id(字串), value是[Fx1,Fy1,M1,Fx2,Fy2,M2]。"""
+    pushover_step_u_full: Optional[List[float]] = None
+    """只有/pushover_step_diagrams這個端點會用到: 從Pushover回放某一步
+    的快照(history_snapshots[i].u_full)直接原封不動傳回來, 長度是
+    3*節點數(+release造成的額外自由度), 跟frame.dofs_of()的編號對應。"""
     fbd_only: Optional[bool] = False
     """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
     跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""

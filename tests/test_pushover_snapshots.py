@@ -102,3 +102,24 @@ print(f"PASS: cum_reaction長度正確、跟底剪力一致({-react3[f3.dofs_of(
       f"max_rotation={maxrot3:.5f}rad(非負)\n")
 
 print("PASS: 逐步回放快照所有案例通過(含新增的final_reactions/max_rotation)")
+
+
+# ---- 案例F: 快照現在也存u_full(逐步回放要畫真正變形後的形狀+精確
+# N/V/M圖用) ----
+print("=== 案例F: 快照存u_full, 且跟history_u一致 ===")
+f4 = cantilever_column()
+hs4 = initial_hinge_states(f4)
+u4, F4, ev4, hs4f, mech4, snaps4 = run_pushover(
+    f4, hs4, prescribed_dofs=[f4.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.05, d_nominal=0.01, base_reaction_dofs=[f4.dofs_of(0)[0]],
+    include_snapshots=True,
+)
+assert 'u_full' in snaps4[0], "快照應該存u_full"
+assert snaps4[0]['u_full'] == [0.0] * len(snaps4[0]['u_full']), "u=0時的快照, u_full應該全部是0"
+control_dof = f4.dofs_of(1)[0]
+assert abs(snaps4[-1]['u_full'][control_dof] - u4[-1]) < 1e-9, (
+    "最後一筆快照的u_full在控制自由度上的值應該跟history_u[-1]一致"
+)
+print(f"PASS: 快照正確存u_full, 且跟history_u完全一致({snaps4[-1]['u_full'][control_dof]:.6f}≈{u4[-1]:.6f})\n")
+
+print("PASS: 逐步回放快照所有案例通過(含u_full)")

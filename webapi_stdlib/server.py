@@ -16,6 +16,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import numpy as np
+
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
@@ -23,7 +25,7 @@ from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report
+from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report, _pushover_final_solve_result
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -191,6 +193,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         {
             "member_forces": {str(mid): f for mid, f in snap["member_forces"].items()},
             "hinge_states": {str(mid): hs for mid, hs in snap["hinge_states"].items()},
+            **({"u_full": snap["u_full"]} if "u_full" in snap else {}),
         }
         for snap in snapshots
     ]
@@ -227,6 +230,60 @@ def _export_pushover_pdf(payload: dict) -> bytes:
         "max_rotation": max_rotation,
     }
     return build_pushover_pdf_report(f, pushover_result, units=payload.get("units"))
+
+
+def _pushover_step_diagrams_payload(payload: dict) -> dict:
+    """跟webapi/main.py的pushover_step_diagrams()邏輯一致, 輸入是dict。
+    見那邊的docstring說明用途——不重新跑一次側推, 直接拿前端已經有的
+    某一步快照(pushover_step_member_forces/pushover_step_u_full)組
+    一個假的SolveResult, 餵給跟線性分析同一套build_diagrams_and_
+    deformed(), 讓逐步回放可以顯示精確的N/V/M圖+真正變形後的形狀,
+    不是簡化的線性內插畫法。"""
+    member_forces_in = payload.get("pushover_step_member_forces")
+    u_full_in = payload.get("pushover_step_u_full")
+    if member_forces_in is None or u_full_in is None:
+        raise ValueError(
+            "pushover_step_diagrams需要pushover_step_member_forces跟"
+            "pushover_step_u_full兩個欄位(從history_snapshots某一步"
+            "的原始內容直接傳過來)"
+        )
+    f = _build_frame(payload)
+    cum_forces = {int(mid): np.array(vals, dtype=float) for mid, vals in member_forces_in.items()}
+    u_full = np.array(u_full_in, dtype=float)
+
+    missing = set(f.members.keys()) - set(cum_forces.keys())
+    if missing:
+        raise ValueError(
+            f"pushover_step_member_forces缺少桿件{sorted(missing)}的資料, "
+            f"模型跟快照對不起來(常見情況: 傳錯了/solve送出當時的model)"
+        )
+
+    result = _pushover_final_solve_result(f, cum_forces, u_full, np.zeros_like(u_full))
+    diagrams, deformed, deform_scale = build_diagrams_and_deformed(f, result)
+
+    node_out = []
+    for n in payload.get("nodes", []):
+        nid = n["id"]
+        ux_i, uy_i, rot_i = f.dofs_of(nid)
+        node_out.append({
+            "node": nid, "ux": float(u_full[ux_i]), "uy": float(u_full[uy_i]), "rot": float(u_full[rot_i]),
+            "Rx": 0.0, "Ry": 0.0, "M": 0.0,
+        })
+    member_out = []
+    for mid, mr in result.member_results.items():
+        x, N, V, M = member_internal_forces(f, result, mid, n=2)
+        member_out.append({
+            "member_id": mid, "L": float(mr.L), "angle_deg": float(math.degrees(mr.angle)),
+            "N1": float(N[0]), "V1": float(V[0]), "M1": float(M[0]),
+            "N2": float(N[-1]), "V2": float(V[-1]), "M2": float(M[-1]),
+            "slack": bool(mr.slack),
+        })
+
+    return {
+        "nodes": node_out, "members": member_out,
+        "diagrams": diagrams, "deformed": deformed, "deform_scale": deform_scale,
+        "analysis_type": "pushover_step",
+    }
 
 
 def _solve_payload(payload: dict) -> dict:
@@ -340,6 +397,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json_body()
                 self._send_json(_solve_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/pushover_step_diagrams":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_pushover_step_diagrams_payload(payload))
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return
