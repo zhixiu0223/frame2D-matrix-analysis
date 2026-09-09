@@ -523,3 +523,204 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     if include_max_rotation:
         result.append(max_rotation)
     return tuple(result)
+
+
+# ============================================================
+# run_pushover_converged() -- 幾何平衡疊代版本, 跟run_pushover()是完全
+# 獨立的兩個函式(刻意不共用主迴圈), 對話紀錄裡使用者/ChatGPT都明確建議
+# 不要改掉已經驗證過的run_pushover(), 而是新增一個平行的版本, 讓兩者
+# 可以互相對照。
+#
+# 差在哪裡(誠實記錄, 不誇大):
+#   run_pushover(): 塑鉸狀態凍結的每一段區間內, 只用"這一段開始時"的
+#     幾何/軸力組一次勁度矩陣、解一次線性方程式, 不管有沒有開
+#     geometry_update, 都不會回頭檢查"這個答案在真正的變形終點上,
+#     幾何/軸力是否還跟一開始用的一致"。
+#   run_pushover_converged(): 同一段凍結區間內, 反覆疊代
+#     "用目前試探的位移場重算幾何/軸力 -> 重新組K -> 重新解這段增量"
+#     直到位移增量不再明顯變化(用相對範數當收斂判斷), 才承認這一段
+#     真的解完。這是Picard(不動點)疊代, 不是完整的Newton-Raphson
+#     (沒有算tangent的解析導數去加速收斂), 但確實會在接近極限承載力、
+#     真正的幾何非線性效應顯著時, 表現出"疊代不收斂"這個明確訊號,
+#     不會像run_pushover()那樣安靜地給出一條可能已經失真的曲線。
+#
+#   材料非線性(塑鉸降伏)這一塊完全沿用event-to-event的邏輯跟公式
+#   (_find_crossing_events()等), 沒有另外設計——這裡疊代的對象只有
+#   幾何/軸力這一塊, 不是"材料+幾何"完整耦合的殘餘力形式Newton-Raphson
+#   (那需要把雙折線塑鉸重新設計成連續可微分的形式, 是更大的工程,
+#   這裡沒有做)。
+# ============================================================
+
+def _solve_step_geom_converged(frame, hinge_states, cum_forces, u_full_cum,
+                                prescribed_dofs, direction, d_amount, fixed_dofs,
+                                control_mode, use_pdelta, geometry_update,
+                                geom_tol, max_geom_iter):
+    """對"這一步的位移/力增量大小是d_amount"這件事, 疊代到幾何/軸力
+    自洽為止。回傳(converged, du_full, df_by_member, K, member_T,
+    member_dofs, member_L)——K是最後一次(收斂時)那次疊代組出來的勁度
+    矩陣, 呼叫端用同一個K去更新反力, 不要另外重新組一次(重組的話,
+    如果用來重組的幾何/軸力狀態跟疊代收斂時不一致, 反力會對不上實際
+    被接受的du_full, 這是一個容易犯的錯, 這裡直接把K傳出去避免)。
+
+    疊代方式: 用目前試探的位移增量du_trial(初始猜測=0, 也就是先用
+    這一段"開始時"的幾何/軸力算第一次)算出對應的幾何(u_full_cum+
+    du_trial, 只有geometry_update=True時採用)跟軸力(cum_forces的
+    軸力分量+這次試探增量算出的軸力分量, 只有use_pdelta=True時採用),
+    重新組K, 重新解出新的du。如果新舊du的相對範數差距小於geom_tol,
+    視為收斂;連續max_geom_iter次都沒收斂, 回傳converged=False,
+    呼叫端要自己決定怎麼處理(這裡的設計是: 不收斂就視為已經到極限,
+    優雅停止, 不會硬給一個不可信的答案)。
+    """
+    du_trial = np.zeros_like(u_full_cum)
+    df_trial = None
+    K = member_T = member_dofs = member_L = None
+    for _ in range(max_geom_iter):
+        axial = None
+        if use_pdelta:
+            axial = {mid: f[3] for mid, f in cum_forces.items()}
+            if df_trial is not None:
+                for mid, df in df_trial.items():
+                    axial[mid] = axial[mid] + df[3]
+        geom_u = (u_full_cum + du_trial) if geometry_update else None
+        K, member_dofs, member_T, member_L = _assemble_stiffness_with_hinges(
+            frame, hinge_states, axial_forces=axial, u_full_cum=geom_u)
+        if control_mode == 'force':
+            du_new = solve_force_increment(K, prescribed_dofs, direction * d_amount, fixed_dofs)
+        else:
+            du_new = solve_displacement_increment(K, prescribed_dofs, direction * d_amount, fixed_dofs)
+        df_new = _member_force_increments(frame, member_T, member_dofs, member_L, hinge_states, axial, du_new)
+
+        denom = np.linalg.norm(du_new)
+        diff = np.linalg.norm(du_new - du_trial) / denom if denom > 1e-14 else 0.0
+        du_trial = du_new
+        df_trial = df_new
+        if diff < geom_tol:
+            return True, du_trial, df_trial, K, member_T, member_dofs, member_L
+    return False, du_trial, df_trial, K, member_T, member_dofs, member_L
+
+
+def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, target_total,
+                            d_nominal, base_reaction_dofs, initial_cum_forces=None,
+                            use_pdelta=True, geometry_update=True,
+                            mechanism_ratio_limit=1e-8, max_steps=100000,
+                            geom_tol=1e-6, max_geom_iter=30,
+                            control_mode='displacement',
+                            include_final_displacement=False, include_snapshots=False,
+                            include_final_reactions=False, include_max_rotation=False):
+    """run_pushover()的幾何平衡疊代版本, 見上面模組層級的說明註解。
+    參數跟run_pushover()大致對應, 差異只列這裡沒有的/新增的:
+
+    use_pdelta/geometry_update: 預設都是True(這個函式存在的目的就是
+        正確處理這兩件事的耦合, 不像run_pushover()是預設關閉當作
+        選配)。
+    geom_tol: 幾何/軸力疊代的相對收斂容忍度(無因次), 預設1e-6。
+    max_geom_iter: 每一段最多疊代幾次, 超過視為這一段解不出來。
+    (沒有control_mode='force'時的check_mechanism()判斷——力控制在
+    這個版本裡, 疊代不收斂本身就是"已經到極限"的訊號, 不需要另外用
+    縮聚剛度特徵值判斷。)
+
+    回傳: 跟run_pushover()同樣的欄位, 但mechanism_reached在這個版本
+    裡的意義稍微不同: True代表某一段幾何疊代沒有在max_geom_iter內
+    收斂(不是位移控制下縮聚剛度接近奇異的那種判斷)——這是這個版本
+    真正的"收斂失敗"訊號, 出現時所有更晚的位移/力都不會被加進歷程,
+    在那個點提前停止。
+    """
+    direction = np.array(direction, dtype=float)
+    fixed_dofs = _fixed_dof_set(frame)
+    _, n_node_dof, n_extra_dof = build_dof_map(frame)
+    n_total = n_node_dof + n_extra_dof
+    control_dof0 = prescribed_dofs[0]
+
+    if initial_cum_forces is None:
+        cum_forces = {mid: np.zeros(6) for mid in frame.members}
+    else:
+        cum_forces = {mid: np.array(f, dtype=float) for mid, f in initial_cum_forces.items()}
+    cum_reaction = np.zeros(n_total)
+
+    u_control_cum = 0.0
+    history_u = [0.0]
+    history_F = [0.0]
+    event_log = []
+    mechanism_reached = False
+    history_snapshots = [_snapshot(cum_forces, hinge_states)] if include_snapshots else None
+    u_full_cum = np.zeros(n_total)
+
+    remaining = target_total
+    steps = 0
+    while remaining > 1e-9:
+        steps += 1
+        if steps > max_steps:
+            raise RuntimeError(
+                f"側推超過{max_steps}步仍未達到target_total, 可能是d_nominal"
+                "設太小或有其他問題, 已中止(避免無窮迴圈)。")
+        d_step = min(d_nominal, remaining)
+
+        converged, du_full, df_by_member, K_step, member_T, member_dofs, member_L = _solve_step_geom_converged(
+            frame, hinge_states, cum_forces, u_full_cum, prescribed_dofs, direction, d_step,
+            fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter)
+        if not converged:
+            mechanism_reached = True
+            break
+
+        events = _find_crossing_events(hinge_states, cum_forces, df_by_member)
+
+        if events:
+            ratio_min = min(r for r, _, _ in events)
+            d_sub = ratio_min * d_step
+            converged_sub, du_full_sub, df_by_member_sub, K_sub, member_T_sub, member_dofs_sub, member_L_sub = \
+                _solve_step_geom_converged(
+                    frame, hinge_states, cum_forces, u_full_cum, prescribed_dofs, direction, d_sub,
+                    fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter)
+            if not converged_sub:
+                mechanism_reached = True
+                break
+
+            for mid, df in df_by_member_sub.items():
+                cum_forces[mid] += df
+            cum_reaction += K_sub @ du_full_sub
+            u_full_cum += du_full_sub
+            u_control_cum += du_full_sub[control_dof0]
+            remaining -= d_sub
+
+            newly_yielded = []
+            for r, mid, end_idx in events:
+                if abs(r - ratio_min) < 1e-9:
+                    hinge_states[mid].yielded[end_idx] = True
+                    newly_yielded.append((mid, end_idx))
+
+            _update_theta_p(frame, hinge_states, member_T_sub, member_dofs_sub, member_L_sub, u_full_cum)
+
+            F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
+            history_u.append(u_control_cum)
+            history_F.append(F_base)
+            event_log.append({'u': u_control_cum, 'F': F_base, 'yielded': newly_yielded})
+            if include_snapshots:
+                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+        else:
+            for mid, df in df_by_member.items():
+                cum_forces[mid] += df
+            cum_reaction += K_step @ du_full
+            u_full_cum += du_full
+            u_control_cum += du_full[control_dof0]
+            remaining -= d_step
+
+            _update_theta_p(frame, hinge_states, member_T, member_dofs, member_L, u_full_cum)
+
+            F_base = -sum(cum_reaction[d] for d in base_reaction_dofs)
+            history_u.append(u_control_cum)
+            history_F.append(F_base)
+            if include_snapshots:
+                history_snapshots.append(_snapshot(cum_forces, hinge_states))
+
+    max_rotation = float(np.max(np.abs(u_full_cum[2:n_node_dof:3]))) if n_node_dof >= 3 else 0.0
+
+    result = [np.array(history_u), np.array(history_F), event_log, hinge_states, mechanism_reached]
+    if include_final_displacement:
+        result.append(u_full_cum)
+    if include_snapshots:
+        result.append(history_snapshots)
+    if include_final_reactions:
+        result.append(cum_reaction)
+    if include_max_rotation:
+        result.append(max_rotation)
+    return tuple(result)
