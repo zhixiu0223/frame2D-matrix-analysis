@@ -339,6 +339,7 @@ def _pushover_final_solve_result(f, cum_forces, u_full_cum, cum_reaction):
 
 def build_pushover_capacity_curve_page(history_u, history_F, event_log, mechanism_reached,
                                         du_factor=1.0, du_unit="m", fu_factor=1.0, fu_unit="N",
+                                        solver="event_to_event", max_rotation=None,
                                         figsize=(14, 9)):
     """容量曲線(控制點位移 vs 底剪力)圖表頁, 降伏事件用紅點標出。"""
     u_disp = np.array(history_u) * du_factor
@@ -352,10 +353,21 @@ def build_pushover_capacity_curve_page(history_u, history_F, event_log, mechanis
         ax.legend(loc="lower right")
     ax.set_xlabel(f"Control point displacement ({du_unit})")
     ax.set_ylabel(f"Base shear ({fu_unit})")
-    title = f"Capacity Curve -- final: u={u_disp[-1]:.3f}{du_unit}, F={F_disp[-1]:.3f}{fu_unit}, {len(event_log)} yield events"
+    solver_label = "Newton-ish geometric-equilibrium-iteration solver" if solver == "converged" else "event-to-event solver (single linear solve per segment)"
+    title = (f"Capacity Curve [{solver_label}] -- final: u={u_disp[-1]:.3f}{du_unit}, "
+             f"F={F_disp[-1]:.3f}{fu_unit}, {len(event_log)} yield events")
     if mechanism_reached:
-        title += " [MECHANISM REACHED -- pushover stopped early]"
-    ax.set_title(title, fontsize=11, fontweight="bold")
+        reason = "geometric iteration failed to converge" if solver == "converged" else "mechanism reached (condensed stiffness near-singular)"
+        title += f" [STOPPED EARLY: {reason}]"
+    ax.set_title(title, fontsize=10, fontweight="bold")
+    if max_rotation is not None and max_rotation > 0.0873:   # 0.0873 rad ≈ 5度
+        import math
+        ax.text(0.02, 0.98,
+                f"⚠ max nodal rotation = {math.degrees(max_rotation):.1f}° -- exceeds small-angle\n"
+                f"assumption range (~5°). Results beyond this point may not be physically valid\n"
+                f"regardless of solver or convergence status.",
+                transform=ax.transAxes, fontsize=9, color="#dc2626", va="top",
+                bbox=dict(boxstyle="round", facecolor="#fef2f2", edgecolor="#dc2626"))
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     return fig
@@ -428,7 +440,9 @@ def build_pushover_pdf_report(f, pushover_result, units=None) -> bytes:
 
         curve_fig = build_pushover_capacity_curve_page(
             pushover_result["history_u"], pushover_result["history_F"], pushover_result["event_log"],
-            pushover_result["mechanism_reached"], du_factor=df, du_unit=du, fu_factor=ff, fu_unit=fu)
+            pushover_result["mechanism_reached"], du_factor=df, du_unit=du, fu_factor=ff, fu_unit=fu,
+            solver=pushover_result.get("solver", "event_to_event"),
+            max_rotation=pushover_result.get("max_rotation"))
         pdf.savefig(curve_fig)
         plt.close(curve_fig)
 

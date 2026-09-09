@@ -18,7 +18,7 @@ from pathlib import Path
 
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
-from frame2d.pushover import run_pushover, apply_gravity
+from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -166,12 +166,24 @@ def _prepare_pushover_run(payload: dict):
     )
 
 
+def _run_selected_pushover_solver(payload: dict, run_kwargs: dict, **extra_flags):
+    """跟webapi/main.py的同名函式邏輯一致(依payload.get("pushover_solver")
+    呼叫run_pushover()或run_pushover_converged())。"""
+    if payload.get("pushover_solver") == "converged":
+        return run_pushover_converged(
+            geom_tol=payload.get("pushover_geom_tol", 1e-6),
+            max_geom_iter=payload.get("pushover_max_geom_iter", 30),
+            **run_kwargs, **extra_flags,
+        )
+    return run_pushover(**run_kwargs, **extra_flags)
+
+
 def _solve_pushover_payload(payload: dict) -> dict:
     """analysis_type='pushover'的獨立處理路徑, 邏輯跟webapi/main.py的
     _solve_pushover()完全一致, 只是輸入是普通dict。"""
     f, run_kwargs = _prepare_pushover_run(payload)
-    history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-        include_snapshots=True, **run_kwargs)
+    history_u, history_F, event_log, hs_final, mechanism, snapshots = _run_selected_pushover_solver(
+        payload, run_kwargs, include_snapshots=True)
 
     hinge_summary = _build_hinge_summary(hs_final)
     event_log_out = _build_event_log_out(event_log)
@@ -191,6 +203,7 @@ def _solve_pushover_payload(payload: dict) -> dict:
         "mechanism_reached": bool(mechanism),
         "hinge_summary": hinge_summary,
         "history_snapshots": snapshots_out,
+        "solver": payload.get("pushover_solver", "event_to_event"),
     }
 
 
@@ -198,9 +211,9 @@ def _export_pushover_pdf(payload: dict) -> bytes:
     """跟webapi/main.py的_export_pushover_pdf()邏輯一致, 輸入是dict。"""
     f, run_kwargs = _prepare_pushover_run(payload)
     (history_u, history_F, event_log, hs_final, mechanism,
-     u_full_cum, snapshots, cum_reaction, max_rotation) = run_pushover(
-        include_final_displacement=True, include_snapshots=True,
-        include_final_reactions=True, include_max_rotation=True, **run_kwargs)
+     u_full_cum, snapshots, cum_reaction, max_rotation) = _run_selected_pushover_solver(
+        payload, run_kwargs, include_final_displacement=True, include_snapshots=True,
+        include_final_reactions=True, include_max_rotation=True)
 
     pushover_result = {
         "history_u": history_u, "history_F": history_F,
@@ -210,6 +223,8 @@ def _export_pushover_pdf(payload: dict) -> bytes:
         "cum_forces": snapshots[-1]["member_forces"],
         "u_full_cum": u_full_cum,
         "cum_reaction": cum_reaction,
+        "solver": payload.get("pushover_solver", "event_to_event"),
+        "max_rotation": max_rotation,
     }
     return build_pushover_pdf_report(f, pushover_result, units=payload.get("units"))
 

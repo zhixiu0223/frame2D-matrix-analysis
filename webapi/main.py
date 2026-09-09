@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
-from frame2d.pushover import run_pushover, apply_gravity
+from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
@@ -175,6 +175,22 @@ def _prepare_pushover_run(payload: FrameIn):
     )
 
 
+def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_flags):
+    """依payload.pushover_solver呼叫run_pushover()(event-to-event,
+    預設)或run_pushover_converged()(幾何平衡疊代版本)——兩者共用
+    _prepare_pushover_run()準備好的同一組run_kwargs(參數名稱完全對得
+    上兩個函式的簽名), 只有converged版本會額外用到geom_tol/
+    max_geom_iter。extra_flags是呼叫端想額外開的旗標(例如
+    include_snapshots=True), 兩條路徑都會收到。"""
+    if payload.pushover_solver == 'converged':
+        return run_pushover_converged(
+            geom_tol=payload.pushover_geom_tol,
+            max_geom_iter=payload.pushover_max_geom_iter,
+            **run_kwargs, **extra_flags,
+        )
+    return run_pushover(**run_kwargs, **extra_flags)
+
+
 def _build_hinge_summary(hs_final):
     """把{member_id: HingeState}轉成JSON安全的摘要dict(Mp的inf轉成None,
     見infinity-json-bugfix那個修正)。/solve(pushover)跟/export/pdf
@@ -214,8 +230,8 @@ def _solve_pushover(payload: FrameIn):
     """
     f, run_kwargs = _prepare_pushover_run(payload)
     try:
-        history_u, history_F, event_log, hs_final, mechanism, snapshots = run_pushover(
-            include_snapshots=True, **run_kwargs)
+        history_u, history_F, event_log, hs_final, mechanism, snapshots = _run_selected_pushover_solver(
+            payload, run_kwargs, include_snapshots=True)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -242,6 +258,7 @@ def _solve_pushover(payload: FrameIn):
         "mechanism_reached": bool(mechanism),
         "hinge_summary": hinge_summary,
         "history_snapshots": snapshots_out,
+        "solver": payload.pushover_solver,
     }
 
 
@@ -365,9 +382,9 @@ def _export_pushover_pdf(payload: FrameIn) -> bytes:
     f, run_kwargs = _prepare_pushover_run(payload)
     try:
         (history_u, history_F, event_log, hs_final, mechanism,
-         u_full_cum, snapshots, cum_reaction, max_rotation) = run_pushover(
-            include_final_displacement=True, include_snapshots=True,
-            include_final_reactions=True, include_max_rotation=True, **run_kwargs)
+         u_full_cum, snapshots, cum_reaction, max_rotation) = _run_selected_pushover_solver(
+            payload, run_kwargs, include_final_displacement=True, include_snapshots=True,
+            include_final_reactions=True, include_max_rotation=True)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -379,6 +396,8 @@ def _export_pushover_pdf(payload: FrameIn) -> bytes:
         "cum_forces": snapshots[-1]["member_forces"],
         "u_full_cum": u_full_cum,
         "cum_reaction": cum_reaction,
+        "solver": payload.pushover_solver,
+        "max_rotation": max_rotation,
     }
     return build_pushover_pdf_report(f, pushover_result, units=payload.units)
 
