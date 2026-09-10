@@ -72,25 +72,28 @@ def _check_no_releases(frame):
 
 
 def _gravity_fixed_end_forces(frame):
-    """把frame.distributed_loads/member_point_loads轉成"固定端反力"
-    (跟dofmanager.py的_solve_once_dofmanager()同一套fixed_end_forces_*
-    公式, 這裡是獨立重新寫一份呼叫, 不是共用那個函式本身——刻意不去
-    動dofmanager.py, 避免任何風險影響到已經驗證過的線性求解路徑)。
+    """把frame.point_loads/distributed_loads/member_point_loads全部
+    轉成統一的全域"等效節點力"(f_ext_gravity)——point_loads本來就是
+    直接施加在節點上, 不需要固定端反力處理, 直接依dof加總；
+    distributed_loads/member_point_loads則用跟dofmanager.py的
+    _solve_once_dofmanager()同一套fixed_end_forces_*公式(這裡是獨立
+    重新寫一份呼叫, 不是共用那個函式本身——刻意不去動dofmanager.py,
+    避免任何風險影響到已經驗證過的線性求解路徑)。
 
     回傳(f_ext_gravity, member_fem_local):
         f_ext_gravity: n_dof長的全域"等效節點力"向量, 直接加進Newton
-          求解的外力項(f_ext), 代表重力這類分布/桿件內部載重對整體
-          平衡的貢獻。
+          求解的外力項(f_ext), 代表重力這類分布/桿件內部載重、以及
+          直接施加的節點力, 對整體平衡的貢獻。
         member_fem_local: {member_id: 6維局部座標固定端反力向量},
           用來修正_member_moments()算出來的"變形產生的彎矩", 讓塑鉸
           降伏判斷/顯示出來的彎矩是真正的物理彎矩(重力貢獻+變形貢獻
           兩者加總), 不是只有變形那一部分——公式跟dofmanager.py的
           end_forces_local = k_local@u_local - f_FE同一個慣例(見那邊
-          第292-293行)。
+          第292-293行)。point_loads是直接節點力, 不需要透過
+          member_fem_local修正(它不影響任何桿件"自己"的固定端彎矩)。
 
-    只支援frame.point_loads(直接是節點力, 不需要固定端反力處理)以外
-    的distributed_loads、member_point_loads, 桁架/纜線桿件加了這些的
-    話一樣明確報錯(理由同dofmanager.py的既有檢查, 這裡沿用同樣的
+    distributed_loads/member_point_loads如果加在桁架/纜線桿件上,
+    一樣明確報錯(理由同dofmanager.py的既有檢查, 這裡沿用同樣的
     錯誤訊息精神)。這裡用桿件"原始(未變形)幾何"算固定端反力+轉換
     矩陣, 重力預載全程視為固定不變, 不會隨著pushover過程重新計算
     ——跟其餘求解器的apply_gravity()是同一種簡化(重力預載定義一次,
@@ -176,6 +179,12 @@ def _gravity_fixed_end_forces(frame):
             f_FE_local = f_FE_local + fixed_end_forces_point_moment(pl_m.m, a, L)
         _add(pl_m.member, f_FE_local)
 
+    for pl in frame.point_loads:
+        ux_i, uy_i, rot_i = frame.dofs_of(pl.node)
+        f_ext_gravity[ux_i] += pl.fx
+        f_ext_gravity[uy_i] += pl.fy
+        f_ext_gravity[rot_i] += pl.m
+
     return f_ext_gravity, member_fem_local
 
 
@@ -193,7 +202,8 @@ def _member_theta_def(frame, mid, u_full):
     return theta1_def, theta2_def
 
 
-def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None):
+def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None,
+                              use_pdelta=False):
     """算某根桿件目前(u_full狀態下)完整的局部6維端力向量
     [Fx1,Fy1,M1,Fx2,Fy2,M2](標準"壓力為正的節點力慣例", 跟elements.py
     /dofmanager.py的end_forces_local同一套)——給/pushover_step_
@@ -210,7 +220,8 @@ def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, membe
 
     member_fem_local: 跟_member_moments()的同名參數意義一致, 這裡
     對整個6維向量統一套用end_forces_local=deformation_forces-f_FE
-    這個公式(不是逐分量分開推導符號, 降低出錯風險)。
+    這個公式(不是逐分量分開推導符號, 降低出錯風險)。use_pdelta:
+    見corotational_local_forces()說明。
     """
     m = frame.members[mid]
     ni, nj = frame.nodes[m.node_i], frame.nodes[m.node_j]
@@ -224,7 +235,7 @@ def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, membe
     M1_ref, M2_ref, th1_ref, th2_ref = member_ref.get(mid, (0.0, 0.0, 0.0, 0.0))
     N, M1, M2 = corotational_local_forces(
         section.E, section.A, section.I, L0, L, e, theta1_def, theta2_def, hs,
-        M_ref=(M1_ref, M2_ref), theta_def_ref=(th1_ref, th2_ref))
+        M_ref=(M1_ref, M2_ref), theta_def_ref=(th1_ref, th2_ref), use_pdelta=use_pdelta)
     Fy1 = (M1 + M2) / L
     f_deformation = np.array([-N, Fy1, M1, N, -Fy1, M2])
     if member_fem_local is not None:
@@ -234,7 +245,8 @@ def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, membe
     return f_deformation
 
 
-def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None):
+def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None,
+                     use_pdelta=False):
     """算某根桿件目前(u_full狀態下)兩端的"真正物理彎矩"(M1,M2)——用
     member_ref(上一次成功收斂那一步的參考狀態)算變形產生的增量部分,
     見本檔案開頭docstring的說明。member_ref[mid]不存在時(這根桿件還
@@ -246,7 +258,9 @@ def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_loc
     加總後的真正物理彎矩, 塑鉸降伏判斷/顯示才會正確反映重力已經佔
     掉多少容量, 不是只看側推這一部分——公式跟dofmanager.py的
     end_forces_local=k_local@u_local-f_FE同一個慣例。不給(None)時
-    完全等同沒有重力/桿件內部載重的情況, 維持原本行為。"""
+    完全等同沒有重力/桿件內部載重的情況, 維持原本行為。use_pdelta:
+    見corotational_local_forces()說明——局部P-Delta(軸力對桿件自身
+    彎曲勁度的修正), 跟大轉角co-rotational幾何是完全獨立的兩件事。"""
     m = frame.members[mid]
     ni, nj = frame.nodes[m.node_i], frame.nodes[m.node_j]
     dofs = list(frame.dofs_of(m.node_i)) + list(frame.dofs_of(m.node_j))
@@ -259,7 +273,7 @@ def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_loc
     M1_ref, M2_ref, th1_ref, th2_ref = member_ref.get(mid, (0.0, 0.0, 0.0, 0.0))
     N, M1, M2 = corotational_local_forces(
         section.E, section.A, section.I, L0, L, e, theta1_def, theta2_def, hs,
-        M_ref=(M1_ref, M2_ref), theta_def_ref=(th1_ref, th2_ref))
+        M_ref=(M1_ref, M2_ref), theta_def_ref=(th1_ref, th2_ref), use_pdelta=use_pdelta)
     if member_fem_local is not None:
         fem = member_fem_local.get(mid)
         if fem is not None:
@@ -268,7 +282,7 @@ def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_loc
     return M1, M2
 
 
-def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref):
+def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta=False):
     """組出目前u_full狀態下, 全結構的內力向量(n_dof長)跟切線剛度矩陣
     (n_dof x n_dof), 疊加所有桿件(frame跟truss都用co-rotational公式,
     truss桿件沒有塑鉸/彎矩, 直接傳hinge_state=None且I用0讓彎矩項自然
@@ -279,6 +293,10 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref):
     (降伏後從Mp連續往上加, 不會倒退)完全靠這個維持。這一整個Newton
     "疊代"過程中(同一步內反覆試探), member_ref保持不變, 只有在一步
     真正收斂、被接受之後才會更新(見run_pushover_newton()主迴圈)。
+
+    use_pdelta: 見corotational_local_forces()說明——局部P-Delta(軸力
+    對桿件自身彎曲勁度的修正), 跟大轉角co-rotational幾何是完全獨立
+    的兩件事, 這裡只是原封不動往下傳給每根桿件的局部力/切線計算。
     """
     f_int = np.zeros(n_dof)
     K_t = np.zeros((n_dof, n_dof))
@@ -297,10 +315,12 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref):
 
         f_elem = corotational_global_force(
             ni.x, ni.y, u_local[0], u_local[1], u_local[2],
-            nj.x, nj.y, u_local[3], u_local[4], u_local[5], E, A, I, hs, M_ref, theta_def_ref)
+            nj.x, nj.y, u_local[3], u_local[4], u_local[5], E, A, I, hs, M_ref, theta_def_ref,
+            use_pdelta)
         K_elem = corotational_tangent_fd(
             ni.x, ni.y, u_local[0], u_local[1], u_local[2],
-            nj.x, nj.y, u_local[3], u_local[4], u_local[5], E, A, I, hs, M_ref, theta_def_ref)
+            nj.x, nj.y, u_local[3], u_local[4], u_local[5], E, A, I, hs, M_ref, theta_def_ref,
+            use_pdelta)
 
         for a in range(6):
             f_int[dofs[a]] += f_elem[a]
@@ -310,7 +330,8 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref):
 
 
 def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
-                     theta_def_at_yield, n_dof, resid_dofs, f_ext, tol, max_iter):
+                     theta_def_at_yield, n_dof, resid_dofs, f_ext, tol, max_iter,
+                     use_pdelta=False):
     """單一次Newton平衡疊代(從u_start這個起點開始, 疊代到resid_dofs
     上的殘餘力f_ext-f_int收斂, 或max_iter次都沒收斂)——這是
     run_pushover_newton()每一步(不管是重力預載那一步, 還是側推的每
@@ -324,15 +345,19 @@ def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
     累積的側推力;位移控制時resid_dofs排除被強制位移的dof、
     f_ext=f_ext_gravity, 因為那些dof的值已經直接設定好了, 不需要
     也不能再放進殘餘力方程式裡solve)。
+
+    use_pdelta: 見corotational_local_forces()說明——局部P-Delta,
+    原封不動往下傳給_assemble_global()/_member_moments()。
     """
     u_trial = u_start.copy()
     step_newly_yielded = []
     for it in range(max_iter):
-        f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref)
+        f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref, use_pdelta)
 
         newly_yielded_this_iter = []
         for mid, hs in hinge_states.items():
-            M1, M2 = _member_moments(frame, mid, u_trial, hinge_states, member_ref, member_fem_local)
+            M1, M2 = _member_moments(frame, mid, u_trial, hinge_states, member_ref, member_fem_local,
+                                      use_pdelta)
             if not hs.yielded[0] and abs(M1) >= hs.Mp[0]:
                 hs.yielded[0] = True
                 newly_yielded_this_iter.append((mid, 0))
@@ -365,7 +390,8 @@ def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
 def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_total,
                          d_nominal, base_reaction_dofs,
                          control_mode='displacement', tol=1e-6, max_iter=30, max_steps=100000,
-                         include_final_displacement=False, include_snapshots=False):
+                         include_final_displacement=False, include_snapshots=False,
+                         use_pdelta=False):
     """真正的Newton-Raphson遞增側推。見本檔案開頭docstring。
 
     frame, hinge_states, prescribed_dofs, direction, target_total, d_nominal,
@@ -451,7 +477,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     if np.any(f_ext_gravity != 0.0):
         conv_gravity, _, u_full = _newton_iterate(
             frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
-            n_dof, free_dofs, f_ext_gravity, tol, max_iter)
+            n_dof, free_dofs, f_ext_gravity, tol, max_iter, use_pdelta)
         if not conv_gravity:
             raise RuntimeError(
                 "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
@@ -460,7 +486,8 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
             )
         for mid in frame.members:
             th1d, th2d = _member_theta_def(frame, mid, u_full)
-            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref)
+            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref,
+                                              use_pdelta=use_pdelta)
             member_ref[mid] = (M1_def, M2_def, th1d, th2d)
 
     history_u = [0.0]
@@ -473,7 +500,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
         cum_forces_display = {}
         for mid in frame.members:
             cum_forces_display[mid] = _member_end_forces_local(
-                frame, mid, u_full, hinge_states, member_ref, member_fem_local)
+                frame, mid, u_full, hinge_states, member_ref, member_fem_local, use_pdelta)
         history_snapshots = [_snapshot(cum_forces_display, hinge_states, u_full)]
 
     remaining = target_total
@@ -500,7 +527,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
 
         step_converged, step_newly_yielded, u_trial = _newton_iterate(
             frame, hinge_states, u_trial, member_ref, member_fem_local, theta_def_at_yield,
-            n_dof, resid_dofs, f_ext, tol, max_iter)
+            n_dof, resid_dofs, f_ext, tol, max_iter, use_pdelta)
 
         if not step_converged:
             converged_all = False
@@ -514,10 +541,11 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
         # 這裡刻意不傳member_fem_local(要存"變形部分"本身, 不是真正
         # 物理彎矩, 否則下一步corotational_local_forces()的增量公式
         # 會把重力貢獻重複計算進去)。
-        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref)
+        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
         for mid in frame.members:
             th1d, th2d = _member_theta_def(frame, mid, u_full)
-            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref)
+            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref,
+                                              use_pdelta=use_pdelta)
             member_ref[mid] = (M1_def, M2_def, th1d, th2d)
 
         # 已經用懸臂樑解析解驗證過, f_int在固定支承dof上的值取負號後,
@@ -540,7 +568,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
             cum_forces_display = {}
             for mid in frame.members:
                 cum_forces_display[mid] = _member_end_forces_local(
-                    frame, mid, u_full, hinge_states, member_ref, member_fem_local)
+                    frame, mid, u_full, hinge_states, member_ref, member_fem_local, use_pdelta)
             history_snapshots.append(_snapshot(cum_forces_display, hinge_states, u_full))
 
         if step_newly_yielded:

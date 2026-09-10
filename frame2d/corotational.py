@@ -36,6 +36,7 @@ geometry_update選項欠缺、之前在對話紀錄裡被實際案例找出來�
 import numpy as np
 
 from .hinge import hinge_bending_stiffness
+from .elements import local_geometric_stiffness
 
 
 def corotational_kinematics(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj):
@@ -86,43 +87,63 @@ def corotational_kinematics(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj):
 
 
 def corotational_local_forces(E, A, I, L0, L, e, theta1_def, theta2_def, hinge_state=None,
-                               M_ref=None, theta_def_ref=None):
+                               M_ref=None, theta_def_ref=None, use_pdelta=False):
     """給定"自然變形量"(e, theta1_def, theta2_def), 回傳對應的局部內力
     (N, M1, M2)——這一步完全不含任何幾何/剛體轉動資訊(那些都已經在
     corotational_kinematics()裡處理掉了), 這裡純粹是"這根桿件被拉伸
     e、兩端相對弦線轉了theta1_def/theta2_def, 材料要出多少力/彎矩"。
 
-    hinge_state: None時用標準彈性樑公式(4EI/L, 2EI/L)——彈性關係全程
-    不變, 直接用"總量"公式即可, M_ref/theta_def_ref不會被用到。
+    hinge_state: None時用標準彈性樑公式(4EI/L, 2EI/L)。
 
-    有給hinge_state時, 彎矩改成從(M_ref, theta_def_ref)這個參考狀態
+    use_pdelta: True時, 在局部彎曲勁度(hinge_state給的K2, 或hinge_state
+    =None時的標準彈性[[4EI/L,2EI/L],[2EI/L,4EI/L]])上疊加"局部P-Delta"
+    (有時稱P-δ, 業界常見的樑柱穩定函數修正項): 軸力會弱化/強化桿件
+    "自己"的局部彎曲勁度, 這是跟大轉角co-rotational完全獨立的另一種
+    效應(co-rotational精確處理的是"整根桿件相對彼此轉了多少度"這個
+    剛體轉動, 局部P-Delta處理的是"軸力如何影響桿件自身的彎曲勁度",
+    跟桿件整體轉了幾度無關)——見對話紀錄裡這個區分的完整討論。用
+    elements.local_geometric_stiffness(N,L)(跟run_pushover()/
+    run_pushover_converged()同一套已驗證過的一致幾何剛度矩陣公式,
+    不是另外發明), 取theta1,theta2那個2x2子矩陣疊加上去, N用這裡
+    算出來的軸力(拉力為正, 跟該函式的符號慣例一致)。
+
+    有給hinge_state或開use_pdelta時(K2會隨N/降伏狀態逐步改變, 不是
+    全程固定不變), 彎矩改成從(M_ref, theta_def_ref)這個參考狀態
     "增量"算出來, 不是直接把theta1_def,theta2_def的總量套進當下的
-    R1,R2公式——這是為了修正一個真實發生過的bug(見對話紀錄): 塑鉸
+    K2公式——這是為了修正一個真實發生過的bug(見對話紀錄): 塑鉸
     降伏瞬間R會從"近似剛接"(~1e8*EI/L量級)驟降到R_post_yield(通常
     只有EI/L的百分之幾), 如果直接拿同一個theta_def總量套用新的(小
     很多的)R重新算一次M, 算出來的M會遠低於Mp、瞬間"消失"大半, 這在
     物理上不合理(雙折線硬化模型, 降伏後M只會從Mp緩慢往上加, 不會
-    倒退)。用增量(dM = K2(目前R) @ (theta_def - theta_def_ref), 再
-    加回M_ref)才能保持彎矩在降伏瞬間連續, 這正是run_pushover()裡
-    event-to-event那套"cum_forces累加df"在做的事, 這裡把同樣的精神
-    帶進co-rotational的Newton版本。
+    倒退)。用增量(dM = K2(目前狀態) @ (theta_def - theta_def_ref), 再
+    加回M_ref)才能保持彎矩連續, 這正是run_pushover()裡event-to-event
+    那套"cum_forces累加df"在做的事, 這裡把同樣的精神帶進co-rotational
+    的Newton版本——K2會隨N逐步改變是同樣的道理, 需要同一套增量處理。
 
     M_ref/theta_def_ref: 分別是這根桿件上一次"成功收斂、已經被接受"
     的那一步的(M1,M2)/(theta1_def,theta2_def), 不給(None)時視為
-    (0,0)(也就是從沒有任何內力/變形的狀態開始算, 對第一步或者一直
-    保持彈性的情況, 這樣算出來的結果會等同用總量公式直接算, 完全
-    一致)。
+    (0,0)(也就是從沒有任何內力/變形的狀態開始算, 對第一步、或K2
+    全程不變的純彈性+不開P-Delta情況, 這樣算出來的結果會等同用總量
+    公式直接算, 完全一致)。
 
     回傳(N, M1, M2)。
     """
     N = E * A / L0 * e
     if hinge_state is None:
         kb = E * I / L
-        M1 = 4 * kb * theta1_def + 2 * kb * theta2_def
-        M2 = 2 * kb * theta1_def + 4 * kb * theta2_def
+        K2 = np.array([[4 * kb, 2 * kb], [2 * kb, 4 * kb]])
     else:
         K4 = hinge_bending_stiffness(E, I, L, hinge_state)
         K2 = K4[np.ix_([1, 3], [1, 3])]
+
+    if use_pdelta and N != 0.0:
+        Kg6 = local_geometric_stiffness(N, L)
+        K2 = K2 + Kg6[np.ix_([2, 5], [2, 5])]
+
+    if hinge_state is None and not use_pdelta:
+        M1 = K2[0, 0] * theta1_def + K2[0, 1] * theta2_def
+        M2 = K2[1, 0] * theta1_def + K2[1, 1] * theta2_def
+    else:
         M1_ref, M2_ref = (0.0, 0.0) if M_ref is None else M_ref
         th1_ref, th2_ref = (0.0, 0.0) if theta_def_ref is None else theta_def_ref
         dtheta = np.array([theta1_def - th1_ref, theta2_def - th2_ref])
@@ -132,7 +153,8 @@ def corotational_local_forces(E, A, I, L0, L, e, theta1_def, theta2_def, hinge_s
 
 
 def corotational_global_force(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj,
-                               E, A, I, hinge_state=None, M_ref=None, theta_def_ref=None):
+                               E, A, I, hinge_state=None, M_ref=None, theta_def_ref=None,
+                               use_pdelta=False):
     """組合kinematics+local_forces, 直接回傳這根桿件目前狀態下的6維
     全域節點內力向量(f = B^T @ [N,M1,M2]), 順序跟其餘frame2d程式碼
     一致: [Fxi,Fyi,Mi,Fxj,Fyj,Mj]。這是Newton-Raphson疊代的"內力"
@@ -140,17 +162,21 @@ def corotational_global_force(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj,
 
     M_ref/theta_def_ref: 見corotational_local_forces()說明, 原封不動
     往下傳, 塑鉸的路徑相依性(降伏後彎矩要從Mp連續往上加, 不能每次
-    重算總量)完全靠這兩個參數維持。"""
+    重算總量)完全靠這兩個參數維持。use_pdelta: 見corotational_local_
+    forces()說明, 局部P-Delta(軸力對桿件自身彎曲勁度的修正), 跟這裡
+    的大轉角co-rotational幾何是完全獨立的兩件事, 開這個不影響B矩陣
+    本身(那是純幾何關係), 只影響局部[N,M1,M2]怎麼算。"""
     L0, L, beta, e, theta1_def, theta2_def, B = corotational_kinematics(
         xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj)
     N, M1, M2 = corotational_local_forces(
-        E, A, I, L0, L, e, theta1_def, theta2_def, hinge_state, M_ref, theta_def_ref)
+        E, A, I, L0, L, e, theta1_def, theta2_def, hinge_state, M_ref, theta_def_ref, use_pdelta)
     f_local = np.array([N, M1, M2])
     return B.T @ f_local
 
 
 def corotational_tangent_fd(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj,
-                             E, A, I, hinge_state=None, M_ref=None, theta_def_ref=None, eps=1e-7):
+                             E, A, I, hinge_state=None, M_ref=None, theta_def_ref=None,
+                             use_pdelta=False, eps=1e-7):
     """有限差分算切線剛度矩陣(6x6): 對6個全域自由度各自微小擾動, 看
     corotational_global_force()怎麼變化, 组成Jacobian。見本檔案開頭
     docstring說明為什麼刻意選有限差分而不是手推解析式。
@@ -166,12 +192,12 @@ def corotational_tangent_fd(xi, yi, ui, vi, thetai, xj, yj, uj, vj, thetaj,
     """
     u0 = np.array([ui, vi, thetai, uj, vj, thetaj], dtype=float)
     f0 = corotational_global_force(xi, yi, *u0[0:3], xj, yj, *u0[3:6], E, A, I,
-                                    hinge_state, M_ref, theta_def_ref)
+                                    hinge_state, M_ref, theta_def_ref, use_pdelta)
     K = np.zeros((6, 6))
     for k in range(6):
         u_pert = u0.copy()
         u_pert[k] += eps
         f_pert = corotational_global_force(xi, yi, *u_pert[0:3], xj, yj, *u_pert[3:6], E, A, I,
-                                            hinge_state, M_ref, theta_def_ref)
+                                            hinge_state, M_ref, theta_def_ref, use_pdelta)
         K[:, k] = (f_pert - f0) / eps
     return K

@@ -321,4 +321,70 @@ assert rel_err11 < 0.01, (
 print(f"PASS: 重力預載階段柱子底端彎矩={M1_newton11:.2f}(不是0), "
       f"對得上apply_gravity()的{M1_ref11:.2f}(相對誤差{rel_err11:.4f})\n")
 
+
+# ---- 案例12: frame.point_loads(直接節點力)要真的被套用, 不能靜默
+# 忽略——這是補上P-Delta驗證時順便發現的另一個真實缺口(newton.py
+# 原本完全沒有處理point_loads, 只處理了distributed_loads/
+# member_point_loads)。 ----
+print("=== 案例12: frame.point_loads要真的套用, 不能被靜默忽略 ===")
+f12 = Frame2D()
+f12.add_node(0, 0, 0)
+f12.add_node(1, 0, L)
+f12.add_section('sec', E=E, I=I, A=A)
+f12.add_member(0, node_i=0, node_j=1, section='sec')
+f12.fix(0)
+f12.point_load(1, fx=100.0, fy=0, m=0)
+u12, F12, ev12, hsf12, conv12 = run_pushover_newton(
+    f12, {}, prescribed_dofs=[f12.dofs_of(1)[0]], direction=[1.0],
+    target_total=1e-9, d_nominal=1e-9, base_reaction_dofs=[f12.dofs_of(0)[0]],
+    control_mode='displacement', tol=1e-9,
+)
+from frame2d.newton import _gravity_fixed_end_forces
+f_ext_g, _ = _gravity_fixed_end_forces(f12)
+assert abs(f_ext_g[f12.dofs_of(1)[0]] - 100.0) < 1e-9, (
+    f"point_loads應該直接加進f_ext_gravity, 實際={f_ext_g[f12.dofs_of(1)[0]]}"
+)
+print(f"PASS: point_loads正確套用進f_ext_gravity(={f_ext_g[f12.dofs_of(1)[0]]:.2f})\n")
+
+
+# ---- 案例13: 局部P-Delta(軸力對桿件自身彎曲勁度的修正, 用
+# elements.local_geometric_stiffness()的theta子矩陣)——接近挫屈臨界力
+# 的受壓柱, 開這個選項應該讓側向勁度明顯變軟(位移明顯變大)。這跟
+# co-rotational大轉角是完全獨立的兩件事(見對話紀錄的完整討論): 大
+# 轉角處理"桿件整體轉了多少度", 局部P-Delta處理"軸力怎麼影響桿件
+# 自己的彎曲勁度"。 ----
+print("=== 案例13: 局部P-Delta(軸力對桿件自身彎曲勁度)接近挫屈臨界力時應該明顯軟化 ===")
+P_cr = np.pi**2 * E * I / (4 * L**2)   # 懸臂樑歐拉挫屈臨界力
+P_axial = 0.81 * P_cr
+
+def cantilever_with_axial_compression():
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, 0, L)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec')
+    f.fix(0)
+    f.point_load(1, fx=0, fy=-P_axial, m=0)
+    return f
+
+
+f13a = cantilever_with_axial_compression()
+u13a, F13a, ev13a, hsf13a, conv13a = run_pushover_newton(
+    f13a, {}, prescribed_dofs=[f13a.dofs_of(1)[0]], direction=[1.0],
+    target_total=100.0, d_nominal=10.0, base_reaction_dofs=[f13a.dofs_of(0)[0]],
+    control_mode='force', tol=1e-9, use_pdelta=False,
+)
+f13b = cantilever_with_axial_compression()
+u13b, F13b, ev13b, hsf13b, conv13b = run_pushover_newton(
+    f13b, {}, prescribed_dofs=[f13b.dofs_of(1)[0]], direction=[1.0],
+    target_total=100.0, d_nominal=10.0, base_reaction_dofs=[f13b.dofs_of(0)[0]],
+    control_mode='force', tol=1e-9, use_pdelta=True,
+)
+assert u13b[-1] > u13a[-1] * 1.2, (
+    f"接近挫屈臨界力時, 開局部P-Delta應該讓同樣的側推力產生明顯更大的"
+    f"位移(勁度變軟), 實際: 沒開={u13a[-1]:.4f}, 開了={u13b[-1]:.4f}"
+)
+print(f"PASS: 沒開P-Delta u={u13a[-1]:.4f}, 開了u={u13b[-1]:.4f}"
+      f"(明顯變大, 符合接近挫屈臨界力時應有的軟化效應)\n")
+
 print("PASS: frame2d.newton所有案例通過")
