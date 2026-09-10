@@ -188,6 +188,7 @@
       <label class="snapLabel">求解器<select id="pv_solver" style="width:11rem;">
         <option value="event_to_event" selected>Event-to-event(單次線性解, 較快)</option>
         <option value="converged">幾何平衡疊代(較慢, 會誠實回報不收斂)</option>
+        <option value="newton">Newton-Raphson(大轉角co-rotational, 最嚴謹也最慢, 不支援重力預載/release端)</option>
       </select></label>
       <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。多個控制節點時, 第一個節點是「參考點」——容量曲線的位移軸永遠回報這一點的位移(業界慣例: 不管用哪種側推型態, 都看屋頂/最高樓層位移, 所以第一個通常填屋頂節點)。權重留空=全部1.0(均勻型態); 要做倒三角形型態就照各樓層高度比例填, 例如三層樓填「0.33,0.67,1.0」。</p>
     </div>
@@ -4041,11 +4042,17 @@ function pushoverStatusSuffix(base) {
   const lastU = fromSI('disp', r.history_u[r.history_u.length - 1]);
   const lastF = fromSI('force', r.history_F[r.history_F.length - 1]);
   const geomTag = document.getElementById('pv_geomupdate').checked ? '幾何更新' : '線性化P-Delta幾何';
-  const solverTag = r.solver === 'converged' ? '幾何平衡疊代' : 'event-to-event';
-  // 兩種求解器的mechanism_reached意義不一樣: event-to-event是縮聚剛度
-  // 接近奇異的判斷; 疊代版本是"這一段幾何/軸力疊代沒有在容忍度內收斂",
-  // 用同一句「已形成機構」會讓人誤解成兩種完全不同的東西, 這裡分開講。
-  const stopMsg = r.solver === 'converged' ? '(⚠幾何疊代未收斂, 側推提前中止)' : '(⚠已形成機構, 側推中止)';
+  const solverLabels = {converged: '幾何平衡疊代', newton: 'Newton-Raphson'};
+  const solverTag = solverLabels[r.solver] || 'event-to-event';
+  // 三種求解器的mechanism_reached意義不一樣: event-to-event是縮聚
+  // 剛度接近奇異的判斷; converged是"幾何/軸力疊代沒有在容忍度內收斂";
+  // newton是"殘餘力疊代沒有在容忍度內收斂"——用同一句話會讓人誤解成
+  // 同一種東西, 這裡分開講。
+  const stopMsgs = {
+    converged: '(⚠幾何疊代未收斂, 側推提前中止)',
+    newton: '(⚠Newton疊代未收斂, 側推提前中止)',
+  };
+  const stopMsg = stopMsgs[r.solver] || '(⚠已形成機構, 側推中止)';
   return `${base}(${solverTag}, ${geomTag}) ｜ 位移 ${lastU.toFixed(3)}${du}, 底剪力 ${lastF.toFixed(2)}${fu}, `
     + `${r.event_log.length}個降伏事件` + (r.mechanism_reached ? stopMsg : '')
     + ' ｜ 切到「結構/荷載」分頁可以看塑鉸圈圈(藍色虛線=彈性, 紅色=已降伏)';
