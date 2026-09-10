@@ -21,6 +21,7 @@ import numpy as np
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
+from frame2d.newton import run_pushover_newton
 from frame2d.postprocess import member_internal_forces
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -170,13 +171,32 @@ def _prepare_pushover_run(payload: dict):
 
 def _run_selected_pushover_solver(payload: dict, run_kwargs: dict, **extra_flags):
     """跟webapi/main.py的同名函式邏輯一致(依payload.get("pushover_solver")
-    呼叫run_pushover()或run_pushover_converged())。"""
+    呼叫run_pushover()、run_pushover_converged()、或run_pushover_newton())。"""
     if payload.get("pushover_solver") == "converged":
         return run_pushover_converged(
             geom_tol=payload.get("pushover_geom_tol", 1e-6),
             max_geom_iter=payload.get("pushover_max_geom_iter", 30),
             **run_kwargs, **extra_flags,
         )
+    if payload.get("pushover_solver") == "newton":
+        if run_kwargs.get("initial_cum_forces") is not None:
+            raise ValueError(
+                "newton求解器目前還不支援重力預載階段(模型有均佈"
+                "載重/節點力)——這是已知限制, 不是bug, 見"
+                "frame2d.newton.run_pushover_newton()的docstring"
+                "說明, 請先移除重力載重或改用其他求解器。"
+            )
+        newton_kwargs = {
+            k: run_kwargs[k] for k in
+            ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
+             'd_nominal', 'base_reaction_dofs', 'control_mode')
+        }
+        raw = run_pushover_newton(
+            tol=payload.get("pushover_newton_tol", 1e-6),
+            max_iter=payload.get("pushover_newton_max_iter", 30),
+            **newton_kwargs, **extra_flags,
+        )
+        return raw[:4] + (not raw[4],) + raw[5:]
     return run_pushover(**run_kwargs, **extra_flags)
 
 
@@ -212,6 +232,14 @@ def _solve_pushover_payload(payload: dict) -> dict:
 
 def _export_pushover_pdf(payload: dict) -> bytes:
     """跟webapi/main.py的_export_pushover_pdf()邏輯一致, 輸入是dict。"""
+    if payload.get("pushover_solver") == "newton":
+        raise ValueError(
+            "PDF匯出目前還不支援newton求解器(它還沒有實作"
+            "include_final_reactions/include_max_rotation這兩個"
+            "PDF報告需要的欄位)——這是已知限制, 不是bug, 請改用"
+            "event_to_event或converged求解器匯出PDF, 或直接用"
+            "/solve查看newton求解器的結果。"
+        )
     f, run_kwargs = _prepare_pushover_run(payload)
     (history_u, history_F, event_log, hs_final, mechanism,
      u_full_cum, snapshots, cum_reaction, max_rotation) = _run_selected_pushover_solver(

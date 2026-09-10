@@ -156,22 +156,34 @@ class FrameIn(BaseModel):
     基本精神, 比線性化P-Delta更接近大變形時的真實行為, 但不是完整的
     co-rotational大轉角分析)。見frame2d.pushover.run_pushover()的
     geometry_update參數說明。"""
-    pushover_solver: Literal['event_to_event', 'converged'] = 'event_to_event'
+    pushover_solver: Literal['event_to_event', 'converged', 'newton'] = 'event_to_event'
     """'event_to_event'(預設, 對應frame2d.pushover.run_pushover(): 塑鉸
     狀態凍結的每一段區間內, 只用該段開始時的幾何/軸力組一次勁度矩陣
     解一次, 不會檢查這個答案在真正的變形終點上是否還跟一開始用的幾何/
-    軸力一致)或'converged'(對應frame2d.pushover.run_pushover_converged():
+    軸力一致)、'converged'(對應frame2d.pushover.run_pushover_converged():
     同一段區間內反覆疊代到幾何/軸力自洽為止, 疊代不收斂時會誠實回報
     mechanism_reached=True提前停止, 不會給不可信的答案——但收斂只保證
     數值上自洽, 不保證轉角還在小角度假設的有效範圍內, 這是兩個獨立的
-    問題, 見run_pushover_converged()的說明)。兩者材料非線性(塑鉸降伏)
-    邏輯完全相同, 差異只在幾何/軸力這一塊怎麼解。"""
+    問題, 見run_pushover_converged()的說明)、或'newton'(對應
+    frame2d.newton.run_pushover_newton(): 真正的大轉角co-rotational
+    幾何+Newton-Raphson平衡疊代, 材料非線性跟幾何非線性都用嚴謹疊代
+    解, 轉角再大也不會像前兩者那樣失真, 是三者裡最嚴謹也最慢的——
+    目前不支援release端(有的話直接回400錯誤)也不支援重力預載階段
+    (模型有均佈載重/節點力的話直接回400錯誤), 見run_pushover_newton()
+    docstring的已知限制)。前兩者材料非線性(塑鉸降伏)邏輯完全相同,
+    差異只在幾何/軸力這一塊怎麼解;newton是完全獨立的第三套實作。"""
     pushover_geom_tol: float = 1e-6
     """只有pushover_solver='converged'時有意義: 幾何/軸力疊代的相對
     收斂容忍度(無因次)。"""
     pushover_max_geom_iter: int = 30
     """只有pushover_solver='converged'時有意義: 每一段最多疊代幾次,
     超過視為這一段解不出來(不收斂, 提前停止)。"""
+    pushover_newton_tol: float = 1e-6
+    """只有pushover_solver='newton'時有意義: 殘餘力收斂容忍度(相對
+    於目前內力量級的比值)。"""
+    pushover_newton_max_iter: int = 30
+    """只有pushover_solver='newton'時有意義: 每一步最多疊代幾次,
+    超過視為這一步不收斂(提前停止側推)。"""
 
 
 class NodeResultOut(BaseModel):

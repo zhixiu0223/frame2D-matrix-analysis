@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
+from frame2d.newton import run_pushover_newton
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
@@ -178,17 +179,56 @@ def _prepare_pushover_run(payload: FrameIn):
 
 def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_flags):
     """依payload.pushover_solver呼叫run_pushover()(event-to-event,
-    預設)或run_pushover_converged()(幾何平衡疊代版本)——兩者共用
-    _prepare_pushover_run()準備好的同一組run_kwargs(參數名稱完全對得
-    上兩個函式的簽名), 只有converged版本會額外用到geom_tol/
-    max_geom_iter。extra_flags是呼叫端想額外開的旗標(例如
-    include_snapshots=True), 兩條路徑都會收到。"""
+    預設)、run_pushover_converged()(幾何平衡疊代版本)、或
+    run_pushover_newton()(真正的co-rotational+Newton-Raphson版本)。
+    前兩者共用_prepare_pushover_run()準備好的同一組run_kwargs(參數
+    名稱完全對得上兩個函式的簽名), 只有converged版本會額外用到
+    geom_tol/max_geom_iter。
+
+    newton版本的參數簽名不一樣(沒有use_pdelta/geometry_update/
+    mechanism_ratio_limit/initial_cum_forces這些概念——它是完全獨立
+    的另一套實作, 見frame2d.newton的說明), 這裡只挑它認得的欄位轉傳;
+    如果模型有重力預載(initial_cum_forces不是None), newton版本目前
+    還不支援, 直接回400錯誤(不是靜靜忽略重力這種給錯誤答案的做法)。
+
+    newton版本回傳的第5個值是converged(True=成功, 語意跟前兩者的
+    mechanism_reached(True=失敗提前停止)剛好相反)——這裡統一轉成
+    跟前兩者一致的mechanism_reached語意, 讓呼叫端不用另外分支處理。
+
+    extra_flags是呼叫端想額外開的旗標(例如include_snapshots=True),
+    三條路徑都會收到(newton版本不認得include_final_reactions/
+    include_max_rotation, 呼叫端如果對newton solver要這兩個旗標,
+    這裡會直接反映成TypeError, 是刻意讓錯誤明顯冒出來, 不是靜默丟棄)。
+    """
     if payload.pushover_solver == 'converged':
         return run_pushover_converged(
             geom_tol=payload.pushover_geom_tol,
             max_geom_iter=payload.pushover_max_geom_iter,
             **run_kwargs, **extra_flags,
         )
+    if payload.pushover_solver == 'newton':
+        if run_kwargs.get('initial_cum_forces') is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="newton求解器目前還不支援重力預載階段(模型有均佈"
+                       "載重/節點力)——這是已知限制, 不是bug, 見"
+                       "frame2d.newton.run_pushover_newton()的docstring"
+                       "說明, 請先移除重力載重或改用其他求解器。",
+            )
+        newton_kwargs = {
+            k: run_kwargs[k] for k in
+            ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
+             'd_nominal', 'base_reaction_dofs', 'control_mode')
+        }
+        raw = run_pushover_newton(
+            tol=payload.pushover_newton_tol,
+            max_iter=payload.pushover_newton_max_iter,
+            **newton_kwargs, **extra_flags,
+        )
+        # raw[4]是converged(True=成功), 這裡轉成mechanism_reached語意
+        # (True=失敗提前停止), 跟run_pushover()/run_pushover_converged()
+        # 一致, 其餘欄位原封不動照順序傳回去。
+        return raw[:4] + (not raw[4],) + raw[5:]
     return run_pushover(**run_kwargs, **extra_flags)
 
 
@@ -451,6 +491,15 @@ def _export_pushover_pdf(payload: FrameIn) -> bytes:
     include_final_reactions/include_max_rotation三個旗標拿到)。跟
     _solve_pushover()共用_prepare_pushover_run()這段前置邏輯, 不用
     兩邊分別維護。"""
+    if payload.pushover_solver == 'newton':
+        raise HTTPException(
+            status_code=400,
+            detail="PDF匯出目前還不支援newton求解器(它還沒有實作"
+                   "include_final_reactions/include_max_rotation這兩個"
+                   "PDF報告需要的欄位)——這是已知限制, 不是bug, 請改用"
+                   "event_to_event或converged求解器匯出PDF, 或直接用"
+                   "/solve查看newton求解器的結果。",
+        )
     f, run_kwargs = _prepare_pushover_run(payload)
     try:
         (history_u, history_F, event_log, hs_final, mechanism,
