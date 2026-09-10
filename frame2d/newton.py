@@ -193,6 +193,47 @@ def _member_theta_def(frame, mid, u_full):
     return theta1_def, theta2_def
 
 
+def _member_end_forces_local(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None):
+    """算某根桿件目前(u_full狀態下)完整的局部6維端力向量
+    [Fx1,Fy1,M1,Fx2,Fy2,M2](標準"壓力為正的節點力慣例", 跟elements.py
+    /dofmanager.py的end_forces_local同一套)——給/pushover_step_
+    diagrams這類需要精確重建N(x)/V(x)/M(x)的用途用, 不是只有M1,M2
+    (只給M1,M2的話, member_internal_forces()重建V(x)時會把剪力當成0,
+    柱子的彎矩圖會被錯誤畫成上下端數值相同的"矩形"——這是實際發生過
+    的bug, 見對話紀錄裡使用者用截圖抓出來的異常)。
+
+    剪力用標準樑元素的平衡關係Fy1=(M1+M2)/L、Fy2=-Fy1反推(已經對照
+    elements.member_stiffness_local()驗證過這個關係精確成立, 見
+    tests/test_newton_corotational.py)——co-rotational的自然座標
+    (N,M1,M2)沒有直接算Fy1/Fy2, 但對一個沒有桿件內部集中力的直桿件,
+    這個關係是精確的力平衡, 不是近似。
+
+    member_fem_local: 跟_member_moments()的同名參數意義一致, 這裡
+    對整個6維向量統一套用end_forces_local=deformation_forces-f_FE
+    這個公式(不是逐分量分開推導符號, 降低出錯風險)。
+    """
+    m = frame.members[mid]
+    ni, nj = frame.nodes[m.node_i], frame.nodes[m.node_j]
+    dofs = list(frame.dofs_of(m.node_i)) + list(frame.dofs_of(m.node_j))
+    u_local = u_full[dofs]
+    section = frame.sections[m.section]
+    L0, L, beta, e, theta1_def, theta2_def, B = corotational_kinematics(
+        ni.x, ni.y, u_local[0], u_local[1], u_local[2],
+        nj.x, nj.y, u_local[3], u_local[4], u_local[5])
+    hs = hinge_states.get(mid)
+    M1_ref, M2_ref, th1_ref, th2_ref = member_ref.get(mid, (0.0, 0.0, 0.0, 0.0))
+    N, M1, M2 = corotational_local_forces(
+        section.E, section.A, section.I, L0, L, e, theta1_def, theta2_def, hs,
+        M_ref=(M1_ref, M2_ref), theta_def_ref=(th1_ref, th2_ref))
+    Fy1 = (M1 + M2) / L
+    f_deformation = np.array([-N, Fy1, M1, N, -Fy1, M2])
+    if member_fem_local is not None:
+        fem = member_fem_local.get(mid)
+        if fem is not None:
+            f_deformation = f_deformation - fem
+    return f_deformation
+
+
 def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_local=None):
     """算某根桿件目前(u_full狀態下)兩端的"真正物理彎矩"(M1,M2)——用
     member_ref(上一次成功收斂那一步的參考狀態)算變形產生的增量部分,
@@ -353,8 +394,8 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
         from .pushover import _snapshot
         cum_forces_display = {}
         for mid in frame.members:
-            fem = member_fem_local[mid]
-            cum_forces_display[mid] = np.array([0.0, 0.0, -fem[2], 0.0, 0.0, -fem[5]])
+            cum_forces_display[mid] = _member_end_forces_local(
+                frame, mid, u_full, hinge_states, member_ref, member_fem_local)
         history_snapshots = [_snapshot(cum_forces_display, hinge_states, u_full)]
 
     remaining = target_total
@@ -461,8 +502,8 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
             from .pushover import _snapshot
             cum_forces_display = {}
             for mid in frame.members:
-                M1, M2 = _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_local)
-                cum_forces_display[mid] = np.array([0.0, 0.0, M1, 0.0, 0.0, M2])
+                cum_forces_display[mid] = _member_end_forces_local(
+                    frame, mid, u_full, hinge_states, member_ref, member_fem_local)
             history_snapshots.append(_snapshot(cum_forces_display, hinge_states, u_full))
 
         if step_newly_yielded:

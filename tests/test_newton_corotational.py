@@ -229,4 +229,37 @@ u9, F9, ev9, hsf9, conv9 = run_pushover_newton(
 assert conv9 is True, "重力+側推同時作用應該能正常收斂"
 print(f"PASS: converged={conv9}, 降伏事件數={len(ev9)}, 最終F={F9[-1]:.4f}\n")
 
+
+# ---- 案例10: 快照要有完整的Fx/Fy/M(不是只有M1,M2), 否則精確N/V/M/
+# 變形圖(member_internal_forces())重建V(x)時會把剪力當成0, 柱子的
+# 彎矩圖會被錯誤畫成上下端數值相同的"矩形"——這是使用者用截圖抓出來
+# 的真實bug, 見對話紀錄。 ----
+print("=== 案例10: 快照的端力向量要有完整Fy(不能只有M1,M2=剪力=0的假象) ===")
+from frame2d.newton import _member_end_forces_local
+
+f10 = Frame2D()
+f10.add_node(0, 0, 0)
+f10.add_node(1, 0, L)
+f10.add_section('sec', E=E, I=I, A=A)
+f10.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+               R_post_yield_i=1.0, R_post_yield_j=1.0)
+f10.fix(0)
+hs10 = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u10, F10, ev10, hsf10, conv10, snaps10 = run_pushover_newton(
+    f10, hs10, prescribed_dofs=[f10.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.01, d_nominal=0.005, base_reaction_dofs=[f10.dofs_of(0)[0]],
+    control_mode='displacement', tol=1e-9, include_snapshots=True,
+)
+Fy1_snap = snaps10[-1]['member_forces'][0][1]
+assert abs(Fy1_snap) > 1e-6, (
+    f"快照裡的Fy1不應該是0(修正前的bug就是永遠存0, 讓member_internal_"
+    f"forces()重建V(x)/M(x)時剪力消失, 柱子彎矩圖變成上下端一樣的"
+    f"矩形)——實際Fy1={Fy1_snap}"
+)
+M1_snap, M2_snap = snaps10[-1]['member_forces'][0][2], snaps10[-1]['member_forces'][0][5]
+assert abs(Fy1_snap - (M1_snap + M2_snap) / L) < 1e-6, (
+    "快照裡的Fy1應該精確符合(M1+M2)/L這個樑元素平衡關係"
+)
+print(f"PASS: 快照正確存有Fy1={Fy1_snap:.4f}(不是0), 且符合(M1+M2)/L平衡關係\n")
+
 print("PASS: frame2d.newton所有案例通過")
