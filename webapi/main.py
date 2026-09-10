@@ -185,13 +185,17 @@ def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_fl
     名稱完全對得上兩個函式的簽名), 只有converged版本會額外用到
     geom_tol/max_geom_iter。
 
-    newton版本的參數簽名不一樣(沒有use_pdelta/geometry_update/
-    mechanism_ratio_limit這些概念——它是完全獨立的另一套實作, 見
-    frame2d.newton的說明), 這裡只挑它認得的欄位轉傳; 重力/桿件內部
-    載重(distributed_loads/member_point_loads)由run_pushover_newton()
-    自己內部處理(見_gravity_fixed_end_forces()), 不需要
-    _prepare_pushover_run()算好的initial_cum_forces, 這裡就不傳
-    那個欄位過去。
+    newton版本的參數簽名不完全一樣(沒有geometry_update/
+    mechanism_ratio_limit這些概念——大轉角co-rotational幾何全程都是
+    "完整疊代到平衡", 沒有"開/關幾何更新"這種選項, 見frame2d.newton
+    的說明; 但use_pdelta是有意義且獨立支援的: 那是"軸力對桿件自身
+    彎曲勁度的局部修正"(業界常稱P-δ), 跟大轉角co-rotational處理的
+    "桿件整體轉了多少度"是完全獨立的兩件事, 兩者可以同時開, 不衝突
+    ——見對話紀錄裡這個區分的完整討論), 這裡只挑它認得的欄位轉傳;
+    重力/桿件內部載重(point_loads/distributed_loads/member_point_
+    loads)由run_pushover_newton()自己內部處理(見
+    _gravity_fixed_end_forces()), 不需要_prepare_pushover_run()
+    算好的initial_cum_forces, 這裡就不傳那個欄位過去。
 
     newton版本回傳的第5個值是converged(True=成功, 語意跟前兩者的
     mechanism_reached(True=失敗提前停止)剛好相反)——這裡統一轉成
@@ -212,7 +216,7 @@ def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_fl
         newton_kwargs = {
             k: run_kwargs[k] for k in
             ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
-             'd_nominal', 'base_reaction_dofs', 'control_mode')
+             'd_nominal', 'base_reaction_dofs', 'control_mode', 'use_pdelta')
         }
         raw = run_pushover_newton(
             tol=payload.pushover_newton_tol,

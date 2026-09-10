@@ -182,7 +182,7 @@ def _run_selected_pushover_solver(payload: dict, run_kwargs: dict, **extra_flags
         newton_kwargs = {
             k: run_kwargs[k] for k in
             ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
-             'd_nominal', 'base_reaction_dofs', 'control_mode')
+             'd_nominal', 'base_reaction_dofs', 'control_mode', 'use_pdelta')
         }
         raw = run_pushover_newton(
             tol=payload.get("pushover_newton_tol", 1e-6),
