@@ -186,10 +186,12 @@ def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_fl
     geom_tol/max_geom_iter。
 
     newton版本的參數簽名不一樣(沒有use_pdelta/geometry_update/
-    mechanism_ratio_limit/initial_cum_forces這些概念——它是完全獨立
-    的另一套實作, 見frame2d.newton的說明), 這裡只挑它認得的欄位轉傳;
-    如果模型有重力預載(initial_cum_forces不是None), newton版本目前
-    還不支援, 直接回400錯誤(不是靜靜忽略重力這種給錯誤答案的做法)。
+    mechanism_ratio_limit這些概念——它是完全獨立的另一套實作, 見
+    frame2d.newton的說明), 這裡只挑它認得的欄位轉傳; 重力/桿件內部
+    載重(distributed_loads/member_point_loads)由run_pushover_newton()
+    自己內部處理(見_gravity_fixed_end_forces()), 不需要
+    _prepare_pushover_run()算好的initial_cum_forces, 這裡就不傳
+    那個欄位過去。
 
     newton版本回傳的第5個值是converged(True=成功, 語意跟前兩者的
     mechanism_reached(True=失敗提前停止)剛好相反)——這裡統一轉成
@@ -207,14 +209,6 @@ def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_fl
             **run_kwargs, **extra_flags,
         )
     if payload.pushover_solver == 'newton':
-        if run_kwargs.get('initial_cum_forces') is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="newton求解器目前還不支援重力預載階段(模型有均佈"
-                       "載重/節點力)——這是已知限制, 不是bug, 見"
-                       "frame2d.newton.run_pushover_newton()的docstring"
-                       "說明, 請先移除重力載重或改用其他求解器。",
-            )
         newton_kwargs = {
             k: run_kwargs[k] for k in
             ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',

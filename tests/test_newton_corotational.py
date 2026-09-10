@@ -165,4 +165,68 @@ except ValueError as e:
     assert 'release' in str(e)
 print("PASS: release端正確raise ValueError, 不是給錯誤答案\n")
 
+# ---- 案例8: 重力/桿件內部載重支援, 對得上已驗證過的apply_gravity() ----
+print("=== 案例8: 重力(分佈載重)支援, 精確對得上apply_gravity()跟wL^2/12公式 ===")
+from frame2d.dofmanager import initial_hinge_states
+from frame2d.pushover import apply_gravity
+from frame2d.newton import _gravity_fixed_end_forces
+
+
+def fixed_fixed_beam_with_udl():
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, L, 0)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.distributed_load(0, w=10.0, direction='global_y')
+    f.fix(0)
+    f.fix(1)
+    return f
+
+
+f8a = fixed_fixed_beam_with_udl()
+hs8a = initial_hinge_states(f8a)
+init_forces8, _ = apply_gravity(f8a, hs8a)
+M1_ref = init_forces8[0][2]
+M2_ref = init_forces8[0][5]
+assert abs(M1_ref - 10.0 * L**2 / 12) < 1e-9, "跟已驗證的apply_gravity()自己先要對得上wL^2/12"
+
+# 直接測_gravity_fixed_end_forces()本身(不透過完整的pushover迴圈,
+# 因為這個案例兩端都完全固定、沒有任何自由度可以推, 直接測底層函式
+# 比硬湊一個可以推的模型更乾淨): 固定端彎矩(member_fem_local的索引
+# 2,5)取負號後應該直接對得上apply_gravity()的end_forces_local慣例
+# (見dofmanager.py: end_forces_local = k_local@u_local - f_FE, 變形
+# 量在u=0時是0, 所以應該精確等於-f_FE)。
+f8b = fixed_fixed_beam_with_udl()
+f_ext_gravity8, member_fem_local8 = _gravity_fixed_end_forces(f8b)
+M1_newton = -member_fem_local8[0][2]
+M2_newton = -member_fem_local8[0][5]
+assert abs(M1_newton - M1_ref) < 1e-9 and abs(M2_newton - M2_ref) < 1e-9, (
+    f"_gravity_fixed_end_forces()算出的固定端彎矩(取負號後)應該精確"
+    f"對得上apply_gravity(), 實際: newton=({M1_newton},{M2_newton}), "
+    f"apply_gravity=({M1_ref},{M2_ref})"
+)
+print(f"PASS: _gravity_fixed_end_forces()精確對得上apply_gravity()跟wL^2/12公式"
+      f"(M1={M1_newton:.6f}, M2={M2_newton:.6f})\n")
+
+# ---- 案例9: 重力+側推力同時作用, 完整跑過一次不crash且合理收斂 ----
+print("=== 案例9: 重力+側推同時作用的完整案例 ===")
+f9 = Frame2D()
+f9.add_node(0, 0, 0)
+f9.add_node(1, 0, L)
+f9.add_section('sec', E=E, I=I, A=A)
+f9.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=100.0, Mp_j=1e30,
+              R_post_yield_i=100.0, R_post_yield_j=100.0)
+f9.distributed_load(0, w=10.0, direction='global_y')
+f9.fix(0)
+hs9 = {0: HingeState(Mp1=100.0, Mp2=1e30, R_post_yield_1=100.0, R_post_yield_2=100.0)}
+u9, F9, ev9, hsf9, conv9 = run_pushover_newton(
+    f9, hs9, prescribed_dofs=[f9.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.05, d_nominal=0.002, base_reaction_dofs=[f9.dofs_of(0)[0]],
+    control_mode='displacement', tol=1e-8,
+)
+assert conv9 is True, "重力+側推同時作用應該能正常收斂"
+print(f"PASS: converged={conv9}, 降伏事件數={len(ev9)}, 最終F={F9[-1]:.4f}\n")
+
 print("PASS: frame2d.newton所有案例通過")

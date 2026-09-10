@@ -168,8 +168,10 @@ class FrameIn(BaseModel):
     frame2d.newton.run_pushover_newton(): 真正的大轉角co-rotational
     幾何+Newton-Raphson平衡疊代, 材料非線性跟幾何非線性都用嚴謹疊代
     解, 轉角再大也不會像前兩者那樣失真, 是三者裡最嚴謹也最慢的——
-    目前不支援release端(有的話直接回400錯誤)也不支援重力預載階段
-    (模型有均佈載重/節點力的話直接回400錯誤), 見run_pushover_newton()
+    目前不支援release端(有的話直接回400錯誤); 重力/桿件內部載重
+    (均佈載重、桿件內部集中力)有支援, 用固定端反力公式轉成等效節點力
+    (跟其餘求解器的apply_gravity()同一種"算一次、全程凍結"簡化), 已
+    驗證跟apply_gravity()精確一致, 見run_pushover_newton()
     docstring的已知限制)。前兩者材料非線性(塑鉸降伏)邏輯完全相同,
     差異只在幾何/軸力這一塊怎麼解;newton是完全獨立的第三套實作。"""
     pushover_geom_tol: float = 1e-6

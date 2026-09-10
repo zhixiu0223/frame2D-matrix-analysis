@@ -179,13 +179,6 @@ def _run_selected_pushover_solver(payload: dict, run_kwargs: dict, **extra_flags
             **run_kwargs, **extra_flags,
         )
     if payload.get("pushover_solver") == "newton":
-        if run_kwargs.get("initial_cum_forces") is not None:
-            raise ValueError(
-                "newton求解器目前還不支援重力預載階段(模型有均佈"
-                "載重/節點力)——這是已知限制, 不是bug, 見"
-                "frame2d.newton.run_pushover_newton()的docstring"
-                "說明, 請先移除重力載重或改用其他求解器。"
-            )
         newton_kwargs = {
             k: run_kwargs[k] for k in
             ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
