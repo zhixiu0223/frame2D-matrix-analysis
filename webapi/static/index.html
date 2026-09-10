@@ -183,12 +183,12 @@
       </select></label>
       <label class="snapLabel"><span id="pv_target_label">目標位移</span><input id="pv_target" type="number" step="any" style="width:5rem;"><span id="pv_target_unit" class="hint" style="margin-left:0.2rem;"></span></label>
       <label class="snapLabel"><span id="pv_step_label">步長</span><input id="pv_step" type="number" step="any" style="width:5rem;"><span id="pv_step_unit" class="hint" style="margin-left:0.2rem;"></span></label>
-      <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> 同時考慮P-Delta</label>
-      <label class="snapLabel"><input id="pv_geomupdate" type="checkbox" style="width:auto;"> 幾何更新(每步用當下變形後幾何, 較接近大變形真實行為)</label>
+      <label class="snapLabel"><input id="pv_pdelta" type="checkbox" style="width:auto;"> <span id="pv_pdelta_label">同時考慮P-Delta</span></label>
+      <label class="snapLabel" id="pv_geomupdate_wrap"><input id="pv_geomupdate" type="checkbox" style="width:auto;"> <span id="pv_geomupdate_label">幾何更新(每步用當下變形後幾何, 較接近大變形真實行為)</span></label>
       <label class="snapLabel">求解器<select id="pv_solver" style="width:11rem;">
         <option value="event_to_event" selected>Event-to-event(單次線性解, 較快)</option>
         <option value="converged">幾何平衡疊代(較慢, 會誠實回報不收斂)</option>
-        <option value="newton">Newton-Raphson(大轉角co-rotational, 最嚴謹也最慢, 不支援重力預載/release端)</option>
+        <option value="newton">Newton-Raphson(大轉角co-rotational, 最嚴謹也最慢, 不支援release端)</option>
       </select></label>
       <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。多個控制節點時, 第一個節點是「參考點」——容量曲線的位移軸永遠回報這一點的位移(業界慣例: 不管用哪種側推型態, 都看屋頂/最高樓層位移, 所以第一個通常填屋頂節點)。權重留空=全部1.0(均勻型態); 要做倒三角形型態就照各樓層高度比例填, 例如三層樓填「0.33,0.67,1.0」。</p>
     </div>
@@ -3796,6 +3796,32 @@ function updatePushoverUnitLabels() {
 }
 updatePushoverUnitLabels();
 document.getElementById('pv_mode').addEventListener('change', updatePushoverUnitLabels);
+
+// Newton-Raphson求解器的大轉角co-rotational幾何全程都是"完整疊代到
+// 平衡", 沒有"開/關幾何更新"這種選項(那是event-to-event/幾何平衡
+// 疊代版本才有的線性化近似選項), 選Newton時把這個勾選框變灰、文字
+// 換成說明, 避免使用者以為這個勾選框對Newton也有效(見對話紀錄裡的
+// 討論)。P-Delta勾選框則是三種求解器都有意義且獨立支援的選項, 只是
+// 物理意義在Newton版本裡更精確(局部P-δ, 軸力對桿件自身彎曲勁度的
+// 修正, 疊加在已經精確處理過大轉角的關係上), 不是線性化近似——這裡
+// 動態換一下文字說明, 不擋用。
+function updatePushoverSolverUI() {
+  const isNewton = document.getElementById('pv_solver').value === 'newton';
+  const geomWrap = document.getElementById('pv_geomupdate_wrap');
+  const geomCheckbox = document.getElementById('pv_geomupdate');
+  const geomLabel = document.getElementById('pv_geomupdate_label');
+  const pdeltaLabel = document.getElementById('pv_pdelta_label');
+  geomCheckbox.disabled = isNewton;
+  geomWrap.style.opacity = isNewton ? '0.5' : '1';
+  geomLabel.textContent = isNewton
+    ? '幾何更新(Newton-Raphson全程都是完整疊代到平衡的大轉角co-rotational幾何, 沒有這個選項, 勾了也不會有效果)'
+    : '幾何更新(每步用當下變形後幾何, 較接近大變形真實行為)';
+  pdeltaLabel.textContent = isNewton
+    ? '同時考慮P-Delta(這裡是精確疊加在co-rotational上的局部軸力-彎曲勁度修正, 不是線性化近似)'
+    : '同時考慮P-Delta';
+}
+updatePushoverSolverUI();
+document.getElementById('pv_solver').addEventListener('change', updatePushoverSolverUI);
 document.getElementById('statusCopyBtn').addEventListener('click', async () => {
   const text = document.getElementById('status').textContent;
   try {
