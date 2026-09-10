@@ -309,6 +309,59 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref):
     return f_int, K_t
 
 
+def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
+                     theta_def_at_yield, n_dof, resid_dofs, f_ext, tol, max_iter):
+    """單一次Newton平衡疊代(從u_start這個起點開始, 疊代到resid_dofs
+    上的殘餘力f_ext-f_int收斂, 或max_iter次都沒收斂)——這是
+    run_pushover_newton()每一步(不管是重力預載那一步, 還是側推的每
+    一個位移/力增量)共用的核心邏輯, 抽出來共用避免兩處分別維護、
+    互相漂移。原地修改hinge_states(降伏偵測到的部分會被標記)。
+
+    回傳(converged, step_newly_yielded, u_trial)。呼叫端自己決定
+    "這一步的殘餘力目標f_ext/resid_dofs該怎麼設"——重力預載是
+    resid_dofs=全部自由dof、f_ext=f_ext_gravity;側推的一般步驟則
+    依control_mode決定(力控制時resid_dofs=全部自由dof但f_ext含
+    累積的側推力;位移控制時resid_dofs排除被強制位移的dof、
+    f_ext=f_ext_gravity, 因為那些dof的值已經直接設定好了, 不需要
+    也不能再放進殘餘力方程式裡solve)。
+    """
+    u_trial = u_start.copy()
+    step_newly_yielded = []
+    for it in range(max_iter):
+        f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref)
+
+        newly_yielded_this_iter = []
+        for mid, hs in hinge_states.items():
+            M1, M2 = _member_moments(frame, mid, u_trial, hinge_states, member_ref, member_fem_local)
+            if not hs.yielded[0] and abs(M1) >= hs.Mp[0]:
+                hs.yielded[0] = True
+                newly_yielded_this_iter.append((mid, 0))
+                th1d, _ = _member_theta_def(frame, mid, u_trial)
+                theta_def_at_yield[mid][0] = th1d
+            if not hs.yielded[1] and abs(M2) >= hs.Mp[1]:
+                hs.yielded[1] = True
+                newly_yielded_this_iter.append((mid, 1))
+                _, th2d = _member_theta_def(frame, mid, u_trial)
+                theta_def_at_yield[mid][1] = th2d
+        if newly_yielded_this_iter:
+            step_newly_yielded.extend(newly_yielded_this_iter)
+            continue   # 塑鉸狀態變了, 這次試探已經過期, 重新組裝再試一次
+
+        residual = (f_ext - f_int)[resid_dofs]
+        scale = max(np.max(np.abs(f_int)), 1.0)
+        if np.max(np.abs(residual)) < tol * scale:
+            return True, step_newly_yielded, u_trial
+
+        K_sub = K_t[np.ix_(resid_dofs, resid_dofs)]
+        try:
+            du_sub = np.linalg.solve(K_sub, residual)
+        except np.linalg.LinAlgError:
+            return False, step_newly_yielded, u_trial   # 切線奇異, 通常代表已經到極限承載力附近
+        for i, d in enumerate(resid_dofs):
+            u_trial[d] += du_sub[i]
+    return False, step_newly_yielded, u_trial
+
+
 def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_total,
                          d_nominal, base_reaction_dofs,
                          control_mode='displacement', tol=1e-6, max_iter=30, max_steps=100000,
@@ -385,6 +438,31 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     # 混用。
     theta_def_at_yield = {mid: [None, None] for mid in hinge_states}
 
+    # 重力預載階段: 如果模型真的有重力/桿件內部載重, 不能天真地假設
+    # u=0就是"重力施加前"的狀態——重力本身就會讓結構真的變形, 必須先
+    # 疊代解出這個真正的平衡點(用跟主迴圈完全同一套Newton機制), 塑鉸
+    # 的M1,M2才會從正確的基準開始累加。這是實際案例逼出來的修正: 沒
+    # 做這一步之前, "第一步"(側推還沒開始)顯示的柱子彎矩會是0(因為
+    # 垂直方向的均佈載重對垂直的柱子來說是純軸向, 沒有直接的固定端
+    # 彎矩貢獻, 而u=0狀態又沒有真正的變形去產生"樑的彎矩透過剛接節點
+    # 傳遞一部分進柱子"這個間接效應), 這跟event-to-event/converged
+    # 版本用apply_gravity()先solve一次的做法不一致, 也不符合實際力學
+    # 行為——見對話紀錄裡使用者用實際截圖比對兩種求解器抓出來的差異。
+    if np.any(f_ext_gravity != 0.0):
+        conv_gravity, _, u_full = _newton_iterate(
+            frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
+            n_dof, free_dofs, f_ext_gravity, tol, max_iter)
+        if not conv_gravity:
+            raise RuntimeError(
+                "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
+                "到平衡狀態——這通常代表模型本身在重力載重下就已經接近"
+                "或超過極限承載力, 請檢查斷面/塑鉸容量設定是否合理。"
+            )
+        for mid in frame.members:
+            th1d, th2d = _member_theta_def(frame, mid, u_full)
+            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref)
+            member_ref[mid] = (M1_def, M2_def, th1d, th2d)
+
     history_u = [0.0]
     history_F = [0.0]
     event_log = []
@@ -413,57 +491,16 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
             for i, dof in enumerate(prescribed_dofs):
                 f_ext_cum[dof] += direction[i] * d_step
             f_ext = f_ext_cum
+            resid_dofs = list(free_dofs)
         else:
             for i, dof in enumerate(prescribed_dofs):
                 u_trial[dof] += direction[i] * d_step
+            f_ext = f_ext_gravity
+            resid_dofs = [d for d in free_dofs if d not in prescribed_dofs]
 
-        step_converged = False
-        step_newly_yielded = []
-        for it in range(max_iter):
-            f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref)
-
-            # 材料降伏偵測: 用"真正物理彎矩"(變形貢獻+重力固定端彎矩
-            # 貢獻, 見_member_moments()的member_fem_local參數)檢查有
-            # 沒有哪個還沒降伏的端超過Mp——這裡在疊代"內部"做, 見本
-            # 檔案開頭"已知限制"說明。newly_yielded_this_iter要累加進
-            # step_newly_yielded(不能只看最後一次疊代的結果, 同一步
-            # 裡不同疊代次可能先後偵測到不同的鉸降伏)。
-            newly_yielded_this_iter = []
-            for mid, hs in hinge_states.items():
-                M1, M2 = _member_moments(frame, mid, u_trial, hinge_states, member_ref, member_fem_local)
-                if not hs.yielded[0] and abs(M1) >= hs.Mp[0]:
-                    hs.yielded[0] = True
-                    newly_yielded_this_iter.append((mid, 0))
-                    th1d, _ = _member_theta_def(frame, mid, u_trial)
-                    theta_def_at_yield[mid][0] = th1d
-                if not hs.yielded[1] and abs(M2) >= hs.Mp[1]:
-                    hs.yielded[1] = True
-                    newly_yielded_this_iter.append((mid, 1))
-                    _, th2d = _member_theta_def(frame, mid, u_trial)
-                    theta_def_at_yield[mid][1] = th2d
-            if newly_yielded_this_iter:
-                step_newly_yielded.extend(newly_yielded_this_iter)
-                continue   # 塑鉸狀態變了, 這次試探已經過期, 重新組裝再試一次
-
-            if control_mode == 'force':
-                resid_dofs = [d for d in free_dofs]
-                residual = (f_ext - f_int)[resid_dofs]
-            else:
-                resid_dofs = [d for d in free_dofs if d not in prescribed_dofs]
-                residual = (f_ext_gravity - f_int)[resid_dofs]
-
-            scale = max(np.max(np.abs(f_int)), 1.0)
-            if np.max(np.abs(residual)) < tol * scale:
-                step_converged = True
-                break
-
-            K_sub = K_t[np.ix_(resid_dofs, resid_dofs)]
-            try:
-                du_sub = np.linalg.solve(K_sub, residual)
-            except np.linalg.LinAlgError:
-                break   # 切線奇異(通常代表已經到極限承載力附近), 視為不收斂
-            for i, d in enumerate(resid_dofs):
-                u_trial[d] += du_sub[i]
+        step_converged, step_newly_yielded, u_trial = _newton_iterate(
+            frame, hinge_states, u_trial, member_ref, member_fem_local, theta_def_at_yield,
+            n_dof, resid_dofs, f_ext, tol, max_iter)
 
         if not step_converged:
             converged_all = False

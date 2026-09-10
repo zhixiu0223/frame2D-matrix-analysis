@@ -262,4 +262,63 @@ assert abs(Fy1_snap - (M1_snap + M2_snap) / L) < 1e-6, (
 )
 print(f"PASS: 快照正確存有Fy1={Fy1_snap:.4f}(不是0), 且符合(M1+M2)/L平衡關係\n")
 
+# ---- 案例11: 重力預載階段要真的解平衡方程式, 不能天真假設u=0就是
+# "重力施加前"的狀態——這是使用者用實際截圖(柱子彎矩顯示成0)抓出來
+# 的真實bug, 見對話紀錄。用一個不對稱跨度的2層樓構架(跟apply_gravity()
+# 對照), 驗證柱子在"第一步"(側推還沒開始, 只有重力)應該有非零彎矩
+# (透過剛接節點, 樑的彎曲會傳一部分進柱子), 不是0。 ----
+print("=== 案例11: 重力預載要真的疊代求解平衡, 柱子彎矩不應該是0 ===")
+from frame2d.dofmanager import initial_hinge_states as _initial_hinge_states
+
+
+def asym_two_story_frame():
+    f = Frame2D()
+    coords = {0: (0, 0), 1: (5, 0), 2: (12, 0), 3: (0, 4), 4: (5, 4), 5: (12, 4),
+              6: (0, 7.5), 7: (5, 7.5), 8: (12, 7.5)}
+    for nid, (x, y) in coords.items():
+        f.add_node(nid, x, y)
+    f.add_section('sec', E=208e9, I=23500e-8, A=83.37e-4)
+    Rmap = {0: 1466.4e3, 1: 1466.4e3, 2: 1466.4e3, 3: 1173.12e3, 4: 837.943e3,
+            5: 1675.89e3, 6: 1675.89e3, 7: 1675.89e3, 8: 1173.12e3, 9: 837.943e3}
+    conns = [(0, 0, 3), (1, 1, 4), (2, 5, 2), (3, 3, 4), (4, 4, 5),
+             (5, 6, 3), (6, 7, 4), (7, 8, 5), (8, 6, 7), (9, 7, 8)]
+    for mid, ni, nj in conns:
+        f.add_member(mid, node_i=ni, node_j=nj, section='sec', Mp_i=322.5e3, Mp_j=322.5e3,
+                     R_post_yield_i=Rmap[mid], R_post_yield_j=Rmap[mid])
+    for mid in range(10):
+        f.distributed_load(mid, w=15e3, direction='global_y')
+    f.fix(0)
+    f.fix(1)
+    f.fix(2)
+    return f
+
+
+f11a = asym_two_story_frame()
+hs11a = _initial_hinge_states(f11a)
+init_forces11, _ = apply_gravity(f11a, hs11a)
+M1_ref11 = init_forces11[0][2]
+assert abs(M1_ref11) > 100, "跟已驗證的apply_gravity()自己先要確認柱子底端彎矩明顯不是0"
+
+f11b = asym_two_story_frame()
+hs11b = {mid: HingeState(Mp1=322.5e3, Mp2=322.5e3, R_post_yield_1=1e10, R_post_yield_2=1e10)
+         for mid in range(10)}
+u11, F11, ev11, hsf11, conv11, u_full11, snaps11 = run_pushover_newton(
+    f11b, hs11b, prescribed_dofs=[f11b.dofs_of(7)[0]], direction=[1.0],
+    target_total=1e-9, d_nominal=1e-9, base_reaction_dofs=[f11b.dofs_of(0)[0], f11b.dofs_of(1)[0], f11b.dofs_of(2)[0]],
+    control_mode='displacement', tol=1e-9, include_final_displacement=True, include_snapshots=True, max_iter=50,
+)
+M1_newton11 = snaps11[0]['member_forces'][0][2]
+assert abs(M1_newton11) > 100, (
+    f"修正前的bug: 柱子在重力預載階段會顯示彎矩=0(天真地假設u=0是"
+    f"重力施加前的狀態, 沒有真的疊代求解重力平衡)——修正後應該明顯"
+    f"不是0, 實際={M1_newton11}"
+)
+rel_err11 = abs(M1_newton11 - M1_ref11) / abs(M1_ref11)
+assert rel_err11 < 0.01, (
+    f"newton版本的重力預載柱子底端彎矩應該精確對得上apply_gravity(), "
+    f"實際: newton={M1_newton11}, apply_gravity={M1_ref11}, 相對誤差={rel_err11}"
+)
+print(f"PASS: 重力預載階段柱子底端彎矩={M1_newton11:.2f}(不是0), "
+      f"對得上apply_gravity()的{M1_ref11:.2f}(相對誤差{rel_err11:.4f})\n")
+
 print("PASS: frame2d.newton所有案例通過")
