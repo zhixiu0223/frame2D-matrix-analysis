@@ -580,3 +580,232 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     if include_snapshots:
         result.append(history_snapshots)
     return tuple(result)
+
+
+# ============================================================
+# run_pushover_corotational_oneshot() -- 驗證性求解器, 見
+# ANALYSIS_ARCHITECTURE.md「規劃中」第1點的說明。
+#
+# 存在的目的不是給使用者日常用的第四種求解器選項(雖然技術上可以這樣
+# 用), 而是驗證一件架構上的事: corotational.py(物理層/元素公式)跟
+# newton.py既有的_assemble_global()/_member_moments()這些共用函式,
+# 能不能被一個"不疊代到殘餘力收斂"的求解策略重用, 而不用修改
+# corotational.py一行程式碼——如果做得到, 就證明"物理層"跟"求解層"
+# 這兩層真的是分開的, 不是巧合或紙上談兵。
+#
+# 這個函式故意設計成跟run_pushover()(event-to-event)同一個近似等級:
+# 每一步只用"這一步開始時"的切線K_t解一次線性方程式, 不會檢查真正的
+# 殘餘力是否收斂——差別只在幾何精確度(co-rotational, 不是小角度近似
+# 的Global P-Delta/幾何更新)。精確度介於run_pushover(geometry_
+# update=True)(小角度, 一次到位)跟run_pushover_newton()(co-rotational,
+# 疊代到收斂)之間。
+# ============================================================
+
+def _corotational_oneshot_step(frame, hinge_states, u_full, member_ref, member_fem_local,
+                                n_dof, free_dofs, prescribed_dofs, direction, d_amount,
+                                control_mode, use_pdelta):
+    """用u_full目前狀態的切線K_t解一次線性方程式(不疊代), 回傳
+    (du_full, ratio_accepted, newly_yielded_this_step, new_member_ref)。
+
+    new_member_ref是這一步接受之後, 每根桿件新的(M1,M2,theta1_def,
+    theta2_def)參考狀態, 呼叫端直接拿來更新member_ref即可, 不要自己
+    在標記降伏之後另外重算一次——這裡刻意在函式內部、標記任何塑鉸
+    降伏"之前"就算好這個值, 是為了修正一個真實發生過的bug(見函式
+    本體裡的說明)。
+
+    降伏偵測用線性內插近似: 因為K_t在這一步裡固定不變, du本身確實是
+    目標增量大小的線性函式(縮放目標、按比例縮放du即可, 不用重新解)
+    ——但co-rotational的彎矩M(u)不是"沿著這條線性路徑"的精確線性函式
+    (經過三角函數), 所以用"這一步開始時的M"跟"整步解完後的M"兩點內插
+    去估計跨越Mp的比例點, 是近似, 不是精確定位(誤差量級隨d_amount
+    步長縮小)——這一點跟run_pushover()的event-to-event精確定位不同,
+    是刻意接受的近似, 見本檔案這一段開頭的說明。
+    """
+    f_int, K_t = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
+
+    du_full = np.zeros(n_dof)
+    if control_mode == 'force':
+        resid_dofs = list(free_dofs)
+        f_target = np.zeros(n_dof)
+        for i, dof in enumerate(prescribed_dofs):
+            f_target[dof] = direction[i] * d_amount
+        K_sub = K_t[np.ix_(resid_dofs, resid_dofs)]
+        du_full[resid_dofs] = np.linalg.solve(K_sub, f_target[resid_dofs])
+    else:
+        resid_dofs = [d for d in free_dofs if d not in prescribed_dofs]
+        for i, dof in enumerate(prescribed_dofs):
+            du_full[dof] = direction[i] * d_amount
+        rhs = -(K_t[np.ix_(resid_dofs, prescribed_dofs)] @ (direction * d_amount))
+        K_sub = K_t[np.ix_(resid_dofs, resid_dofs)]
+        du_full[resid_dofs] = np.linalg.solve(K_sub, rhs)
+
+    u_trial = u_full + du_full
+    ratio_min = 1.0
+    for mid, hs in hinge_states.items():
+        M1_start, M2_start = _member_moments(frame, mid, u_full, hinge_states, member_ref,
+                                              use_pdelta=use_pdelta)
+        M1_trial, M2_trial = _member_moments(frame, mid, u_trial, hinge_states, member_ref,
+                                             use_pdelta=use_pdelta)
+        for end_idx, M_start, M_trial in [(0, M1_start, M1_trial), (1, M2_start, M2_trial)]:
+            if hs.yielded[end_idx]:
+                continue
+            Mp = hs.Mp[end_idx]
+            if abs(M_trial) >= Mp and abs(M_trial) > abs(M_start):
+                r = (Mp - abs(M_start)) / (abs(M_trial) - abs(M_start))
+                r = max(0.0, min(1.0, r))
+                ratio_min = min(ratio_min, r)
+
+    du_accepted = du_full * ratio_min
+    d_amount_accepted = d_amount * ratio_min
+
+    # 在標記任何塑鉸降伏"之前", 先用這一步實際接受的最終狀態
+    # (u_full+du_accepted), 搭配目前(還沒被這一步影響)的塑鉸狀態,
+    # 算出每根桿件新的(M1,M2,theta1_def,theta2_def)基準——這是要修正
+    # 一個真實發生過的bug: 如果先標記降伏、再用"已經降伏後"的軟化
+    # 勁度去算這一步累積的彎矩, 會把這一步裡其實還是彈性的那一段也
+    # 錯誤地用軟化後的勁度去算, 導致彎矩系統性偏低, 而且偏差會隨著
+    # 步驟數增加而累積——這正是這次驗證發現的異常(步長切越細、步數
+    # 越多, 誤差反而越大, 不是預期中該有的"步長變小誤差變小")。
+    u_accepted = u_full + du_accepted
+    new_member_ref = {}
+    for mid in frame.members:
+        th1d, th2d = _member_theta_def(frame, mid, u_accepted)
+        M1, M2 = _member_moments(frame, mid, u_accepted, hinge_states, member_ref,
+                                  use_pdelta=use_pdelta)
+        new_member_ref[mid] = (M1, M2, th1d, th2d)
+
+    newly_yielded = []
+    if ratio_min < 1.0:
+        for mid, hs in hinge_states.items():
+            M1, M2, _, _ = new_member_ref[mid]
+            for end_idx, M in [(0, M1), (1, M2)]:
+                if not hs.yielded[end_idx] and abs(M) >= hs.Mp[end_idx] - 1e-6:
+                    hs.yielded[end_idx] = True
+                    newly_yielded.append((mid, end_idx))
+    return du_accepted, d_amount_accepted, newly_yielded, new_member_ref
+
+
+def run_pushover_corotational_oneshot(frame, hinge_states, prescribed_dofs, direction, target_total,
+                                       d_nominal, base_reaction_dofs, control_mode='displacement',
+                                       use_pdelta=False, max_steps=100000,
+                                       include_final_displacement=False, include_snapshots=False):
+    """驗證性求解器, 見本檔案這一段開頭的說明跟ANALYSIS_ARCHITECTURE.md。
+
+    參數跟run_pushover_newton()大致對應(共用同一套co-rotational元素
+    公式), 差異只在: 沒有tol/max_iter(這裡不疊代到殘餘力收斂, 這兩個
+    參數沒有意義); 重力預載階段例外——那個是"一次性"的初始狀態求解,
+    不是"每一步"的近似對象, 所以依然重用_newton_iterate()疊代到真正
+    收斂(理由: 上一輪已經驗證過重力預載不疊代會給出明顯錯誤的結果,
+    這裡沒有理由重蹈覆轍去驗證"不疊代的重力預載"這件事, 那不是這個
+    函式想驗證的重點)。
+
+    回傳: 跟run_pushover_newton()同樣的欄位形狀, 但converged永遠是
+    True(這個求解策略的精神就是"不檢查、直接接受", 跟event-to-event
+    一致)——如果重力預載階段失敗, 會raise RuntimeError(不是回傳
+    converged=False), 跟run_pushover_newton()一致。
+    """
+    _check_no_releases(frame)
+    direction = np.array(direction, dtype=float)
+    n_nodes = len(frame.nodes)
+    n_dof = 3 * n_nodes
+    fixed_dofs = set()
+    for s in frame.supports:
+        ux_i, uy_i, rot_i = frame.dofs_of(s.node)
+        if s.ux is not None:
+            fixed_dofs.add(ux_i)
+        if s.uy is not None:
+            fixed_dofs.add(uy_i)
+        if s.rot is not None:
+            fixed_dofs.add(rot_i)
+    free_dofs = [d for d in range(n_dof) if d not in fixed_dofs]
+    if not free_dofs:
+        raise ValueError(
+            "這個模型所有自由度都被支承條件固定住了, 沒有任何自由度"
+            "可以求解, 請檢查支承條件。"
+        )
+    control_dof0 = prescribed_dofs[0]
+
+    f_ext_gravity, member_fem_local = _gravity_fixed_end_forces(frame)
+
+    u_full = np.zeros(n_dof)
+    member_ref = {mid: (0.0, 0.0, 0.0, 0.0) for mid in frame.members}
+    theta_def_at_yield = {mid: [None, None] for mid in hinge_states}
+
+    if np.any(f_ext_gravity != 0.0):
+        conv_gravity, _, u_full = _newton_iterate(
+            frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
+            n_dof, free_dofs, f_ext_gravity, 1e-6, 30, use_pdelta)
+        if not conv_gravity:
+            raise RuntimeError(
+                "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
+                "到平衡狀態——這通常代表模型本身在重力載重下就已經接近"
+                "或超過極限承載力, 請檢查斷面/塑鉸容量設定是否合理。"
+            )
+        for mid in frame.members:
+            th1d, th2d = _member_theta_def(frame, mid, u_full)
+            M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref,
+                                              use_pdelta=use_pdelta)
+            member_ref[mid] = (M1_def, M2_def, th1d, th2d)
+
+    history_u = [0.0]
+    history_F = [0.0]
+    event_log = []
+    history_snapshots = None
+    if include_snapshots:
+        from .pushover import _snapshot
+        cum_forces_display = {}
+        for mid in frame.members:
+            cum_forces_display[mid] = _member_end_forces_local(
+                frame, mid, u_full, hinge_states, member_ref, member_fem_local, use_pdelta)
+        history_snapshots = [_snapshot(cum_forces_display, hinge_states, u_full)]
+
+    remaining = target_total
+    steps = 0
+    while remaining > 1e-9:
+        steps += 1
+        if steps > max_steps:
+            raise RuntimeError(
+                f"側推超過{max_steps}步仍未達到target_total, 可能是d_nominal"
+                "設太小或有其他問題, 已中止(避免無窮迴圈)。")
+        d_step = min(d_nominal, remaining)
+
+        du_accepted, d_amount_accepted, newly_yielded, new_member_ref = _corotational_oneshot_step(
+            frame, hinge_states, u_full, member_ref, member_fem_local,
+            n_dof, free_dofs, prescribed_dofs, direction, d_step, control_mode, use_pdelta)
+
+        u_full = u_full + du_accepted
+        member_ref = new_member_ref
+
+        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
+        F_base = -sum(f_int_final[d] for d in base_reaction_dofs)
+        u_control = u_full[control_dof0]
+        history_u.append(u_control)
+        history_F.append(F_base)
+        remaining -= d_amount_accepted
+
+        for mid, hs in hinge_states.items():
+            th1d, th2d = _member_theta_def(frame, mid, u_full)
+            for end_idx, th_def in [(0, th1d), (1, th2d)]:
+                if hs.yielded[end_idx] and theta_def_at_yield[mid][end_idx] is None:
+                    theta_def_at_yield[mid][end_idx] = th_def
+                if hs.yielded[end_idx] and theta_def_at_yield[mid][end_idx] is not None:
+                    hs.theta_p[end_idx] = max(
+                        0.0, abs(th_def) - abs(theta_def_at_yield[mid][end_idx]))
+
+        if include_snapshots:
+            from .pushover import _snapshot
+            cum_forces_display = {}
+            for mid in frame.members:
+                cum_forces_display[mid] = _member_end_forces_local(
+                    frame, mid, u_full, hinge_states, member_ref, member_fem_local, use_pdelta)
+            history_snapshots.append(_snapshot(cum_forces_display, hinge_states, u_full))
+
+        if newly_yielded:
+            event_log.append({'u': u_control, 'F': F_base, 'yielded': newly_yielded})
+
+    result = [np.array(history_u), np.array(history_F), event_log, hinge_states, True]
+    if include_final_displacement:
+        result.append(u_full)
+    if include_snapshots:
+        result.append(history_snapshots)
+    return tuple(result)

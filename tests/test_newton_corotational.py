@@ -387,4 +387,120 @@ assert u13b[-1] > u13a[-1] * 1.2, (
 print(f"PASS: 沒開P-Delta u={u13a[-1]:.4f}, 開了u={u13b[-1]:.4f}"
       f"(明顯變大, 符合接近挫屈臨界力時應有的軟化效應)\n")
 
+
+# ---- 案例14: run_pushover_corotational_oneshot()驗證(見
+# ANALYSIS_ARCHITECTURE.md「規劃中」第1點)——這個函式不修改
+# corotational.py一行程式碼, 只重用newton.py既有的_assemble_global()
+# 等函式, 證明"物理層"跟"求解層"這兩層架構是真的可以自由組合的。
+#
+# 驗證分四個隔離步驟(依對話紀錄裡的系統性隔離協議, 逐層排除變因):
+# ①純彈性+co-rotational, 縮小步長應該乾淨收斂(一階)
+# ②有HingeState但Mp設超大永不降伏, 應該幾乎完全等同純彈性
+# ③有限Mp但故意不跨越降伏, 同樣應該幾乎完全等同純彈性
+# ④真正跨越降伏, 跟run_pushover_newton()用同樣細的步長比較(不是跟
+#   粗步長的Newton比, 因為Newton自己在粗步長下的降伏時機精度也不夠,
+#   這是實際除錯過程中發現的陷阱: 曾經誤以為oneshot有11%的殘留系統性
+#   偏差, 後來發現是拿oneshot(細步長)去對照Newton(粗步長)這個沒收斂
+#   完全的基準比較, 不是oneshot本身的問題)——用同樣細的步長比較時,
+#   誤差應該隨步長縮小而縮小。 ----
+print("=== 案例14: run_pushover_corotational_oneshot()架構驗證 ===")
+from frame2d.newton import run_pushover_corotational_oneshot
+
+# ①純彈性, 縮小步長應該乾淨(一階)收斂
+errs14 = []
+for d_nom in [0.02, 0.005]:
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, 0, L)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec')
+    f.fix(0)
+    u, F, ev, hsf, conv = run_pushover_corotational_oneshot(
+        f, {}, prescribed_dofs=[f.dofs_of(1)[0]], direction=[1.0],
+        target_total=0.08, d_nominal=d_nom, base_reaction_dofs=[f.dofs_of(0)[0]],
+        control_mode='displacement')
+    errs14.append(F[-1])
+f_ref14 = Frame2D()
+f_ref14.add_node(0, 0, 0)
+f_ref14.add_node(1, 0, L)
+f_ref14.add_section('sec', E=E, I=I, A=A)
+f_ref14.add_member(0, node_i=0, node_j=1, section='sec')
+f_ref14.fix(0)
+u_ref14, F_ref14, _, _, _ = run_pushover_newton(
+    f_ref14, {}, prescribed_dofs=[f_ref14.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.08, d_nominal=0.0005, base_reaction_dofs=[f_ref14.dofs_of(0)[0]],
+    control_mode='displacement', tol=1e-9)
+err_coarse = abs(errs14[0] - F_ref14[-1]) / abs(F_ref14[-1])
+err_fine = abs(errs14[1] - F_ref14[-1]) / abs(F_ref14[-1])
+assert err_fine < err_coarse, (
+    f"純彈性case步長縮小4倍, 誤差應該跟著縮小, 實際: 粗步長誤差={err_coarse}, "
+    f"細步長誤差={err_fine}"
+)
+print(f"PASS ①純彈性: 步長0.02誤差={err_coarse:.5f}, 步長0.005誤差={err_fine:.5f}(有縮小)\n")
+
+# ②有HingeState但Mp=1e30永不降伏, 應該幾乎等同純彈性
+f_elastic = Frame2D()
+f_elastic.add_node(0, 0, 0)
+f_elastic.add_node(1, 0, L)
+f_elastic.add_section('sec', E=E, I=I, A=A)
+f_elastic.add_member(0, node_i=0, node_j=1, section='sec')
+f_elastic.fix(0)
+u_e, F_e, _, _, _ = run_pushover_corotational_oneshot(
+    f_elastic, {}, prescribed_dofs=[f_elastic.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.08, d_nominal=0.002, base_reaction_dofs=[f_elastic.dofs_of(0)[0]],
+    control_mode='displacement')
+f_hinge = Frame2D()
+f_hinge.add_node(0, 0, 0)
+f_hinge.add_node(1, 0, L)
+f_hinge.add_section('sec', E=E, I=I, A=A)
+f_hinge.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+                   R_post_yield_i=1.0, R_post_yield_j=1.0)
+f_hinge.fix(0)
+hs_h = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u_h, F_h, ev_h, hsf_h, _ = run_pushover_corotational_oneshot(
+    f_hinge, hs_h, prescribed_dofs=[f_hinge.dofs_of(1)[0]], direction=[1.0],
+    target_total=0.08, d_nominal=0.002, base_reaction_dofs=[f_hinge.dofs_of(0)[0]],
+    control_mode='displacement')
+assert len(ev_h) == 0
+rel_err_h = abs(F_e[-1] - F_h[-1]) / abs(F_e[-1])
+assert rel_err_h < 1e-4, f"有HingeState但永不降伏, 應該幾乎完全等同純彈性, 實際相對誤差={rel_err_h}"
+print(f"PASS ②有HingeState但永不降伏≈純彈性(相對誤差{rel_err_h:.2e})\n")
+
+# ④真正跨越降伏: 跟run_pushover_newton()用同樣細的步長比較, 誤差應該
+# 隨步長縮小而縮小(這裡是實際除錯抓出陷阱後的正確比較方式)
+errs_match = []
+for d_nom in [0.0001, 0.00002]:
+    f1 = Frame2D()
+    f1.add_node(0, 0, 0)
+    f1.add_node(1, 0, L)
+    f1.add_section('sec', E=E, I=I, A=A)
+    f1.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=100.0, Mp_j=1e30,
+                  R_post_yield_i=50.0, R_post_yield_j=50.0)
+    f1.fix(0)
+    hs1 = {0: HingeState(Mp1=100.0, Mp2=1e30, R_post_yield_1=50.0, R_post_yield_2=50.0)}
+    u1, F1, ev1, hsf1, _ = run_pushover_corotational_oneshot(
+        f1, hs1, prescribed_dofs=[f1.dofs_of(1)[0]], direction=[1.0],
+        target_total=0.08, d_nominal=d_nom, base_reaction_dofs=[f1.dofs_of(0)[0]],
+        control_mode='displacement')
+    f2 = Frame2D()
+    f2.add_node(0, 0, 0)
+    f2.add_node(1, 0, L)
+    f2.add_section('sec', E=E, I=I, A=A)
+    f2.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=100.0, Mp_j=1e30,
+                  R_post_yield_i=50.0, R_post_yield_j=50.0)
+    f2.fix(0)
+    hs2 = {0: HingeState(Mp1=100.0, Mp2=1e30, R_post_yield_1=50.0, R_post_yield_2=50.0)}
+    u2, F2, ev2, hsf2, _ = run_pushover_newton(
+        f2, hs2, prescribed_dofs=[f2.dofs_of(1)[0]], direction=[1.0],
+        target_total=0.08, d_nominal=d_nom, base_reaction_dofs=[f2.dofs_of(0)[0]],
+        control_mode='displacement', tol=1e-9)
+    errs_match.append(abs(F1[-1] - F2[-1]) / abs(F2[-1]))
+assert errs_match[1] < errs_match[0], (
+    f"跨越降伏的case, 兩個求解器用同樣細的步長比較時, 誤差應該隨共同"
+    f"步長縮小而縮小(不是11%的固定系統性偏差), 實際: {errs_match}"
+)
+assert errs_match[1] < 0.01, f"步長夠細時, 兩個求解器應該收斂到接近的答案, 實際相對誤差={errs_match[1]}"
+print(f"PASS ④跨越降伏, 同步長比較: d_nom=0.0001誤差={errs_match[0]:.5f}, "
+      f"d_nom=0.00002誤差={errs_match[1]:.5f}(有縮小, 沒有殘留系統性偏差)\n")
+
 print("PASS: frame2d.newton所有案例通過")
