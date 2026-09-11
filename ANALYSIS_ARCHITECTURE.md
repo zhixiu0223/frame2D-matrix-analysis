@@ -7,14 +7,15 @@ CI 跑到的測試, 不是憑印象寫的。
 
 ## 一句話總結現況
 
-目前**沒有**一個統一的 `analyze(material=, geometry=, solver=)` 入口。
-有三個平行、各自獨立驗證過的 pushover 求解函式(`run_pushover()`、
-`run_pushover_converged()`、`run_pushover_newton()`),外加一個更早、
-不屬於 pushover 的線性 P-Delta 求解函式(`solve_pdelta()`)。這四個
-函式各自把「物理層要考慮哪些效應」跟「求解層要怎麼疊代」綁在一起,
-不是正交、可以自由組合的兩個維度——**除了一個例外**: `run_pushover()`
-跟 `run_pushover_converged()` 內部的 `use_pdelta`/`geometry_update`
-這兩個物理層開關,已經是彼此獨立、可以自由開關的。
+現在**有**一個統一的 `analyze_pushover(geometry=, solver=)` 入口
+(`frame2d/analyze.py`),但它是**純dispatch層**,底下仍然是四個各自
+獨立驗證過的既有函式(`run_pushover()`、`run_pushover_converged()`、
+`run_pushover_newton()`、`run_pushover_corotational_oneshot()`)——
+`analyze_pushover()`本身沒有新的物理或求解邏輯,只是把「選幾何處理
+方式」跟「選求解策略」這兩個維度,從原本「綁死在挑三個求解器名稱
+之一」,變成可以獨立組合的兩個參數。另外還有一個更早、不屬於
+pushover 的線性 P-Delta 求解函式(`solve_pdelta()`),目前**還沒**
+被納入這個 dispatch 層。
 
 ## 四層模型(用來分類現有程式碼,不是新設計)
 
@@ -134,12 +135,17 @@ with_hinges()`直接被pushover.py的主迴圈呼叫, 不是一個可以被其�
    求解器的精確度時, 要用同樣細的步長, 不能把粗步長的某一方當成
    "已知正確"的基準**。
 
-2. **`analyze_pushover()`統一入口**——純粹的dispatch層, 不重新實作
-   任何物理或求解邏輯, 依`material=`/`geometry=`/`solver=`三個參數
-   呼叫上面表格裡對應的既有函式。**新增這一層不會修改、也不會取代**
-   任何一個現有函式——這是刻意的安全網設計(對話紀錄裡達成的共識):
-   如果新的dispatch層本身有bug, 舊函式直接呼叫依然完全不受影響,
-   可以拿新舊兩條路徑的結果互相對照。**還沒開始做。**
+2. **`analyze_pushover()`統一入口**——**已完成, 已驗證**(2025-09-11):
+   `frame2d/analyze.py`, 純粹的dispatch層, **沒有任何新的物理或求解
+   邏輯**, 依`geometry=`(`'linear'`/`'updated'`/`'corotational'`)、
+   `solver=`(`'direct'`/`'picard'`/`'newton'`)兩個獨立參數, 呼叫
+   `frame2d.pushover`/`frame2d.newton`裡對應的既有函式。**沒有修改、
+   也沒有取代**任何一個現有函式——這是刻意的安全網設計: `tests/
+   test_analyze_pushover.py`驗證過, 上面表格裡9種組合當中7種可以
+   直接對照(組合6意義有限, 沒有寫對應測試; 組合7/8/9額外測過), 每
+   一種都跟直接呼叫底層函式的結果逐位元/浮點數誤差為0一致, 加上
+   kwargs正確轉傳、不支援的組合(例如`geometry='corotational'`配
+   `solver='picard'`)正確拒絕、不是靜默退化。
 3. **完全獨立於pushover之外的統一入口**——`solve()`/`solve_pdelta()`
    目前也還沒被納入這個dispatch層, 未來如果要做真正一致的
    `analyze()`, 這兩個也要一起考慮進去。
