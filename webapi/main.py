@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from frame2d import Frame2D, solve
 from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
-from frame2d.newton import run_pushover_newton
+from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
@@ -226,6 +226,23 @@ def _run_selected_pushover_solver(payload: FrameIn, run_kwargs: dict, **extra_fl
         # raw[4]是converged(True=成功), 這裡轉成mechanism_reached語意
         # (True=失敗提前停止), 跟run_pushover()/run_pushover_converged()
         # 一致, 其餘欄位原封不動照順序傳回去。
+        return raw[:4] + (not raw[4],) + raw[5:]
+    if payload.pushover_solver == 'corotational_oneshot':
+        # 跟newton共用同一套co-rotational元素公式, 只是求解策略換成
+        # 不疊代到殘餘力收斂(event-to-event式)——參數轉傳邏輯完全比照
+        # newton那個分支(newton_kwargs的挑選欄位一模一樣, 沒有tol/
+        # max_iter這兩個newton專屬參數, 因為這個函式不疊代, 這兩個
+        # 參數對它沒有意義)。
+        oneshot_kwargs = {
+            k: run_kwargs[k] for k in
+            ('frame', 'hinge_states', 'prescribed_dofs', 'direction', 'target_total',
+             'd_nominal', 'base_reaction_dofs', 'control_mode', 'use_pdelta')
+        }
+        raw = run_pushover_corotational_oneshot(**oneshot_kwargs, **extra_flags)
+        # 跟newton分支同樣的converged->mechanism_reached語意轉換
+        # (這個函式的converged永遠是True, 除非重力預載階段raise
+        # RuntimeError, 所以這裡轉出來的mechanism_reached永遠是False,
+        # 是正確的行為, 不是漏掉檢查)。
         return raw[:4] + (not raw[4],) + raw[5:]
     return run_pushover(**run_kwargs, **extra_flags)
 
@@ -489,14 +506,14 @@ def _export_pushover_pdf(payload: FrameIn) -> bytes:
     include_final_reactions/include_max_rotation三個旗標拿到)。跟
     _solve_pushover()共用_prepare_pushover_run()這段前置邏輯, 不用
     兩邊分別維護。"""
-    if payload.pushover_solver == 'newton':
+    if payload.pushover_solver in ('newton', 'corotational_oneshot'):
         raise HTTPException(
             status_code=400,
-            detail="PDF匯出目前還不支援newton求解器(它還沒有實作"
-                   "include_final_reactions/include_max_rotation這兩個"
-                   "PDF報告需要的欄位)——這是已知限制, 不是bug, 請改用"
-                   "event_to_event或converged求解器匯出PDF, 或直接用"
-                   "/solve查看newton求解器的結果。",
+            detail=f"PDF匯出目前還不支援{payload.pushover_solver}求解器"
+                   "(它還沒有實作include_final_reactions/include_max_"
+                   "rotation這兩個PDF報告需要的欄位)——這是已知限制, "
+                   "不是bug, 請改用event_to_event或converged求解器匯出"
+                   "PDF, 或直接用/solve查看結果。",
         )
     f, run_kwargs = _prepare_pushover_run(payload)
     try:

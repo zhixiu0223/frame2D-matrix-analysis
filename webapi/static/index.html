@@ -189,6 +189,7 @@
         <option value="event_to_event" selected>Event-to-event(單次線性解, 較快)</option>
         <option value="converged">幾何平衡疊代(較慢, 會誠實回報不收斂)</option>
         <option value="newton">Newton-Raphson(大轉角co-rotational, 最嚴謹也最慢, 不支援release端)</option>
+        <option value="corotational_oneshot">co-rotational單步(大轉角但不疊代到收斂, 較快, 精確度介於幾何平衡疊代跟Newton之間, 不支援release端)</option>
       </select></label>
       <p class="hint" id="pv_mode_hint" style="margin:0.3rem 0 0;">位移/步長單位跟上面「顯示設定」選的位移單位一致。多個控制節點時, 第一個節點是「參考點」——容量曲線的位移軸永遠回報這一點的位移(業界慣例: 不管用哪種側推型態, 都看屋頂/最高樓層位移, 所以第一個通常填屋頂節點)。權重留空=全部1.0(均勻型態); 要做倒三角形型態就照各樓層高度比例填, 例如三層樓填「0.33,0.67,1.0」。</p>
     </div>
@@ -3806,17 +3807,22 @@ document.getElementById('pv_mode').addEventListener('change', updatePushoverUnit
 // 修正, 疊加在已經精確處理過大轉角的關係上), 不是線性化近似——這裡
 // 動態換一下文字說明, 不擋用。
 function updatePushoverSolverUI() {
-  const isNewton = document.getElementById('pv_solver').value === 'newton';
+  // newton跟corotational_oneshot共用同一套co-rotational幾何(見
+  // ANALYSIS_ARCHITECTURE.md), 差別只在要不要疊代到殘餘力收斂——對
+  // "幾何更新"這個勾選框來說, 兩者的處境完全一樣(都沒有這個選項,
+  // 幾何處理方式是內建、不能關的), 所以這裡一起判斷。
+  const isCorotational = ['newton', 'corotational_oneshot'].includes(
+    document.getElementById('pv_solver').value);
   const geomWrap = document.getElementById('pv_geomupdate_wrap');
   const geomCheckbox = document.getElementById('pv_geomupdate');
   const geomLabel = document.getElementById('pv_geomupdate_label');
   const pdeltaLabel = document.getElementById('pv_pdelta_label');
-  geomCheckbox.disabled = isNewton;
-  geomWrap.style.opacity = isNewton ? '0.5' : '1';
-  geomLabel.textContent = isNewton
-    ? '幾何更新(Newton-Raphson全程都是完整疊代到平衡的大轉角co-rotational幾何, 沒有這個選項, 勾了也不會有效果)'
+  geomCheckbox.disabled = isCorotational;
+  geomWrap.style.opacity = isCorotational ? '0.5' : '1';
+  geomLabel.textContent = isCorotational
+    ? '幾何更新(這個求解器全程都是co-rotational幾何, 沒有這個選項, 勾了也不會有效果)'
     : '幾何更新(每步用當下變形後幾何, 較接近大變形真實行為)';
-  pdeltaLabel.textContent = isNewton
+  pdeltaLabel.textContent = isCorotational
     ? '同時考慮P-Delta(這裡是精確疊加在co-rotational上的局部軸力-彎曲勁度修正, 不是線性化近似)'
     : '同時考慮P-Delta';
 }
@@ -4067,13 +4073,21 @@ function pushoverStatusSuffix(base) {
   const du = unitOf('disp'), fu = unitOf('force');
   const lastU = fromSI('disp', r.history_u[r.history_u.length - 1]);
   const lastF = fromSI('force', r.history_F[r.history_F.length - 1]);
-  const geomTag = document.getElementById('pv_geomupdate').checked ? '幾何更新' : '線性化P-Delta幾何';
-  const solverLabels = {converged: '幾何平衡疊代', newton: 'Newton-Raphson'};
+  const isCorotationalSolver = ['newton', 'corotational_oneshot'].includes(r.solver);
+  const geomTag = isCorotationalSolver
+    ? 'co-rotational幾何'
+    : (document.getElementById('pv_geomupdate').checked ? '幾何更新' : '線性化P-Delta幾何');
+  const solverLabels = {
+    converged: '幾何平衡疊代', newton: 'Newton-Raphson',
+    corotational_oneshot: 'co-rotational單步',
+  };
   const solverTag = solverLabels[r.solver] || 'event-to-event';
-  // 三種求解器的mechanism_reached意義不一樣: event-to-event是縮聚
+  // 四種求解器的mechanism_reached意義不一樣: event-to-event是縮聚
   // 剛度接近奇異的判斷; converged是"幾何/軸力疊代沒有在容忍度內收斂";
-  // newton是"殘餘力疊代沒有在容忍度內收斂"——用同一句話會讓人誤解成
-  // 同一種東西, 這裡分開講。
+  // newton是"殘餘力疊代沒有在容忍度內收斂"; corotational_oneshot永遠
+  // 不會顯示這個訊息(它不疊代, 不會有"未收斂"這種狀態, 除非重力
+  // 預載階段失敗但那是拋錯誤, 不會走到這裡)——用同一句話會讓人誤解
+  // 成同一種東西, 這裡分開講。
   const stopMsgs = {
     converged: '(⚠幾何疊代未收斂, 側推提前中止)',
     newton: '(⚠Newton疊代未收斂, 側推提前中止)',

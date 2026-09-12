@@ -156,7 +156,7 @@ class FrameIn(BaseModel):
     基本精神, 比線性化P-Delta更接近大變形時的真實行為, 但不是完整的
     co-rotational大轉角分析)。見frame2d.pushover.run_pushover()的
     geometry_update參數說明。"""
-    pushover_solver: Literal['event_to_event', 'converged', 'newton'] = 'event_to_event'
+    pushover_solver: Literal['event_to_event', 'converged', 'newton', 'corotational_oneshot'] = 'event_to_event'
     """'event_to_event'(預設, 對應frame2d.pushover.run_pushover(): 塑鉸
     狀態凍結的每一段區間內, 只用該段開始時的幾何/軸力組一次勁度矩陣
     解一次, 不會檢查這個答案在真正的變形終點上是否還跟一開始用的幾何/
@@ -164,16 +164,33 @@ class FrameIn(BaseModel):
     同一段區間內反覆疊代到幾何/軸力自洽為止, 疊代不收斂時會誠實回報
     mechanism_reached=True提前停止, 不會給不可信的答案——但收斂只保證
     數值上自洽, 不保證轉角還在小角度假設的有效範圍內, 這是兩個獨立的
-    問題, 見run_pushover_converged()的說明)、或'newton'(對應
+    問題, 見run_pushover_converged()的說明)、'newton'(對應
     frame2d.newton.run_pushover_newton(): 真正的大轉角co-rotational
     幾何+Newton-Raphson平衡疊代, 材料非線性跟幾何非線性都用嚴謹疊代
-    解, 轉角再大也不會像前兩者那樣失真, 是三者裡最嚴謹也最慢的——
+    解, 轉角再大也不會像前兩者那樣失真, 是四者裡最嚴謹也最慢的——
     目前不支援release端(有的話直接回400錯誤); 重力/桿件內部載重
     (均佈載重、桿件內部集中力)有支援, 用固定端反力公式轉成等效節點力
     (跟其餘求解器的apply_gravity()同一種"算一次、全程凍結"簡化), 已
     驗證跟apply_gravity()精確一致, 見run_pushover_newton()
-    docstring的已知限制)。前兩者材料非線性(塑鉸降伏)邏輯完全相同,
-    差異只在幾何/軸力這一塊怎麼解;newton是完全獨立的第三套實作。"""
+    docstring的已知限制)、或'corotational_oneshot'(對應
+    frame2d.newton.run_pushover_corotational_oneshot(): 用跟'newton'
+    完全同一套co-rotational元素公式(精確大轉角), 但求解策略換成跟
+    event_to_event同等級的"每一步只解一次, 不疊代到殘餘力收斂"——
+    速度比'newton'快, 精確度介於'converged'(仍是小角度近似)跟
+    'newton'(疊代到收斂)之間; 限制跟'newton'相同(不支援release端);
+    這是驗證性質較重的選項, 見ANALYSIS_ARCHITECTURE.md的完整說明)。
+    前兩者材料非線性(塑鉸降伏)邏輯完全相同, 差異只在幾何/軸力這一塊
+    怎麼解;'newton'跟'corotational_oneshot'共用同一套co-rotational
+    元素公式, 差異只在要不要疊代到殘餘力收斂——**重要**: 只有同一個
+    幾何模型內部的比較(event_to_event↔converged, 或newton↔
+    corotational_oneshot)才是「同一組方程式、只是解法嚴謹度不同」,
+    理論上步長夠細時誤差會趨近於0;跨越'event_to_event'/'converged'
+    (線性化幾何)跟'newton'/'corotational_oneshot'(精確大轉角)這兩組
+    之間的比較, 是兩個不同的幾何非線性模型, 差距不會隨步長縮小而
+    消失, 那個差距本身就是「小角度近似在這個變形量下還可不可信」的
+    有意義資訊, 不是求解精確度的問題(2025-09對話裡驗證過: 線性化
+    幾何跟co-rotational在中等位移下的差距穩定在0.07%附近, 步長切10倍
+    幾乎沒有變化)。"""
     pushover_geom_tol: float = 1e-6
     """只有pushover_solver='converged'時有意義: 幾何/軸力疊代的相對
     收斂容忍度(無因次)。"""
