@@ -2393,6 +2393,7 @@ function renderSectionManager() {
             <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
             <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
           </div>
+          <button data-idx="${i}" class="sm_assign_open" style="width:100%;margin-top:0.4rem;background:#0891b2;color:white;">📌 批次指定給桿件</button>
           <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
         </div>
       </details>`;
@@ -2449,6 +2450,12 @@ function renderSectionManager() {
       renderSectionManager();
     };
   });
+  panel.querySelectorAll('.sm_assign_open').forEach(btn => {
+    btn.onclick = () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      renderSectionAssignMembers(model.sections[i].name);
+    };
+  });
   document.getElementById('sm_new_add').onclick = () => {
     const name = document.getElementById('sm_new_name').value.trim();
     if (!name) { setStatus('請輸入新斷面名稱'); return; }
@@ -2467,6 +2474,61 @@ function renderSectionManager() {
   document.getElementById('propModal').classList.add('open');
   document.getElementById('propModalBackdrop').classList.add('open');
   modalOpenedAt = Date.now();
+}
+
+// 從斷面管理直接「批次指定給桿件」: 跟原本「先選一批桿件、再挑斷面」
+// 的批次編輯桿件(renderBatchMemberEditForm)方向相反——這裡是斷面
+// 已經事先做好了, 想從斷面這一端出發, 直接勾選哪些桿件要用它, 不用
+// 先回去畫布上多選桿件。勾選清單預設勾好目前已經在用這個斷面的桿件
+// (方便看目前套用範圍/取消勾選來移除), 用桿件的起訖節點座標當識別
+// (id單獨看不出是哪一根, 節點座標比較看得出實際位置)。
+function renderSectionAssignMembers(sectionName) {
+  const panel = document.getElementById('propPanel');
+  const nodeLabel = (nid) => {
+    const n = model.nodes.find(x => x.id === nid);
+    return n ? `(${n.x},${n.y})` : `#${nid}`;
+  };
+  const rows = model.members.map(m => {
+    const checked = m.section === sectionName ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;gap:0.4rem;padding:0.3rem 0;border-bottom:1px solid #f1f5f9;">
+      <input type="checkbox" class="sam_chk" data-mid="${m.id}" ${checked} style="width:auto;">
+      <span>M${m.id}: N${m.node_i}${nodeLabel(m.node_i)} → N${m.node_j}${nodeLabel(m.node_j)}
+        <span class="hint" style="margin:0;">(目前: ${m.section})</span></span>
+    </label>`;
+  }).join('');
+  panel.innerHTML = `<fieldset><legend>批次指定斷面「${sectionName}」給桿件</legend>
+    <p class="hint">勾選要套用這個斷面的桿件(預設勾好目前已經在用的, 取消勾選=改用其他斷面時要另外指定, 不會自動變成別的斷面)。</p>
+    <div class="row2" style="margin-bottom:0.4rem;">
+      <button id="sam_all">全選</button>
+      <button id="sam_none">全不選</button>
+    </div>
+    <div style="max-height:50vh;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;padding:0.4rem 0.6rem;">
+      ${rows || '<p class="hint">目前模型沒有任何桿件。</p>'}
+    </div>
+    <div class="row2" style="margin-top:0.6rem;">
+      <button id="sam_apply" style="background:#16a34a;color:white;">套用</button>
+      <button id="sam_back">返回</button>
+    </div>
+  </fieldset>`;
+  document.getElementById('sam_all').onclick = () => {
+    panel.querySelectorAll('.sam_chk').forEach(c => c.checked = true);
+  };
+  document.getElementById('sam_none').onclick = () => {
+    panel.querySelectorAll('.sam_chk').forEach(c => c.checked = false);
+  };
+  document.getElementById('sam_apply').onclick = () => {
+    let count = 0;
+    panel.querySelectorAll('.sam_chk').forEach(c => {
+      const mid = parseInt(c.dataset.mid, 10);
+      const m = model.members.find(x => x.id === mid);
+      if (!m) return;
+      if (c.checked && m.section !== sectionName) { m.section = sectionName; count++; }
+    });
+    setStatus(`已把 ${count} 根桿件的斷面改成「${sectionName}」`);
+    render();
+    renderSectionManager();
+  };
+  document.getElementById('sam_back').onclick = renderSectionManager;
 }
 document.getElementById('btnSectionManager').addEventListener('click', () => {
   selected = null;
