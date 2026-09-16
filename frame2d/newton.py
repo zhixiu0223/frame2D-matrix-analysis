@@ -282,7 +282,70 @@ def _member_moments(frame, mid, u_full, hinge_states, member_ref, member_fem_loc
     return M1, M2
 
 
-def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta=False):
+def _apply_equal_dof_newton(frame, K, f_int, u_full, k_pen):
+    """跟dofmanager.py的_apply_equal_dof()同一個懲罰法概念(高勁度虛擬
+    彈簧, 見那邊的說明), 但這裡是Newton-Raphson疊代用的版本, 多做一件
+    事: 不只修正切線剛度矩陣K, 還要把懲罰彈簧本身的"內力"疊加進
+    f_int。這是跟dofmanager.py那個純線性(K@u=F一次到位, 不检查殘餘力)
+    版本本質上不同的地方——Newton疊代檢查的是殘餘力f_ext-f_int是否
+    收斂到0, 如果只改K不改f_int, 殘餘力就不會正確反映懲罰彈簧的力,
+    疊代收斂到的狀態會等同完全沒有這個約束(K雖然變了, 但疊代會一路
+    修正u直到f_int"看起來"還是跟沒加彈簧一樣, 因為f_int根本沒有反映
+    這個彈簧的存在)。彈簧本身是線性的, 所以切線(對K的貢獻)跟力
+    (對f_int的貢獻)用同一個k_pen是完全一致的, 不會有近似誤差。
+
+    k_pen: 由呼叫端傳入、只在整個側推過程開始前算一次、全程固定不變
+    (不是每次疊代都用"目前K的最大對角項"重新估計)——理由: Newton
+    每次疊代K_t都會因為co-rotational幾何非線性/塑鉸降伏而改變量級,
+    如果k_pen也跟著每次疊代浮動, 會讓"這一次疊代算出的殘餘力"跟
+    "這一次疊代用的切線"彼此用不同的k_pen, 兩者不一致, 可能讓收斂
+    變得不穩定, 這是刻意要避免的。
+    """
+    if not frame.equal_dofs:
+        return
+    for ed in frame.equal_dofs:
+        master_dofs = frame.dofs_of(ed.master_node)
+        slave_dofs = frame.dofs_of(ed.slave_node)
+        for on, m_dof, s_dof in zip((ed.ux, ed.uy, ed.rot), master_dofs, slave_dofs):
+            if not on:
+                continue
+            K[m_dof, m_dof] += k_pen
+            K[s_dof, s_dof] += k_pen
+            K[m_dof, s_dof] -= k_pen
+            K[s_dof, m_dof] -= k_pen
+            du = u_full[s_dof] - u_full[m_dof]
+            f_int[s_dof] += k_pen * du
+            f_int[m_dof] -= k_pen * du
+
+
+def _initial_equal_dof_penalty(frame, hinge_states, n_dof, use_pdelta):
+    """算equalDOF懲罰彈簧要用的k_pen, 只在frame.equal_dofs非空時才
+    真的做這個額外的組裝(空的話直接回傳None, 呼叫端看到None就不會
+    再呼叫_apply_equal_dof_newton(), 對沒有用equalDOF的既有呼叫端
+    完全沒有任何額外開銷或影響)。用u=0(無變形)狀態組一次結構本身的
+    K, 取最大對角項的1e5倍。
+
+    這裡刻意用1e5, 不是dofmanager.py._apply_equal_dof()(一次性線性
+    解)用的1e6——兩者的k_pen倍率不能照抄同一個數字, 原因是兩種求解
+    策略對"病態"的容忍度不一樣: 線性求解只解一次方程式, K的條件數
+    差一點也沒關係, 直接得到答案; Newton-Raphson要疊代很多次, 每次
+    都要重新解一次線性系統求du, 如果K的條件數因為懲罰彈簧太硬而
+    惡化, 疊代之間會累積數值誤差, 導致疊代根本無法收斂(不是變慢,
+    是完全卡住, 不管給多少次疊代次數都一樣)——這是實際測試發現的
+    問題: 用1e6時Newton在這個測試模型上完全無法收斂(即使max_iter
+    開到100次), 換成1e5之後才能穩定收斂到殘餘力容忍度以內, 而且
+    約束的精確度(兩個被綁定自由度的差距)還是有1.5e-8的相對誤差,
+    足夠工程使用。"""
+    if not frame.equal_dofs:
+        return None
+    u0 = np.zeros(n_dof)
+    member_ref0 = {mid: (0.0, 0.0, 0.0, 0.0) for mid in frame.members}
+    _, K0 = _assemble_global(frame, hinge_states, u0, n_dof, member_ref0, use_pdelta)
+    diag = np.abs(np.diag(K0))
+    return 1e5 * max(np.max(diag) if diag.size else 0.0, 1.0)
+
+
+def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta=False, k_pen=None):
     """組出目前u_full狀態下, 全結構的內力向量(n_dof長)跟切線剛度矩陣
     (n_dof x n_dof), 疊加所有桿件(frame跟truss都用co-rotational公式,
     truss桿件沒有塑鉸/彎矩, 直接傳hinge_state=None且I用0讓彎矩項自然
@@ -297,6 +360,11 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta=
     use_pdelta: 見corotational_local_forces()說明——局部P-Delta(軸力
     對桿件自身彎曲勁度的修正), 跟大轉角co-rotational幾何是完全獨立
     的兩件事, 這裡只是原封不動往下傳給每根桿件的局部力/切線計算。
+
+    k_pen: 有equalDOF約束時, 呼叫端傳入固定的懲罰彈簧勁度(見
+    _initial_equal_dof_penalty()), 這裡在桿件組裝完之後疊加進去
+    (見_apply_equal_dof_newton())。None時(預設, 沒有equalDOF約束)
+    完全跳過這一步, 對既有呼叫端沒有任何影響。
     """
     f_int = np.zeros(n_dof)
     K_t = np.zeros((n_dof, n_dof))
@@ -326,12 +394,14 @@ def _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta=
             f_int[dofs[a]] += f_elem[a]
             for b in range(6):
                 K_t[dofs[a], dofs[b]] += K_elem[a, b]
+    if k_pen is not None:
+        _apply_equal_dof_newton(frame, K_t, f_int, u_full, k_pen)
     return f_int, K_t
 
 
 def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
                      theta_def_at_yield, n_dof, resid_dofs, f_ext, tol, max_iter,
-                     use_pdelta=False):
+                     use_pdelta=False, k_pen=None):
     """單一次Newton平衡疊代(從u_start這個起點開始, 疊代到resid_dofs
     上的殘餘力f_ext-f_int收斂, 或max_iter次都沒收斂)——這是
     run_pushover_newton()每一步(不管是重力預載那一步, 還是側推的每
@@ -348,11 +418,14 @@ def _newton_iterate(frame, hinge_states, u_start, member_ref, member_fem_local,
 
     use_pdelta: 見corotational_local_forces()說明——局部P-Delta,
     原封不動往下傳給_assemble_global()/_member_moments()。
+    k_pen: 有equalDOF約束時的固定懲罰彈簧勁度(見
+    _initial_equal_dof_penalty()), 原封不動往下傳給
+    _assemble_global()。None時(預設)完全不受影響。
     """
     u_trial = u_start.copy()
     step_newly_yielded = []
     for it in range(max_iter):
-        f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref, use_pdelta)
+        f_int, K_t = _assemble_global(frame, hinge_states, u_trial, n_dof, member_ref, use_pdelta, k_pen)
 
         newly_yielded_this_iter = []
         for mid, hs in hinge_states.items():
@@ -464,6 +537,13 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     # 混用。
     theta_def_at_yield = {mid: [None, None] for mid in hinge_states}
 
+    # equalDOF約束(如果有的話)用的固定懲罰彈簧勁度, 整個側推過程只
+    # 算一次、全程固定不變, 見_apply_equal_dof_newton()的說明——沒有
+    # equalDOF約束時這裡直接是None, 後面所有_assemble_global()/
+    # _newton_iterate()呼叫都會原封不動跳過這一步, 沒有任何額外開銷
+    # 或影響。
+    k_pen = _initial_equal_dof_penalty(frame, hinge_states, n_dof, use_pdelta)
+
     # 重力預載階段: 如果模型真的有重力/桿件內部載重, 不能天真地假設
     # u=0就是"重力施加前"的狀態——重力本身就會讓結構真的變形, 必須先
     # 疊代解出這個真正的平衡點(用跟主迴圈完全同一套Newton機制), 塑鉸
@@ -477,7 +557,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     if np.any(f_ext_gravity != 0.0):
         conv_gravity, _, u_full = _newton_iterate(
             frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
-            n_dof, free_dofs, f_ext_gravity, tol, max_iter, use_pdelta)
+            n_dof, free_dofs, f_ext_gravity, tol, max_iter, use_pdelta, k_pen)
         if not conv_gravity:
             raise RuntimeError(
                 "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
@@ -527,7 +607,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
 
         step_converged, step_newly_yielded, u_trial = _newton_iterate(
             frame, hinge_states, u_trial, member_ref, member_fem_local, theta_def_at_yield,
-            n_dof, resid_dofs, f_ext, tol, max_iter, use_pdelta)
+            n_dof, resid_dofs, f_ext, tol, max_iter, use_pdelta, k_pen)
 
         if not step_converged:
             converged_all = False
@@ -541,7 +621,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
         # 這裡刻意不傳member_fem_local(要存"變形部分"本身, 不是真正
         # 物理彎矩, 否則下一步corotational_local_forces()的增量公式
         # 會把重力貢獻重複計算進去)。
-        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
+        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta, k_pen)
         for mid in frame.members:
             th1d, th2d = _member_theta_def(frame, mid, u_full)
             M1_def, M2_def = _member_moments(frame, mid, u_full, hinge_states, member_ref,
@@ -603,7 +683,7 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
 
 def _corotational_oneshot_step(frame, hinge_states, u_full, member_ref, member_fem_local,
                                 n_dof, free_dofs, prescribed_dofs, direction, d_amount,
-                                control_mode, use_pdelta):
+                                control_mode, use_pdelta, k_pen=None):
     """用u_full目前狀態的切線K_t解一次線性方程式(不疊代), 回傳
     (du_full, ratio_accepted, newly_yielded_this_step, new_member_ref)。
 
@@ -620,8 +700,12 @@ def _corotational_oneshot_step(frame, hinge_states, u_full, member_ref, member_f
     去估計跨越Mp的比例點, 是近似, 不是精確定位(誤差量級隨d_amount
     步長縮小)——這一點跟run_pushover()的event-to-event精確定位不同,
     是刻意接受的近似, 見本檔案這一段開頭的說明。
+
+    k_pen: equalDOF約束用的固定懲罰彈簧勁度(見
+    _initial_equal_dof_penalty()), 原封不動往下傳給_assemble_global()。
+    None時(預設)完全不受影響。
     """
-    f_int, K_t = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
+    f_int, K_t = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta, k_pen)
 
     du_full = np.zeros(n_dof)
     if control_mode == 'force':
@@ -731,10 +815,12 @@ def run_pushover_corotational_oneshot(frame, hinge_states, prescribed_dofs, dire
     member_ref = {mid: (0.0, 0.0, 0.0, 0.0) for mid in frame.members}
     theta_def_at_yield = {mid: [None, None] for mid in hinge_states}
 
+    k_pen = _initial_equal_dof_penalty(frame, hinge_states, n_dof, use_pdelta)
+
     if np.any(f_ext_gravity != 0.0):
         conv_gravity, _, u_full = _newton_iterate(
             frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
-            n_dof, free_dofs, f_ext_gravity, 1e-6, 30, use_pdelta)
+            n_dof, free_dofs, f_ext_gravity, 1e-6, 30, use_pdelta, k_pen)
         if not conv_gravity:
             raise RuntimeError(
                 "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
@@ -771,12 +857,12 @@ def run_pushover_corotational_oneshot(frame, hinge_states, prescribed_dofs, dire
 
         du_accepted, d_amount_accepted, newly_yielded, new_member_ref = _corotational_oneshot_step(
             frame, hinge_states, u_full, member_ref, member_fem_local,
-            n_dof, free_dofs, prescribed_dofs, direction, d_step, control_mode, use_pdelta)
+            n_dof, free_dofs, prescribed_dofs, direction, d_step, control_mode, use_pdelta, k_pen)
 
         u_full = u_full + du_accepted
         member_ref = new_member_ref
 
-        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta)
+        f_int_final, _ = _assemble_global(frame, hinge_states, u_full, n_dof, member_ref, use_pdelta, k_pen)
         F_base = -sum(f_int_final[d] for d in base_reaction_dofs)
         u_control = u_full[control_dof0]
         history_u.append(u_control)

@@ -141,16 +141,6 @@ def _prepare_pushover_run(payload: FrameIn):
         )
 
     f = _build_frame(payload)
-    if f.equal_dofs and payload.pushover_solver in ('newton', 'corotational_oneshot'):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{payload.pushover_solver}求解器目前還不支援equal_dofs"
-                   "(這個模型有設定equalDOF約束)——這是已知限制, 不是"
-                   "bug(它們走的是newton.py完全獨立的co-rotational組裝"
-                   "邏輯, 還沒接上equalDOF)。event_to_event跟converged"
-                   "這兩個求解器已經支援equalDOF, 請改用其中一個, 或"
-                   "先移除equalDOF約束。",
-        )
     hinge_states = initial_hinge_states(f)
     if not hinge_states:
         raise HTTPException(

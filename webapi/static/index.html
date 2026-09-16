@@ -2549,7 +2549,7 @@ function renderEqualDofManager() {
       <button data-idx="${i}" class="eqd_delete" style="width:auto;background:#dc2626;color:white;">刪除</button>
     </div>`).join('');
   panel.innerHTML = `<fieldset><legend>EqualDOF管理(${model.equal_dofs.length} 條約束)</legend>
-    <p class="hint">讓「從節點」指定的自由度強制等於「主節點」的對應自由度(用高勁度彈簧懲罰法實現, 不是完全精確為0的束制, 但精度足夠工程使用)。常見用途: 剛性樓板(多節點水平位移綁在一起)、剛性連桿。「線性」「P-Delta」分析、以及Pushover的「event-to-event」「幾何平衡疊代」這兩個求解器都支援; Pushover的「Newton-Raphson」「co-rotational單步」這兩個求解器還不支援, 選了會被API拒絕(不是靜默忽略)。</p>
+    <p class="hint">讓「從節點」指定的自由度強制等於「主節點」的對應自由度(用高勁度彈簧懲罰法實現, 不是完全精確為0的束制, 但精度足夠工程使用)。常見用途: 剛性樓板(多節點水平位移綁在一起)、剛性連桿。「線性」「P-Delta」分析、以及Pushover全部四種求解器(event-to-event、幾何平衡疊代、Newton-Raphson、co-rotational單步)都支援。</p>
     ${rows || '<p class="hint">目前沒有任何equalDOF約束。</p>'}
     <details class="dropdownSection" style="margin-top:0.6rem;">
       <summary>➕ 新增EqualDOF約束</summary>

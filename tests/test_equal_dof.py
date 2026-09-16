@@ -5,6 +5,7 @@ _apply_equal_dof()說明。
 """
 import numpy as np
 from frame2d import Frame2D, solve
+from frame2d.hinge import HingeState
 
 E, I, A, L = 200e9, 8e-5, 1e-2, 4.0
 
@@ -158,4 +159,84 @@ assert rel_err8 < 1e-6, f"幾何平衡疊代pushover裡equal_dof應該正確生�
 assert mech8 is False, "equal_dof不應該讓幾何疊代變得不收斂"
 print(f"PASS: 幾何平衡疊代 u1x={u1x8:.6f}, u3x={u3x8:.6f}, 相對誤差={rel_err8:.2e}\n")
 
-print("PASS: frame2d equal_dof所有案例通過(含pushover)")
+
+print("=== 案例9: equal_dof在Newton-Raphson裡正確生效(用調小後的懲罰倍率1e5,")
+print("    比線性求解用的1e6小, 因為Newton疊代對病態比一次性線性解敏感很多) ===")
+from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
+
+
+def two_cantilever_columns_newton():
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, 0, L)
+    f.add_node(2, 5, 0)
+    f.add_node(3, 5, L)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.add_member(1, node_i=2, node_j=3, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.fix(0)
+    f.fix(2)
+    return f
+
+
+f9 = two_cantilever_columns_newton()
+f9.equal_dof(1, 3, ux=True)
+hs9 = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0),
+       1: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u9, F9, ev9, hsf9, conv9, u_full9 = run_pushover_newton(
+    f9, hs9, prescribed_dofs=[f9.dofs_of(1)[0]], direction=[1.0], target_total=0.05, d_nominal=0.005,
+    base_reaction_dofs=[f9.dofs_of(0)[0]], tol=1e-8, include_final_displacement=True,
+)
+assert conv9 is True, (
+    "equal_dof不應該讓Newton疊代變得不收斂(這是實際發生過的bug: 用跟"
+    "線性求解一樣的1e6懲罰倍率, Newton會完全卡住不收斂, 即使開到"
+    "100次疊代也一樣, 換成1e5才穩定收斂)"
+)
+u1x9 = u_full9[f9.dofs_of(1)[0]]
+u3x9 = u_full9[f9.dofs_of(3)[0]]
+rel_err9 = abs(u1x9 - u3x9) / abs(u1x9)
+assert rel_err9 < 1e-6, f"Newton裡equal_dof應該正確生效, 實際相對誤差={rel_err9}"
+print(f"PASS: Newton converged={conv9}, u1x={u1x9:.6f}, u3x={u3x9:.6f}, 相對誤差={rel_err9:.2e}\n")
+
+print("=== 案例10: equal_dof在co-rotational單步裡正確生效 ===")
+f10 = two_cantilever_columns_newton()
+f10.equal_dof(1, 3, ux=True)
+hs10 = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0),
+        1: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u10, F10, ev10, hsf10, conv10, u_full10 = run_pushover_corotational_oneshot(
+    f10, hs10, prescribed_dofs=[f10.dofs_of(1)[0]], direction=[1.0], target_total=0.05, d_nominal=0.005,
+    base_reaction_dofs=[f10.dofs_of(0)[0]], include_final_displacement=True,
+)
+u1x10 = u_full10[f10.dofs_of(1)[0]]
+u3x10 = u_full10[f10.dofs_of(3)[0]]
+rel_err10 = abs(u1x10 - u3x10) / abs(u1x10)
+assert rel_err10 < 1e-6, f"co-rotational單步裡equal_dof應該正確生效, 實際相對誤差={rel_err10}"
+print(f"PASS: u1x={u1x10:.6f}, u3x={u3x10:.6f}, 相對誤差={rel_err10:.2e}\n")
+
+print("=== 案例11: 物理正確性(力控制, Newton)——兩柱並聯共同承擔側向力,")
+print("    位移應該是單柱獨自承擔時的一半 ===")
+f11a = two_cantilever_columns_newton()
+hs11a = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0),
+         1: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u11a, F11a, _, _, _, u_full11a = run_pushover_newton(
+    f11a, hs11a, prescribed_dofs=[f11a.dofs_of(1)[0]], direction=[1.0], target_total=1000.0, d_nominal=100.0,
+    base_reaction_dofs=[f11a.dofs_of(0)[0]], tol=1e-8, control_mode='force', include_final_displacement=True,
+)
+u1x_alone11 = u_full11a[f11a.dofs_of(1)[0]]
+
+f11b = two_cantilever_columns_newton()
+f11b.equal_dof(1, 3, ux=True)
+hs11b = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0),
+         1: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u11b, F11b, _, _, _, u_full11b = run_pushover_newton(
+    f11b, hs11b, prescribed_dofs=[f11b.dofs_of(1)[0]], direction=[1.0], target_total=1000.0, d_nominal=100.0,
+    base_reaction_dofs=[f11b.dofs_of(0)[0]], tol=1e-8, control_mode='force', include_final_displacement=True,
+)
+u1x_shared11 = u_full11b[f11b.dofs_of(1)[0]]
+ratio11 = u1x_shared11 / u1x_alone11
+assert abs(ratio11 - 0.5) < 1e-5, f"兩柱並聯應該精確減半, 實際比值={ratio11}"
+print(f"PASS: 單柱={u1x_alone11:.8f}, 並聯={u1x_shared11:.8f}, 比值={ratio11:.6f}(應該是0.5)\n")
+
+print("PASS: frame2d equal_dof所有案例通過(含Newton/co-rotational)")

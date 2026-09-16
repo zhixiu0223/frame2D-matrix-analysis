@@ -143,15 +143,6 @@ def _prepare_pushover_run(payload: dict):
         raise ValueError("pushover需要指定pushover_target、pushover_step兩個欄位")
 
     f = _build_frame(payload)
-    if f.equal_dofs and payload.get("pushover_solver") in ("newton", "corotational_oneshot"):
-        raise ValueError(
-            f"{payload.get('pushover_solver')}求解器目前還不支援equal_dofs"
-            "(這個模型有設定equalDOF約束)——這是已知限制, 不是bug"
-            "(它們走的是newton.py完全獨立的co-rotational組裝邏輯,"
-            "還沒接上equalDOF)。event_to_event跟converged這兩個求解"
-            "器已經支援equalDOF, 請改用其中一個, 或先移除equalDOF"
-            "約束。"
-        )
     hinge_states = initial_hinge_states(f)
     if not hinge_states:
         raise ValueError(
