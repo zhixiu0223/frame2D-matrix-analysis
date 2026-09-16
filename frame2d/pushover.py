@@ -32,7 +32,7 @@ import numpy as np
 
 from .hinge import full_6x6_with_hinge
 from .elements import member_geometry, member_stiffness_local, member_stiffness_local_truss, transformation_matrix
-from .dofmanager import build_dof_map, solve_with_hinges
+from .dofmanager import build_dof_map, solve_with_hinges, _apply_equal_dof
 
 M_LOCAL_IDX = [2, 5]   # 局部力向量[Fx1,Fy1,M1,Fx2,Fy2,M2]裡, 兩端彎矩的索引
 
@@ -120,6 +120,13 @@ def _assemble_stiffness_with_hinges(frame, hinge_states, axial_forces=None, u_fu
         k_global = T.T @ k_local @ T
         idx = np.array(member_dofs[mid])
         K[np.ix_(idx, idx)] += k_global
+    # equalDOF約束(跟dofmanager.py的_solve_once_dofmanager()共用同一個
+    # 懲罰法函式_apply_equal_dof(), 不是另外複製一份公式——見對話紀錄
+    # 裡"要不要重構"的討論, 這個函式本來就已經是frame/K兩個參數就能
+    # 呼叫的獨立單元, 不需要真的做組裝邏輯合併這麼大範圍的重構, 直接
+    # import重用即可。frame.equal_dofs是空list(預設)時這個函式直接
+    # return, 對K沒有任何影響, 不影響任何既有呼叫端)。
+    _apply_equal_dof(frame, K)
     return K, member_dofs, member_T, member_L
 
 

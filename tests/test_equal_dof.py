@@ -103,4 +103,59 @@ rel_err6 = abs(u1x6 - u3x6) / abs(u1x6)
 assert rel_err6 < 1e-6, f"solve_pdelta()也應該支援equal_dof, 實際相對誤差={rel_err6}"
 print(f"PASS: solve_pdelta() u1x={u1x6:.6f}, u3x={u3x6:.6f}, 相對誤差={rel_err6:.2e}\n")
 
-print("PASS: frame2d equal_dof所有案例通過(含solve_pdelta)")
+
+print("=== 案例7: equal_dof在event-to-event pushover裡正確生效")
+print("    (_apply_equal_dof()跟dofmanager.py是同一份函式, 不是複製一份) ===")
+from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
+
+
+def two_cantilever_columns_pushover():
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, 0, L)
+    f.add_node(2, 5, 0)
+    f.add_node(3, 5, L)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.add_member(1, node_i=2, node_j=3, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.fix(0)
+    f.fix(2)
+    return f
+
+
+f7 = two_cantilever_columns_pushover()
+f7.equal_dof(1, 3, ux=True)
+from frame2d.dofmanager import initial_hinge_states as _ihs
+hs7 = _ihs(f7)
+init_forces7, _ = apply_gravity(f7, hs7)
+u7, F7, ev7, hsf7, mech7, u_full7 = run_pushover(
+    f7, hs7, prescribed_dofs=[f7.dofs_of(1)[0]], direction=[1.0], target_total=0.05, d_nominal=0.005,
+    base_reaction_dofs=[f7.dofs_of(0)[0]], initial_cum_forces=init_forces7,
+    include_final_displacement=True,
+)
+u1x7 = u_full7[f7.dofs_of(1)[0]]
+u3x7 = u_full7[f7.dofs_of(3)[0]]
+rel_err7 = abs(u1x7 - u3x7) / abs(u1x7)
+assert rel_err7 < 1e-6, f"event-to-event pushover裡equal_dof應該正確生效, 實際相對誤差={rel_err7}"
+print(f"PASS: event-to-event u1x={u1x7:.6f}, u3x={u3x7:.6f}, 相對誤差={rel_err7:.2e}\n")
+
+print("=== 案例8: equal_dof在幾何平衡疊代pushover裡正確生效 ===")
+f8 = two_cantilever_columns_pushover()
+f8.equal_dof(1, 3, ux=True)
+hs8 = _ihs(f8)
+init_forces8, _ = apply_gravity(f8, hs8)
+u8, F8, ev8, hsf8, mech8, u_full8 = run_pushover_converged(
+    f8, hs8, prescribed_dofs=[f8.dofs_of(1)[0]], direction=[1.0], target_total=0.05, d_nominal=0.005,
+    base_reaction_dofs=[f8.dofs_of(0)[0]], initial_cum_forces=init_forces8,
+    use_pdelta=True, geometry_update=True, include_final_displacement=True,
+)
+u1x8 = u_full8[f8.dofs_of(1)[0]]
+u3x8 = u_full8[f8.dofs_of(3)[0]]
+rel_err8 = abs(u1x8 - u3x8) / abs(u1x8)
+assert rel_err8 < 1e-6, f"幾何平衡疊代pushover裡equal_dof應該正確生效, 實際相對誤差={rel_err8}"
+assert mech8 is False, "equal_dof不應該讓幾何疊代變得不收斂"
+print(f"PASS: 幾何平衡疊代 u1x={u1x8:.6f}, u3x={u3x8:.6f}, 相對誤差={rel_err8:.2e}\n")
+
+print("PASS: frame2d equal_dof所有案例通過(含pushover)")

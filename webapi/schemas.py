@@ -49,11 +49,16 @@ class EqualDofIn(BaseModel):
     """跟frame2d.model.EqualDOF對應——見Frame2D.equal_dof()的說明,
     讓slave_node指定的自由度強制等於master_node的對應自由度(用高
     勁度彈簧懲罰法實現, 不是完全精確為0的束制, 但精度足夠工程使用)。
-    目前只有analysis_type='linear'/'pdelta'這兩種分析支援(底層走
-    frame2d.dofmanager._solve_once_dofmanager()這條共用組裝路徑);
-    pushover求解器(不管哪一種)目前還不支援, 有equal_dofs的模型
-    如果跑pushover, API會直接回400錯誤(不會靜默忽略給錯誤答案),
-    這是已知限制, 之後會補上。"""
+
+    支援範圍: analysis_type='linear'/'pdelta'(底層走frame2d.
+    dofmanager._solve_once_dofmanager())、pushover_solver=
+    'event_to_event'/'converged'(底層走frame2d.pushover.
+    _assemble_stiffness_with_hinges(), 跟前者共用同一個
+    _apply_equal_dof()函式)都支援。pushover_solver='newton'/
+    'corotational_oneshot'還不支援(它們走newton.py完全獨立的
+    co-rotational組裝邏輯, 還沒接上equalDOF)——有equal_dofs的模型
+    如果選這兩個求解器, API會直接回400錯誤(不會靜默忽略給錯誤
+    答案), 這是已知限制, 之後會補上。"""
     master_node: int
     slave_node: int
     ux: bool = False
