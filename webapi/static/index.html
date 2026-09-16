@@ -207,6 +207,7 @@
         <button id="btnSelectLine">／ 直線選取</button>
         <span class="sep"></span>
         <button id="btnSectionManager">📐 斷面管理</button>
+        <button id="btnEqualDofManager">🔗 EqualDOF管理</button>
         <span class="sep"></span>
         <label class="snapLabel"><input type="checkbox" id="snapGrid" checked>格線鎖定</label>
         <label class="snapLabel"><input type="checkbox" id="snapNode" checked>節點鎖定</label>
@@ -503,6 +504,7 @@ let model = {
     {node:1, ux:0.0, uy:0.0, rot:0.0},
     {node:2, ux:0.0, uy:0.0, rot:0.0}
   ],
+  equal_dofs: [],
   point_loads: [ {node:6, fx:10000, fy:0, m:0}, {node:3, fx:15000, fy:0, m:0} ],
   distributed_loads: [],
   member_point_loads: []
@@ -2530,10 +2532,84 @@ function renderSectionAssignMembers(sectionName) {
   };
   document.getElementById('sam_back').onclick = renderSectionManager;
 }
+
+// ---------- EqualDOF管理: 列出/新增/刪除equalDOF約束(跟斷面管理同一種UI風格) ----------
+function renderEqualDofManager() {
+  const panel = document.getElementById('propPanel');
+  const nodeLabel = (nid) => {
+    const n = model.nodes.find(x => x.id === nid);
+    return n ? `(${n.x},${n.y})` : `#${nid}`;
+  };
+  const dofLabel = (ed) => [ed.ux ? 'ux' : null, ed.uy ? 'uy' : null, ed.rot ? 'rot' : null]
+    .filter(Boolean).join('+');
+  const rows = model.equal_dofs.map((ed, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.4rem;padding:0.4rem 0;border-bottom:1px solid #f1f5f9;">
+      <span>N${ed.master_node}${nodeLabel(ed.master_node)} 主, N${ed.slave_node}${nodeLabel(ed.slave_node)} 從
+        <span class="hint" style="margin:0;">(${dofLabel(ed)})</span></span>
+      <button data-idx="${i}" class="eqd_delete" style="width:auto;background:#dc2626;color:white;">刪除</button>
+    </div>`).join('');
+  panel.innerHTML = `<fieldset><legend>EqualDOF管理(${model.equal_dofs.length} 條約束)</legend>
+    <p class="hint">讓「從節點」指定的自由度強制等於「主節點」的對應自由度(用高勁度彈簧懲罰法實現, 不是完全精確為0的束制, 但精度足夠工程使用)。常見用途: 剛性樓板(多節點水平位移綁在一起)、剛性連桿。目前只有「線性」「P-Delta」這兩種分析支援, Pushover求解器(不管哪一種)目前還不支援, 有equalDOF約束時選Pushover求解會被API拒絕(不是靜默忽略)。</p>
+    ${rows || '<p class="hint">目前沒有任何equalDOF約束。</p>'}
+    <details class="dropdownSection" style="margin-top:0.6rem;">
+      <summary>➕ 新增EqualDOF約束</summary>
+      <div class="dropdownBody" style="display:block;">
+        <label>主節點(master, 被跟隨的那個)</label>
+        <input id="eqd_new_master" type="number" step="1" placeholder="節點編號, 例如 1">
+        <label>從節點(slave, 跟著主節點動的那個)</label>
+        <input id="eqd_new_slave" type="number" step="1" placeholder="節點編號, 例如 3">
+        <label style="display:flex;gap:0.8rem;margin-top:0.3rem;">
+          <span style="display:inline-flex;align-items:center;gap:0.2rem;"><input id="eqd_new_ux" type="checkbox" style="width:auto;"> ux(水平)</span>
+          <span style="display:inline-flex;align-items:center;gap:0.2rem;"><input id="eqd_new_uy" type="checkbox" style="width:auto;"> uy(垂直)</span>
+          <span style="display:inline-flex;align-items:center;gap:0.2rem;"><input id="eqd_new_rot" type="checkbox" style="width:auto;"> rot(轉角)</span>
+        </label>
+        <button id="eqd_new_add" style="width:100%;margin-top:0.4rem;background:#0891b2;color:white;">➕ 新增約束</button>
+        <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
+      </div>
+    </details>
+    <button id="eqd_back" style="width:100%;margin-top:0.6rem;">返回</button>
+  </fieldset>`;
+
+  panel.querySelectorAll('.eqd_delete').forEach(btn => {
+    btn.onclick = () => {
+      const i = parseInt(btn.dataset.idx, 10);
+      model.equal_dofs.splice(i, 1);
+      setStatus('已刪除一條EqualDOF約束');
+      renderEqualDofManager();
+    };
+  });
+  document.getElementById('eqd_new_add').onclick = () => {
+    const masterRaw = document.getElementById('eqd_new_master').value;
+    const slaveRaw = document.getElementById('eqd_new_slave').value;
+    if (masterRaw === '' || slaveRaw === '') { setStatus('主節點跟從節點都要填'); return; }
+    const master = parseInt(masterRaw, 10);
+    const slave = parseInt(slaveRaw, 10);
+    if (!model.nodes.some(n => n.id === master)) { setStatus('找不到節點 ' + master); return; }
+    if (!model.nodes.some(n => n.id === slave)) { setStatus('找不到節點 ' + slave); return; }
+    if (master === slave) { setStatus('主節點跟從節點不能是同一個'); return; }
+    const ux = document.getElementById('eqd_new_ux').checked;
+    const uy = document.getElementById('eqd_new_uy').checked;
+    const rot = document.getElementById('eqd_new_rot').checked;
+    if (!ux && !uy && !rot) { setStatus('至少要勾選一個方向(ux/uy/rot)'); return; }
+    model.equal_dofs.push({master_node: master, slave_node: slave, ux, uy, rot});
+    setStatus(`已新增EqualDOF約束: N${master} 主, N${slave} 從`);
+    renderEqualDofManager();
+  };
+  document.getElementById('eqd_back').onclick = clearSelection;
+  document.getElementById('propModal').classList.add('open');
+  document.getElementById('propModalBackdrop').classList.add('open');
+  modalOpenedAt = Date.now();
+}
 document.getElementById('btnSectionManager').addEventListener('click', () => {
   selected = null;
   multiSelection = null;
   renderSectionManager();
+  render();
+});
+document.getElementById('btnEqualDofManager').addEventListener('click', () => {
+  selected = null;
+  multiSelection = null;
+  renderEqualDofManager();
   render();
 });
 
@@ -4275,7 +4351,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('新建會清空目前畫布內容(未儲存的修改會遺失),確定繼續?')) return;
   model = {
     nodes: [], sections: [{name: 'sec', E: 200e9, I: 1e-4, A: 0.01}],
-    members: [], supports: [], point_loads: [], distributed_loads: [], member_point_loads: []
+    members: [], supports: [], equal_dofs: [], point_loads: [], distributed_loads: [], member_point_loads: []
   };
   lastResult = null;
   currentName = null;

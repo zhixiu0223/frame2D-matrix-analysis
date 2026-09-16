@@ -45,6 +45,22 @@ class SupportIn(BaseModel):
     rot: Optional[float] = None
 
 
+class EqualDofIn(BaseModel):
+    """跟frame2d.model.EqualDOF對應——見Frame2D.equal_dof()的說明,
+    讓slave_node指定的自由度強制等於master_node的對應自由度(用高
+    勁度彈簧懲罰法實現, 不是完全精確為0的束制, 但精度足夠工程使用)。
+    目前只有analysis_type='linear'/'pdelta'這兩種分析支援(底層走
+    frame2d.dofmanager._solve_once_dofmanager()這條共用組裝路徑);
+    pushover求解器(不管哪一種)目前還不支援, 有equal_dofs的模型
+    如果跑pushover, API會直接回400錯誤(不會靜默忽略給錯誤答案),
+    這是已知限制, 之後會補上。"""
+    master_node: int
+    slave_node: int
+    ux: bool = False
+    uy: bool = False
+    rot: bool = False
+
+
 class PointLoadIn(BaseModel):
     node: int
     fx: float = 0.0
@@ -79,6 +95,7 @@ class FrameIn(BaseModel):
     sections: List[SectionIn]
     members: List[MemberIn]
     supports: List[SupportIn] = Field(default_factory=list)
+    equal_dofs: List[EqualDofIn] = Field(default_factory=list)
     point_loads: List[PointLoadIn] = Field(default_factory=list)
     distributed_loads: List[DistributedLoadIn] = Field(default_factory=list)
     member_point_loads: List[MemberPointLoadIn] = Field(default_factory=list)

@@ -57,6 +57,8 @@ def _build_frame(payload: FrameIn) -> Frame2D:
                      R_post_yield_i=m.R_post_yield_i, R_post_yield_j=m.R_post_yield_j)
     for sp in payload.supports:
         f.support(sp.node, ux=sp.ux, uy=sp.uy, rot=sp.rot)
+    for ed in payload.equal_dofs:
+        f.equal_dof(ed.master_node, ed.slave_node, ux=ed.ux, uy=ed.uy, rot=ed.rot)
     for pl in payload.point_loads:
         f.point_load(pl.node, fx=pl.fx, fy=pl.fy, m=pl.m)
     for dl in payload.distributed_loads:
@@ -139,6 +141,14 @@ def _prepare_pushover_run(payload: FrameIn):
         )
 
     f = _build_frame(payload)
+    if f.equal_dofs:
+        raise HTTPException(
+            status_code=400,
+            detail="pushover求解器(不管哪一種)目前還不支援equal_dofs"
+                   "(這個模型有設定equalDOF約束)——這是已知限制, 不是"
+                   "bug, 請改用線性或P-Delta分析, 或先移除equalDOF約束。"
+                   "equalDOF目前只支援analysis_type='linear'/'pdelta'。",
+        )
     hinge_states = initial_hinge_states(f)
     if not hinge_states:
         raise HTTPException(

@@ -51,6 +51,9 @@ def _build_frame(payload: dict) -> Frame2D:
                      R_post_yield_i=m.get("R_post_yield_i"), R_post_yield_j=m.get("R_post_yield_j"))
     for sp in payload.get("supports", []):
         f.support(sp["node"], ux=sp.get("ux"), uy=sp.get("uy"), rot=sp.get("rot"))
+    for ed in payload.get("equal_dofs", []):
+        f.equal_dof(ed["master_node"], ed["slave_node"],
+                    ux=ed.get("ux", False), uy=ed.get("uy", False), rot=ed.get("rot", False))
     for pl in payload.get("point_loads", []):
         f.point_load(pl["node"], fx=pl.get("fx", 0.0), fy=pl.get("fy", 0.0), m=pl.get("m", 0.0))
     for dl in payload.get("distributed_loads", []):
@@ -140,6 +143,13 @@ def _prepare_pushover_run(payload: dict):
         raise ValueError("pushover需要指定pushover_target、pushover_step兩個欄位")
 
     f = _build_frame(payload)
+    if f.equal_dofs:
+        raise ValueError(
+            "pushover求解器(不管哪一種)目前還不支援equal_dofs(這個"
+            "模型有設定equalDOF約束)——這是已知限制, 不是bug, 請改用"
+            "線性或P-Delta分析, 或先移除equalDOF約束。equalDOF目前"
+            "只支援analysis_type='linear'/'pdelta'。"
+        )
     hinge_states = initial_hinge_states(f)
     if not hinge_states:
         raise ValueError(
