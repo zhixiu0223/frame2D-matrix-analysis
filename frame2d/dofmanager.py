@@ -70,6 +70,43 @@ def build_dof_map(frame: Frame2D):
     return member_dofs, n_node_dof, n_extra_dof
 
 
+def _apply_equal_dof(frame: Frame2D, K: np.ndarray):
+    """把frame.equal_dofs裡的每一條約束, 用高勁度彈簧懲罰法疊加進K。
+
+    做法: 對每個要綁定的方向(ux/uy/rot), 在master跟slave對應的那兩個
+    全域DOF之間, 疊加一個2x2的彈簧勁度矩陣[[k,-k],[-k,k]]——跟一根
+    "軸力桿"的局部勁度矩陣是同一個形式, 效果是強迫這兩個自由度的值
+    趨近相等(k夠大時, 兩者不相等所需要的應變能會遠大於結構其他變形
+    路徑, 求解出來的位移場自然會讓它們幾乎相等)。
+
+    k(懲罰勁度)取K目前(只有結構本身勁度, 還沒加分佈載重/EqualDOF
+    自己)最大對角項的1e6倍——這是懲罰法的標準做法(懲罰勁度要遠大於
+    結構本身勁度, 才能有效束制; 但不能離譜地大, 不然會讓K的條件數
+    差到數值求解不穩定)。frame.equal_dofs是空list時(預設, 沒有使用
+    equalDOF), 直接return, 對K沒有任何影響。
+
+    這不是精確的自由度消去法(那個要在_solve_once_dofmanager()組裝
+    核心裡做DOF縮減, 改動範圍大很多, 風險較高)——懲罰法是業界常見的
+    替代做法, 精度足夠工程使用(兩個被綁定的自由度, 差距通常在結構
+    本身位移量級的1e-6倍以下, 見tests/test_equal_dof.py的驗證), 但
+    嚴格來說不是完全為0的束制, 這是刻意的取捨, 不是疏漏。
+    """
+    if not frame.equal_dofs:
+        return
+    diag = np.abs(np.diag(K))
+    k_pen = 1e6 * max(np.max(diag) if diag.size else 0.0, 1.0)
+    for ed in frame.equal_dofs:
+        master_dofs = frame.dofs_of(ed.master_node)
+        slave_dofs = frame.dofs_of(ed.slave_node)
+        for on, m_dof, s_dof in zip((ed.ux, ed.uy, ed.rot), master_dofs, slave_dofs):
+            if not on:
+                continue
+            K[m_dof, m_dof] += k_pen
+            K[s_dof, s_dof] += k_pen
+            K[m_dof, s_dof] -= k_pen
+            K[s_dof, m_dof] -= k_pen
+
+
 def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict = None,
                             hinge_states: dict = None) -> SolveResult:
     """跑一次線性求解, slack_cables裡的cable member直接跳過(不貢獻勁度,
@@ -131,6 +168,14 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
         k_global = T.T @ k_local @ T
         idx = np.array(member_dofs[mid])
         K[np.ix_(idx, idx)] += k_global
+
+    # ---- 1.5. equalDOF約束(如果有的話): 用高勁度彈簧懲罰法, 見
+    #      frame2d.model.EqualDOF跟_apply_equal_dof()的說明。刻意放在
+    #      "組裝完結構本身的勁度"之後、"分佈載重"之前, 因為懲罰彈簧的
+    #      勁度大小要參考結構本身勁度的量級, 得先有step1組好的K才能
+    #      決定要用多大——frame.equal_dofs是空list(預設)時, 這個函式
+    #      直接return, 對K完全沒有任何影響, 不影響任何既有呼叫端。 ----
+    _apply_equal_dof(frame, K)
 
     # ---- 2. 分佈載重: 全部都用「標準」固定端反力公式(不用release專屬公式!) ----
     for dl in frame.distributed_loads:

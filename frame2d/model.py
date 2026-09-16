@@ -67,6 +67,25 @@ class Support:
 
 
 @dataclass
+class EqualDOF:
+    """跟OpenSeesPy的equalDOF同一個概念: 讓slave_node指定的自由度
+    強制跟master_node對應的自由度相等(不是"連在一起變成同一個節點",
+    是"這幾個自由度的值被綁定相等", 其餘沒指定的自由度還是各自獨立)。
+    ux/uy/rot各自是bool, True=這個方向要綁定, False=這個方向不受
+    影響、各自獨立。用高勁度彈簧懲罰法實現, 見dofmanager.py的
+    _apply_equal_dof()說明——不是精確的自由度消去法(那個要動到
+    _solve_once_dofmanager()的組裝核心, 風險較高), 懲罰法用一個
+    遠大於結構本身勁度的虛擬彈簧硬把兩個自由度"拉在一起", 精度
+    足夠工程使用(見測試案例的驗證), 但嚴格來說不是完全精確為0
+    的束制, 是"非常接近"。"""
+    master_node: int
+    slave_node: int
+    ux: bool = False
+    uy: bool = False
+    rot: bool = False
+
+
+@dataclass
 class PointLoad:
     node: int
     fx: float = 0.0
@@ -159,6 +178,7 @@ class Frame2D:
         self.sections: dict[str, Section] = {}
         self.members: dict[int, Member] = {}
         self.supports: list[Support] = []
+        self.equal_dofs: list[EqualDOF] = []
         self.point_loads: list[PointLoad] = []
         self.distributed_loads: list[DistributedLoad] = []
         self.member_point_loads: list[MemberPointLoad] = []
@@ -214,6 +234,20 @@ class Frame2D:
         (0.0=固定在原位, 非0=強制位移/沉陷)。fix/pin/roller_y是這個的
         簡寫, 要做斜支承、沉陷分析等特殊情況直接用這個。"""
         self.supports.append(Support(node, ux=ux, uy=uy, rot=rot))
+        return self
+
+    def equal_dof(self, master_node: int, slave_node: int,
+                  ux: bool = False, uy: bool = False, rot: bool = False):
+        """跟OpenSeesPy的equalDOF同一個概念: 讓slave_node指定的自由度
+        (ux/uy/rot, 每個True/False獨立設定)強制等於master_node的對應
+        自由度——常見用途: 剛性樓板(多個節點的水平位移綁在一起)、
+        剛性連桿(兩個重疊節點的部分自由度綁死)、鉸接處只放開轉角。
+        用高勁度彈簧懲罰法實現(見frame2d.model.EqualDOF、dofmanager.py
+        的_apply_equal_dof()), 不是完全精確為0的束制, 但精度足夠工程
+        使用。至少要指定一個方向為True, 不然這個約束沒有意義。"""
+        if not (ux or uy or rot):
+            raise ValueError("equal_dof()至少要指定ux/uy/rot其中一個為True, 不然這個約束沒有意義。")
+        self.equal_dofs.append(EqualDOF(master_node, slave_node, ux=ux, uy=uy, rot=rot))
         return self
 
     def point_load(self, node: int, fx: float = 0.0, fy: float = 0.0, m: float = 0.0,
