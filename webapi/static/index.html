@@ -2139,6 +2139,17 @@ function drawDistributedLoadIndicators(t) {
 function drawDistributedMomentIndicators(t) {
   if (!model.distributed_moments.length) return;
   const momentRadius = structureWorldDiag() * 0.02 * momentArcScale();
+  const minOffset = momentRadius * 2.6;
+  // maxAbsM: 跟drawDistributedLoadIndicators()同一個做法, 用模型裡所有
+  // 分布彎矩的最大絕對值算一個全域比例尺, 讓帶子外緣的偏移距離跟"強度
+  // 大小"成正比——這樣m1/m2不同(梯形)時, 帶子會真的畫成一頭窄一頭寬
+  // 的梯形, 而不是像之前那樣固定寬度、只靠標籤文字的數字讓人自己
+  // 想像強度在變化。
+  let maxAbsM = 1e-9;
+  for (const dm0 of model.distributed_moments) {
+    maxAbsM = Math.max(maxAbsM, Math.abs(dm0.m), Math.abs(dm0.m_end ?? dm0.m));
+  }
+  const valueToWorld = (structureWorldDiag() * 0.08 * momentArcScale()) / maxAbsM;
   for (const dm of model.distributed_moments) {
     const m = model.members.find(mm => mm.id === dm.member);
     if (!m) continue;
@@ -2156,27 +2167,36 @@ function drawDistributedMomentIndicators(t) {
     const rangeLen = x1 - x0;
     const mEnd = dm.m_end ?? dm.m;
     const nIcons = Math.max(3, Math.min(6, Math.round(rangeLen / 1.6)));
-    const offsetDist = momentRadius * 2.6;
+    const offsetAt = (frac) => {
+      const mHere = dm.m + (mEnd - dm.m) * frac;
+      return Math.max(minOffset, Math.abs(mHere) * valueToWorld);
+    };
     let basePts = [], farPts = [];
     const nSeg = 6;
     for (let i = 0; i <= nSeg; i++) {
-      const xi = x0 + rangeLen * i / nSeg;
+      const frac = i / nSeg;
+      const xi = x0 + rangeLen * frac;
       const bx = ni.x + xi * c, by = ni.y + xi * s;
+      const off = offsetAt(frac);
       basePts.push(toScreen(bx, by, t));
-      farPts.push(toScreen(bx + perp[0] * offsetDist, by + perp[1] * offsetDist, t));
+      farPts.push(toScreen(bx + perp[0] * off, by + perp[1] * off, t));
     }
     const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + farPts.slice().reverse().map(p => p.join(',')).join(' ');
     put(el('polygon', {points: poly, fill: 'rgba(220,38,38,0.12)', stroke: '#dc2626', 'stroke-width': 1}));
     for (let i = 0; i < nIcons; i++) {
-      const xi = x0 + rangeLen * (i + 0.5) / nIcons;
-      const wx = ni.x + xi * c + perp[0] * offsetDist, wy = ni.y + xi * s + perp[1] * offsetDist;
+      const frac = (i + 0.5) / nIcons;
+      const xi = x0 + rangeLen * frac;
+      const off = offsetAt(frac);
+      const wx = ni.x + xi * c + perp[0] * off, wy = ni.y + xi * s + perp[1] * off;
       // 梯形(m跟m_end不同)時, 每個圖示按位置內插對應的強度, 讓圖示
-      // 本身的方向/大小沿桿長漸變, 跟均佈載重的梯形箭頭同一個精神
-      // (視覺上就能看出"強度在變化", 不是常數)。
-      const mHere = dm.m + (mEnd - dm.m) * (i + 0.5) / nIcons;
+      // 本身的旋轉方向沿桿長漸變(圖示的位置現在也跟著帶子外緣的斜度
+      // 走, 大小則維持固定不變, 讓弧線圖示本身保持清楚可辨識——強度
+      // 大小改用帶子的寬度差異來表達, 不是靠圖示本身變大變小)。
+      const mHere = dm.m + (mEnd - dm.m) * frac;
       drawMomentArc(t, wx, wy, mHere, momentRadius, '#dc2626');
     }
-    const [mx, my] = toScreen(ni.x + (x0 + x1) * 0.5 * c + perp[0] * offsetDist * 2.1, ni.y + (x0 + x1) * 0.5 * s + perp[1] * offsetDist * 2.1, t);
+    const midOff = offsetAt(0.5);
+    const [mx, my] = toScreen(ni.x + (x0 + x1) * 0.5 * c + perp[0] * midOff * 1.5, ni.y + (x0 + x1) * 0.5 * s + perp[1] * midOff * 1.5, t);
     const lbl = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
     const mag = (dm.m === mEnd) ? fromSI('moment', dm.m).toFixed(2)
                                  : `${fromSI('moment', dm.m).toFixed(2)}~${fromSI('moment', mEnd).toFixed(2)}`;
