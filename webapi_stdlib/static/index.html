@@ -1964,6 +1964,7 @@ function drawLoads(t) {
   }
 
   drawDistributedLoadIndicators(t);
+  drawDistributedMomentIndicators(t);
   drawMemberPointLoadIndicators(t);
 }
 
@@ -2126,6 +2127,38 @@ function drawDistributedLoadIndicators(t) {
     const [mx, my] = toScreen(ni.x + (x0 + x1) / 2 * c, ni.y + (x0 + x1) / 2 * s, t);
     const lbl = el('text', {x: mx, y: my - 6, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
     lbl.textContent = (rawW0 === rawW1 ? forceStr(rawW0) : `${fromSI('force', rawW0).toFixed(2)}~${fromSI('force', rawW1).toFixed(2)}${unitOf('force')}`) + '/m';
+    put(lbl);
+  }
+}
+
+// 桿件分布彎矩(kN·m/m): 跟均佈載重(分布"力", 畫成多邊形+箭頭)不一樣,
+// 這是分布"力矩", 用跟集中彎矩/反力彎矩同一套旋轉弧線圖示
+// (drawMomentArc())沿桿長重複畫幾個, 讓形狀本身就能一眼看出「這是
+// 力矩不是力」, 不用另外換顏色區分(跟其餘外力載重一致用紅色,
+// 反力才用綠色, 這個既有的顏色慣例不用為了這個新類型另外破例)。
+function drawDistributedMomentIndicators(t) {
+  if (!model.distributed_moments.length) return;
+  const momentRadius = structureWorldDiag() * 0.022 * momentArcScale();
+  for (const dm of model.distributed_moments) {
+    const m = model.members.find(mm => mm.id === dm.member);
+    if (!m) continue;
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    if (!ni || !nj) continue;
+    const L = Math.hypot(nj.x - ni.x, nj.y - ni.y);
+    const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
+    const c = Math.cos(angle), s = Math.sin(angle);
+    // 沿桿長平均擺4個弧線圖示(目前只支援整根桿件的固定值, 不用考慮
+    // 局部範圍), 太密會互相疊在一起看不清楚, 4個足夠表達"這是沿整根
+    // 桿件分布的", 不是單一集中彎矩。
+    const nIcons = 4;
+    for (let i = 0; i < nIcons; i++) {
+      const xi = L * (i + 0.5) / nIcons;
+      const wx = ni.x + xi * c, wy = ni.y + xi * s;
+      drawMomentArc(t, wx, wy, dm.m, momentRadius, '#dc2626');
+    }
+    const [mx, my] = toScreen(ni.x + L * 0.5 * c + momentRadius * 1.4, ni.y + L * 0.5 * s - momentRadius * 1.4, t);
+    const lbl = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
+    lbl.textContent = fromSI('moment', dm.m).toFixed(2) + unitOf('moment') + '/m' + (dm.m > 0 ? '↺' : '↻');
     put(lbl);
   }
 }
