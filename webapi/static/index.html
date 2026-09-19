@@ -2148,19 +2148,19 @@ function drawDistributedMomentIndicators(t) {
     const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
     const c = Math.cos(angle), s = Math.sin(angle);
     const perp = [-s, c];
-    // 前兩版分別試過"半透明帶子"(太窄, 手機螢幕上幾乎看不見)跟
-    // "波浪線+疊在上面的旋轉弧線圖示"(振幅/圖示擠在同一條窄帶裡,
-    // 反而糊成一團, 比原本更難看懂)——這一版改成跟均佈載重同一種
-    // "底線(貼著桿件)+外緣線(平移一段明顯距離)圍成一條帶狀區域"的
-    // 畫法, 但外緣線平移距離抓夠大(讓帶子本身清楚可見, 不是窄窄一條
-    // 沒有存在感), 旋轉弧線圖示放在外緣線上(不是擠在桿件旁邊跟
-    // 帶子疊在一起), 圖示彼此間距也確保不會重疊。
-    const nIcons = Math.max(3, Math.min(6, Math.round(L / 1.6)));
+    // x0/x1: 現在支援局部段(跟distributed_load同一套x_start/x_end慣例),
+    // 帶狀底/圖示都只畫在這個範圍內, 不是永遠整根桿件——這是這輪新增
+    // 局部段功能之後補上的, 之前這裡沒有x0/x1這兩個變數, 永遠用
+    // 0跟L, 畫出來的圖示會跟實際套用範圍對不上。
+    const x0 = dm.x_start ?? 0, x1 = dm.x_end ?? L;
+    const rangeLen = x1 - x0;
+    const mEnd = dm.m_end ?? dm.m;
+    const nIcons = Math.max(3, Math.min(6, Math.round(rangeLen / 1.6)));
     const offsetDist = momentRadius * 2.6;
     let basePts = [], farPts = [];
     const nSeg = 6;
     for (let i = 0; i <= nSeg; i++) {
-      const xi = L * i / nSeg;
+      const xi = x0 + rangeLen * i / nSeg;
       const bx = ni.x + xi * c, by = ni.y + xi * s;
       basePts.push(toScreen(bx, by, t));
       farPts.push(toScreen(bx + perp[0] * offsetDist, by + perp[1] * offsetDist, t));
@@ -2168,13 +2168,19 @@ function drawDistributedMomentIndicators(t) {
     const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + farPts.slice().reverse().map(p => p.join(',')).join(' ');
     put(el('polygon', {points: poly, fill: 'rgba(220,38,38,0.12)', stroke: '#dc2626', 'stroke-width': 1}));
     for (let i = 0; i < nIcons; i++) {
-      const xi = L * (i + 0.5) / nIcons;
+      const xi = x0 + rangeLen * (i + 0.5) / nIcons;
       const wx = ni.x + xi * c + perp[0] * offsetDist, wy = ni.y + xi * s + perp[1] * offsetDist;
-      drawMomentArc(t, wx, wy, dm.m, momentRadius, '#dc2626');
+      // 梯形(m跟m_end不同)時, 每個圖示按位置內插對應的強度, 讓圖示
+      // 本身的方向/大小沿桿長漸變, 跟均佈載重的梯形箭頭同一個精神
+      // (視覺上就能看出"強度在變化", 不是常數)。
+      const mHere = dm.m + (mEnd - dm.m) * (i + 0.5) / nIcons;
+      drawMomentArc(t, wx, wy, mHere, momentRadius, '#dc2626');
     }
-    const [mx, my] = toScreen(ni.x + L * 0.5 * c + perp[0] * offsetDist * 2.1, ni.y + L * 0.5 * s + perp[1] * offsetDist * 2.1, t);
+    const [mx, my] = toScreen(ni.x + (x0 + x1) * 0.5 * c + perp[0] * offsetDist * 2.1, ni.y + (x0 + x1) * 0.5 * s + perp[1] * offsetDist * 2.1, t);
     const lbl = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
-    lbl.textContent = fromSI('moment', dm.m).toFixed(2) + unitOf('moment') + '/m' + (dm.m > 0 ? '↺' : '↻');
+    const mag = (dm.m === mEnd) ? fromSI('moment', dm.m).toFixed(2)
+                                 : `${fromSI('moment', dm.m).toFixed(2)}~${fromSI('moment', mEnd).toFixed(2)}`;
+    lbl.textContent = mag + unitOf('moment') + '/m' + (dm.m > 0 ? '↺' : '↻');
     put(lbl);
   }
 }
@@ -2681,6 +2687,7 @@ function renderMultiSelectPanel() {
   }
   if (memberIds.length) {
     html += `<button id="ms_distload" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">⬇ 批次施加均佈載重</button>`;
+    html += `<button id="ms_distmoment" style="width:100%;margin-bottom:0.4rem;background:#0891b2;color:white;">↺ 批次施加分布彎矩</button>`;
     html += `<button id="ms_edit" style="width:100%;margin-bottom:0.4rem;background:#7c3aed;color:white;">✎ 批次編輯桿件(斷面/類型/釋放)</button>`;
     html += `<button id="ms_hinge" style="width:100%;margin-bottom:0.4rem;background:#dc2626;color:white;">◎ 批次設定塑鉸容量(Pushover用)</button>`;
   }
@@ -2703,6 +2710,7 @@ function renderMultiSelectPanel() {
   }
   if (memberIds.length) {
     document.getElementById('ms_distload').onclick = () => renderBatchDistLoadForm(memberIds);
+    document.getElementById('ms_distmoment').onclick = () => renderBatchDistMomentForm(memberIds);
     document.getElementById('ms_edit').onclick = () => renderBatchMemberEditForm(memberIds);
     document.getElementById('ms_hinge').onclick = () => renderBatchHingeForm(memberIds);
   }
@@ -2982,6 +2990,38 @@ function renderBatchDistLoadForm(memberIds) {
   };
 }
 
+function renderBatchDistMomentForm(memberIds) {
+  const panel = document.getElementById('propPanel');
+  panel.innerHTML = `<fieldset><legend>批次施加分布彎矩(${memberIds.length} 根桿件, 全長)</legend>
+    <p class="hint">跟均佈載重(分布"力")不一樣, 這是分布"力矩"(${unitOf('moment')}/m, 逆時針為正)。桁架/纜線元素(兩端鉸接、沒有彎曲勁度)不能承受分布彎矩, 會被自動跳過。</p>
+    <label>m1 起點強度(${unitOf('moment')}/m, 逆時針為正)</label>
+    <input id="bdm_m1" type="number" step="any" value="0">
+    <label>m2 終點強度(${unitOf('moment')}/m, 留空 = 跟m1一樣; 填不同值 = 梯形分布彎矩)</label>
+    <input id="bdm_m2" type="number" step="any" placeholder="留空表示跟m1相同">
+    <p class="hint">會取代這些桿件原本的分布彎矩設定(這裡的批次功能只覆蓋全長, 局部範圍請到單一桿件的屬性面板設定)。</p>
+    <div class="row2"><button id="bdm_apply" style="background:#16a34a;color:white;">套用到全部</button><button id="bdm_back">返回</button></div>
+  </fieldset>`;
+  document.getElementById('bdm_back').onclick = renderMultiSelectPanel;
+  document.getElementById('bdm_apply').onclick = () => {
+    const m1 = toSI('moment', parseFloat(document.getElementById('bdm_m1').value) || 0);
+    const m2raw = document.getElementById('bdm_m2').value;
+    const m2 = m2raw === '' ? undefined : toSI('moment', parseFloat(m2raw));
+    const truss = memberIds.filter(id => {
+      const mm = model.members.find(x => x.id === id);
+      return mm && (mm.member_type === 'truss' || mm.member_type === 'cable');
+    });
+    const applicable = memberIds.filter(id => !truss.includes(id));
+    model.distributed_moments = model.distributed_moments.filter(d => !applicable.includes(d.member));
+    for (const id of applicable) {
+      const entry = {member: id, m: m1};
+      if (m2 !== undefined && !isNaN(m2)) entry.m_end = m2;
+      model.distributed_moments.push(entry);
+    }
+    setStatus(`已套用分布彎矩到 ${applicable.length} 根桿件` + (truss.length ? `(跳過 ${truss.length} 根桁架/纜線元素)` : ''));
+    clearMultiSelection();
+  };
+}
+
 
 function handleMemberAddClick(id) {
   if (memberFirstNode === null) {
@@ -3255,10 +3295,18 @@ function _renderPropPanelInner() {
       <details class="propSection">
         <summary>桿件分布彎矩 <span class="sectionCount">(${dmCount} 筆)</span></summary>
         <div class="propSectionBody">
-          <p class="hint">跟均佈載重(分布"力", ${unitOf('force')}/m)不一樣, 這是分布"力矩"(${unitOf('moment')}/m, 逆時針為正, 跟下面「桿件集中力/集中彎矩」的m同一個符號慣例)——比較少見的載重類型, 目前只支援整根桿件的固定值, 不支援局部範圍或線性變化。實務上比較少見, 常見動機: 桿件截面深度方向有溫度梯度(等效成分布彎矩模擬溫度應力)、密集偏心軸力的連續近似。</p>
+          <p class="hint">跟均佈載重(分布"力", ${unitOf('force')}/m)不一樣, 這是分布"力矩"(${unitOf('moment')}/m, 逆時針為正, 跟下面「桿件集中力/集中彎矩」的m同一個符號慣例)——比較少見的載重類型。實務上比較少見, 常見動機: 桿件截面深度方向有溫度梯度(等效成分布彎矩模擬溫度應力)、密集偏心軸力的連續近似。</p>
           ${renderDistributedMomentList(m.id)}
-          <label>強度 m(${unitOf('moment')}/m, 逆時針為正)</label>
-          <input id="dm_m" type="number" step="any" value="0">
+          <label>範圍(留空 = 全長)</label>
+          <div class="row2">
+            <input id="dm_x0" type="number" step="any" placeholder="起點x(m)">
+            <input id="dm_x1" type="number" step="any" placeholder="終點x(m)">
+          </div>
+          <label>強度(${unitOf('moment')}/m, 逆時針為正): m1(起點) / m2(終點, 留空=均佈)</label>
+          <div class="row2">
+            <input id="dm_m" type="number" step="any" value="0">
+            <input id="dm_m2" type="number" step="any" placeholder="留空同m1">
+          </div>
           <button id="dm_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增分布彎矩</button>
         </div>
         <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
@@ -3479,8 +3527,14 @@ function _renderPropPanelInner() {
         setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受分布彎矩(理由同均佈載重, 後端solver會直接拒絕)。`);
         return;
       }
+      const x0raw = document.getElementById('dm_x0').value, x1raw = document.getElementById('dm_x1').value;
       const mVal = toSI('moment', parseFloat(document.getElementById('dm_m').value) || 0);
-      model.distributed_moments.push({member: m.id, m: mVal});
+      const m2raw = document.getElementById('dm_m2').value;
+      const entry = {member: m.id, m: mVal};
+      if (x0raw !== '') entry.x_start = parseFloat(x0raw);
+      if (x1raw !== '') entry.x_end = parseFloat(x1raw);
+      if (m2raw !== '') entry.m_end = toSI('moment', parseFloat(m2raw));
+      model.distributed_moments.push(entry);
       renderPropPanel();
       render();
     };
@@ -3523,14 +3577,21 @@ function _renderPropPanelInner() {
         // 「編輯」= 把這筆資料的值填回上面的新增表單、同時移除這筆
         // 舊資料 —— 改完再按一次「新增均佈載重」就等於更新, 不用
         // 另外做一套獨立的編輯/儲存流程。
+        // 這裡刻意先renderPropPanel()再設定欄位值, 不是反過來: 這個
+        // 面板是靠innerHTML整個重繪的(不是局部更新), 如果先設值、
+        // 後renderPropPanel(), 剛設的值會連同舊的input元素一起被換
+        // 掉的新元素蓋掉(新元素預設是空的)——這是實際測試抓到的bug
+        // (原本的順序讓編輯後表單看起來還是空的, 使用者要重新輸入
+        // 一次), 均佈載重跟分布彎矩(dm_edit)這兩個編輯功能都改成這個
+        // 順序。
+        model.distributed_loads = model.distributed_loads.filter(x => x !== d);
+        renderPropPanel();
+        render();
         document.getElementById('dl_x0').value = d.x_start ?? '';
         document.getElementById('dl_x1').value = d.x_end ?? '';
         document.getElementById('dl_w0').value = fromSI('force', d.w_start);
         document.getElementById('dl_w1').value = (d.w_end !== undefined && d.w_end !== null) ? fromSI('force', d.w_end) : '';
         document.getElementById('dl_dir').value = (d.direction === 'local') ? 'local' : 'vertical';
-        model.distributed_loads = model.distributed_loads.filter(x => x !== d);
-        renderPropPanel();
-        render();
         setStatus('已載入這筆均佈載重到下面的表單, 改完按「新增均佈載重」套用');
       };
     });
@@ -3539,10 +3600,16 @@ function _renderPropPanelInner() {
       if (btn) btn.onclick = () => { model.distributed_moments = model.distributed_moments.filter(x => x !== d); renderPropPanel(); render(); };
       const editBtn = document.getElementById('dm_edit_' + i);
       if (editBtn) editBtn.onclick = () => {
-        document.getElementById('dm_m').value = fromSI('moment', d.m);
+        // 先renderPropPanel()再設定欄位值, 理由同dl_edit(見上面那段
+        // 說明)——這個面板靠innerHTML整個重繪, 先設值再重繪會被新
+        // 元素蓋掉。
         model.distributed_moments = model.distributed_moments.filter(x => x !== d);
         renderPropPanel();
         render();
+        document.getElementById('dm_x0').value = d.x_start ?? '';
+        document.getElementById('dm_x1').value = d.x_end ?? '';
+        document.getElementById('dm_m').value = fromSI('moment', d.m);
+        document.getElementById('dm_m2').value = (d.m_end !== undefined && d.m_end !== null) ? fromSI('moment', d.m_end) : '';
         setStatus('已載入這筆分布彎矩到下面的表單, 改完按「新增分布彎矩」套用');
       };
     });
@@ -3585,8 +3652,8 @@ function renderDistributedMomentList(memberId) {
   const list = model.distributed_moments.filter(d => d.member === memberId);
   if (!list.length) return '<p class="hint">目前沒有分布彎矩。</p>';
   const mu = unitOf('moment');
-  return `<table><thead><tr><th>m(${mu}/m)</th><th></th><th></th></tr></thead><tbody>` +
-    list.map((d, i) => `<tr><td>${fromSI('moment', d.m).toFixed(2)}</td>
+  return `<table><thead><tr><th>範圍</th><th>m1(${mu}/m)</th><th>m2(${mu}/m)</th><th></th><th></th></tr></thead><tbody>` +
+    list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${fromSI('moment', d.m).toFixed(2)}</td><td>${fromSI('moment', d.m_end ?? d.m).toFixed(2)}</td>
       <td><button id="dm_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
       <td><button id="dm_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
     '</tbody></table>';
