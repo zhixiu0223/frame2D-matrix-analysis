@@ -2148,29 +2148,31 @@ function drawDistributedMomentIndicators(t) {
     const angle = Math.atan2(nj.y - ni.y, nj.x - ni.x);
     const c = Math.cos(angle), s = Math.sin(angle);
     const perp = [-s, c];
-    // 先畫一條貼著桿件的半透明帶狀底(跟均佈載重的多邊形底同一種視覺
-    // 語言: 半透明色塊代表"這個效應連續地作用在這一整段"), 再把旋轉
-    // 弧線圖示疊在帶子裡面——單獨幾個孤立的弧線圖示(這次修正前的做法)
-    // 看起來像是好幾個各自獨立的集中彎矩, 使用者實際回報覺得「感覺
-    // 怪怪的」; 疊在同一條連續帶子裡, 才會讓人一眼看出這是"沿著整根
-    // 桿件連續分布"的東西, 不是好幾個分開的點。
-    const bandHalfWidth = momentRadius * 1.15;
-    const bp1 = toScreen(ni.x + perp[0] * bandHalfWidth, ni.y + perp[1] * bandHalfWidth, t);
-    const bp2 = toScreen(nj.x + perp[0] * bandHalfWidth, nj.y + perp[1] * bandHalfWidth, t);
-    const bp3 = toScreen(nj.x - perp[0] * bandHalfWidth, nj.y - perp[1] * bandHalfWidth, t);
-    const bp4 = toScreen(ni.x - perp[0] * bandHalfWidth, ni.y - perp[1] * bandHalfWidth, t);
-    const bandPoly = [bp1, bp2, bp3, bp4].map(p => p.join(',')).join(' ');
-    put(el('polygon', {points: bandPoly, fill: 'rgba(220,38,38,0.10)', stroke: '#dc2626', 'stroke-width': 1}));
-    // 弧線圖示的間距用桿長決定(每隔約1.4m一個, 至少3個、最多8個避免
-    // 太長的桿件擠出過多圖示), 比固定4個更能反映"密度沿桿長一致"這個
-    // 分布量本身的意義, 桿件越長, 圖示自然越多、間距維持大致相同。
-    const nIcons = Math.max(3, Math.min(8, Math.round(L / 1.4)));
+    // 前兩版分別試過"半透明帶子"(太窄, 手機螢幕上幾乎看不見)跟
+    // "波浪線+疊在上面的旋轉弧線圖示"(振幅/圖示擠在同一條窄帶裡,
+    // 反而糊成一團, 比原本更難看懂)——這一版改成跟均佈載重同一種
+    // "底線(貼著桿件)+外緣線(平移一段明顯距離)圍成一條帶狀區域"的
+    // 畫法, 但外緣線平移距離抓夠大(讓帶子本身清楚可見, 不是窄窄一條
+    // 沒有存在感), 旋轉弧線圖示放在外緣線上(不是擠在桿件旁邊跟
+    // 帶子疊在一起), 圖示彼此間距也確保不會重疊。
+    const nIcons = Math.max(3, Math.min(6, Math.round(L / 1.6)));
+    const offsetDist = momentRadius * 2.6;
+    let basePts = [], farPts = [];
+    const nSeg = 6;
+    for (let i = 0; i <= nSeg; i++) {
+      const xi = L * i / nSeg;
+      const bx = ni.x + xi * c, by = ni.y + xi * s;
+      basePts.push(toScreen(bx, by, t));
+      farPts.push(toScreen(bx + perp[0] * offsetDist, by + perp[1] * offsetDist, t));
+    }
+    const poly = basePts.map(p => p.join(',')).join(' ') + ' ' + farPts.slice().reverse().map(p => p.join(',')).join(' ');
+    put(el('polygon', {points: poly, fill: 'rgba(220,38,38,0.12)', stroke: '#dc2626', 'stroke-width': 1}));
     for (let i = 0; i < nIcons; i++) {
       const xi = L * (i + 0.5) / nIcons;
-      const wx = ni.x + xi * c, wy = ni.y + xi * s;
+      const wx = ni.x + xi * c + perp[0] * offsetDist, wy = ni.y + xi * s + perp[1] * offsetDist;
       drawMomentArc(t, wx, wy, dm.m, momentRadius, '#dc2626');
     }
-    const [mx, my] = toScreen(ni.x + L * 0.5 * c + bandHalfWidth * 1.6, ni.y + L * 0.5 * s - bandHalfWidth * 1.6, t);
+    const [mx, my] = toScreen(ni.x + L * 0.5 * c + perp[0] * offsetDist * 2.1, ni.y + L * 0.5 * s + perp[1] * offsetDist * 2.1, t);
     const lbl = el('text', {x: mx, y: my, 'font-size': loadFontSize(), fill: '#dc2626', 'text-anchor': 'middle'});
     lbl.textContent = fromSI('moment', dm.m).toFixed(2) + unitOf('moment') + '/m' + (dm.m > 0 ? '↺' : '↻');
     put(lbl);
