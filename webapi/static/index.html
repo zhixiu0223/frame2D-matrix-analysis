@@ -2139,7 +2139,6 @@ function drawDistributedLoadIndicators(t) {
 function drawDistributedMomentIndicators(t) {
   if (!model.distributed_moments.length) return;
   const momentRadius = structureWorldDiag() * 0.02 * momentArcScale();
-  const minOffset = momentRadius * 2.6;
   // maxAbsM: 跟drawDistributedLoadIndicators()同一個做法, 用模型裡所有
   // 分布彎矩的最大絕對值算一個全域比例尺, 讓帶子外緣的偏移距離跟"強度
   // 大小"成正比——這樣m1/m2不同(梯形)時, 帶子會真的畫成一頭窄一頭寬
@@ -2167,9 +2166,18 @@ function drawDistributedMomentIndicators(t) {
     const rangeLen = x1 - x0;
     const mEnd = dm.m_end ?? dm.m;
     const nIcons = Math.max(3, Math.min(6, Math.round(rangeLen / 1.6)));
+    // offsetAt: 之前這裡有Math.max(minOffset, ...)這個下限, 是為了
+    // "強度很小時帶子仍然清楚可見"——但這個下限反而讓三角形分布彎矩
+    // (m從0變化到某個值)畫出來變成"一段固定高度的矩形+一段梯形"的
+    // 奇怪形狀, 跟均佈載重(drawDistributedLoadIndicators()完全沒有
+    // 這種下限, 強度為0處直接收尖成一個點, 畫出真正的三角形)不一致,
+    // 使用者實際比對兩者的截圖抓到這個不一致——拿掉下限, 改成跟均佈
+    // 載重同一種"純比例縮放, 強度多大帶子就多寬, 強度為0處收尖"的
+    // 畫法, 三角形/梯形/矩形都能畫出正確的形狀, 不再靠這個下限硬撐
+    // 出一個看起來很奇怪的複合形狀。
     const offsetAt = (frac) => {
       const mHere = dm.m + (mEnd - dm.m) * frac;
-      return Math.max(minOffset, Math.abs(mHere) * valueToWorld);
+      return Math.abs(mHere) * valueToWorld;
     };
     let basePts = [], farPts = [];
     const nSeg = 6;
