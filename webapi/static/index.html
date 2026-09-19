@@ -4183,6 +4183,28 @@ document.getElementById('btnSelectLine').addEventListener('click', () => toggleM
 // 均佈載重/桿件集中力掛在不存在的桿件上) —— 不管殘留是怎麼造成的
 // (分割/刪除某個路徑沒堵到、手動改過JSON匯入、以後新功能忘記清),
 // 送出前一律清乾淨, 從根本避免後端丟出「找不到ID」這種錯誤。
+// 模型的欄位隨著這個工具開發過程陸續增加(equal_dofs、distributed_
+// moments是最近才加的), 從檔案載入或匯入JSON時, 如果是在那之前存的
+// 舊檔案, 這些欄位在載入進來的物件裡根本不存在(不是空陣列,是完全
+// undefined)——如果不補上預設值, 之後任何程式碼只要碰到
+// model.equal_dofs.filter(...)這種呼叫就會直接丟TypeError, 而且
+// 錯誤發生的地方(例如選取一個桿件、打開它的屬性面板)往往離"載入
+// 舊檔案"這個真正原因很遠, 很難聯想到——這是實際使用者回報「畫線
+// 選桿件選不到東西」抓出來的根本原因(不是選取邏輯本身壞掉, 是
+// 屬性面板渲染時因為缺欄位丟例外, 把還沒執行到的後續畫面更新一起
+// 卡住)。model = await res.json() / model = JSON.parse(...) 這兩個
+// 「載入進來直接整個取代model物件」的地方, 都要在取代之後立刻呼叫
+// 這個函式補齊, 不能只補其中一處。
+function backfillModelDefaults(m) {
+  if (!Array.isArray(m.supports)) m.supports = [];
+  if (!Array.isArray(m.equal_dofs)) m.equal_dofs = [];
+  if (!Array.isArray(m.point_loads)) m.point_loads = [];
+  if (!Array.isArray(m.distributed_loads)) m.distributed_loads = [];
+  if (!Array.isArray(m.distributed_moments)) m.distributed_moments = [];
+  if (!Array.isArray(m.member_point_loads)) m.member_point_loads = [];
+  return m;
+}
+
 function sanitizeModel() {
   const nodeIds = new Set(model.nodes.map(n => n.id));
   const removed = [];
@@ -4204,6 +4226,14 @@ function sanitizeModel() {
   const beforeDl = model.distributed_loads.length;
   model.distributed_loads = model.distributed_loads.filter(d => memberIds.has(d.member));
   if (model.distributed_loads.length !== beforeDl) removed.push('均佈載重');
+
+  const beforeDm = model.distributed_moments.length;
+  model.distributed_moments = model.distributed_moments.filter(d => memberIds.has(d.member));
+  if (model.distributed_moments.length !== beforeDm) removed.push('分布彎矩');
+
+  const beforeEd = model.equal_dofs.length;
+  model.equal_dofs = model.equal_dofs.filter(ed => nodeIds.has(ed.master_node) && nodeIds.has(ed.slave_node));
+  if (model.equal_dofs.length !== beforeEd) removed.push('EqualDOF約束');
 
   const beforeMp = model.member_point_loads.length;
   model.member_point_loads = model.member_point_loads.filter(p => memberIds.has(p.member));
@@ -4424,6 +4454,7 @@ document.getElementById('btnLoad').addEventListener('click', async () => {
     const res = await fetch('/models/' + encodeURIComponent(name));
     if (!res.ok) { setStatus('載入失敗: ' + await res.text()); return; }
     model = await res.json();
+    backfillModelDefaults(model);
     currentName = name;
     document.getElementById('modelName').value = name;
     lastResult = null;
@@ -4466,6 +4497,7 @@ document.getElementById('importJsonFile').addEventListener('change', (e) => {
   reader.onload = () => {
     try {
       model = JSON.parse(reader.result);
+      backfillModelDefaults(model);
       lastResult = null;
       currentName = null;
       resetTransform();
