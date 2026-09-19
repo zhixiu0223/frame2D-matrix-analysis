@@ -88,12 +88,17 @@ class DistributedLoadIn(BaseModel):
 
 class DistributedMomentIn(BaseModel):
     """跟frame2d.model.DistributedMoment對應——見Frame2D.
-    distributed_moment()的說明, 桿件全長均佈的分布彎矩(kN·m/m, 逆
-    時針為正, 跟member_point_load()的m參數同一個符號慣例)。目前只
-    支援整根桿件的常數m, 不支援線性變化或局部段(比DistributedLoadIn
-    簡化很多, 是刻意先做最常見/最基本的情況)。"""
+    distributed_moment()的說明, 桿件的分布彎矩(kN·m/m, 逆時針為正,
+    跟member_point_load()的m參數同一個符號慣例)。預設整根桿件都有
+    固定值m; 可以指定x_start/x_end只加在局部一段(跟
+    DistributedLoadIn同一套慣例), 也可以指定m_end讓強度線性變化
+    (梯形分布彎矩)。彎矩沒有"方向"這個概念, 沒有對應
+    DistributedLoadIn的direction/angle_deg欄位。"""
     member: int
     m: float
+    m_end: Optional[float] = None
+    x_start: Optional[float] = None
+    x_end: Optional[float] = None
 
 
 class MemberPointLoadIn(BaseModel):

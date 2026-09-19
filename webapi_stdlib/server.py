@@ -61,7 +61,8 @@ def _build_frame(payload: dict) -> Frame2D:
                             x_start=dl.get("x_start"), x_end=dl.get("x_end"),
                             direction=dl.get("direction", "local"), angle_deg=dl.get("angle_deg"))
     for dm in payload.get("distributed_moments", []):
-        f.distributed_moment(dm["member"], m=dm["m"])
+        f.distributed_moment(dm["member"], m=dm["m"], m_end=dm.get("m_end"),
+                              x_start=dm.get("x_start"), x_end=dm.get("x_end"))
     for mpl in payload.get("member_point_loads", []):
         f.member_point_load(mpl["member"], a=mpl["a"], fx=mpl.get("fx", 0.0),
                              fy=mpl.get("fy", 0.0), m=mpl.get("m", 0.0),
