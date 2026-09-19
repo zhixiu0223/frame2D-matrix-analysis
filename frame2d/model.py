@@ -139,6 +139,21 @@ class DistributedLoad:
 
 
 @dataclass
+class DistributedMoment:
+    """桿件全長均佈的分布彎矩(kN·m/m, 逆時針為正, 跟MemberPointLoad.m
+    /fixed_end_forces_point_moment()同一個符號慣例——業界對「均佈彎矩」
+    的正負號沒有統一標準, 這裡刻意沿用本模組既有的集中力矩慣例, 求
+    內部一致)。
+
+    目前只支援整根桿件的常數m(不支援線性變化或局部段, 比
+    DistributedLoad簡化很多)——這是刻意先做最常見/最基本的情況(見
+    Frame2D.distributed_moment()的docstring說明實務上什麼情況會用到
+    這個載重類型), 不是忘記做完整版, 之後有需要可以再擴充。"""
+    member: int
+    m: float   # kN·m/m或對應單位, 逆時針為正
+
+
+@dataclass
 class MemberPointLoad:
     """桿件內部任意位置(不一定在節點上)的集中力/集中力矩。
     a: 距node_i沿桿軸的距離(局部座標, 0<=a<=L)。
@@ -181,6 +196,7 @@ class Frame2D:
         self.equal_dofs: list[EqualDOF] = []
         self.point_loads: list[PointLoad] = []
         self.distributed_loads: list[DistributedLoad] = []
+        self.distributed_moments: list[DistributedMoment] = []
         self.member_point_loads: list[MemberPointLoad] = []
         self._node_index_cache: dict[int, int] = None   # node_id -> 緊湊的0-based索引, 延遲建立
 
@@ -278,6 +294,26 @@ class Frame2D:
         度, 0=+x方向逆時針為正), 支援局部段+線性變化的任意組合。"""
         self.distributed_loads.append(
             DistributedLoad(member, w, w_end, x_start, x_end, direction, angle_deg))
+        return self
+
+    def distributed_moment(self, member: int, m: float):
+        """桿件全長均佈的分布彎矩(kN·m/m, 逆時針為正, 跟
+        member_point_load()的m參數同一個符號慣例)。目前只支援整根
+        桿件的常數m, 不支援線性變化或局部段。
+
+        跟distributed_load()(分布力, kN/m)不一樣: 這是分布"力矩",
+        不是分布"力", 直接對桿件的內部彎矩梯度貢獻, 不像分布力那樣
+        會先產生剪力再累積成彎矩——見frame2d.elements.
+        fixed_end_forces_distributed_moment()的推導說明。
+
+        實務上比較少見, 常見的動機情境: (1) 桿件截面深度方向有溫度
+        梯度(例如日曬面跟背陰面溫差), 等效成沿桿長的分布彎矩載重
+        來模擬溫度應力效應; (2) 一長串緊鄰、間距很密的偏心軸力/剪力
+        釘, 各自產生一個小力矩, 密到可以近似成連續分布; (3) 風/水壓
+        沿桿長分布但壓力中心偏離桿軸(例如壓力中心隨深度變化), 也可能
+        用分布力+分布彎矩的組合來表示。不是結構分析裡最常見的載重
+        類型, 大部分實務案例還是用分布力、集中力矩處理就夠。"""
+        self.distributed_moments.append(DistributedMoment(member, m))
         return self
 
     def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0,

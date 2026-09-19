@@ -43,6 +43,7 @@ from .elements import (
     fixed_end_forces_point_load,
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
+    fixed_end_forces_distributed_moment,
 )
 
 
@@ -237,6 +238,20 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
                 f_FE_local = fixed_end_forces_partial_udl(dl.w_start, dl.w_end, x_start, x_end, L)
         fixed_end_local[dl.member] = fixed_end_local.get(dl.member, np.zeros(6)) + f_FE_local
         F[np.array(member_dofs[dl.member])] += member_T[dl.member].T @ f_FE_local
+
+    # ---- 2a. 分布彎矩(kN·m/m, 見model.py的DistributedMoment說明,
+    #      跟分布力是完全不同的固定端反力公式, 不能套用fixed_end_
+    #      forces_udl那一套) ----
+    for dm in frame.distributed_moments:
+        m = frame.members[dm.member]
+        if m.member_type in ('truss', 'cable'):
+            raise ValueError(
+                f"member {dm.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
+                " 不能承受分布彎矩(理由同distributed_load的既有檢查)。")
+        L = member_L[dm.member]
+        f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        fixed_end_local[dm.member] = fixed_end_local.get(dm.member, np.zeros(6)) + f_FE_local
+        F[np.array(member_dofs[dm.member])] += member_T[dm.member].T @ f_FE_local
 
     # ---- 2b. 桿件內部集中力/力矩: 同樣用標準公式 ----
     for pl_m in frame.member_point_loads:

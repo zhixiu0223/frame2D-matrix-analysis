@@ -56,7 +56,7 @@ from .elements import (
     fixed_end_forces_udl, fixed_end_forces_axial_udl_varying,
     fixed_end_forces_partial_udl, fixed_end_forces_axial_partial_udl,
     fixed_end_forces_point_load, fixed_end_forces_point_moment,
-    fixed_end_forces_axial_point_load,
+    fixed_end_forces_axial_point_load, fixed_end_forces_distributed_moment,
 )
 
 
@@ -152,6 +152,17 @@ def _gravity_fixed_end_forces(frame):
             else:
                 f_FE_local = fixed_end_forces_partial_udl(dl.w_start, dl.w_end, x_start, x_end, L)
         _add(dl.member, f_FE_local)
+
+    for dm in frame.distributed_moments:
+        m = frame.members[dm.member]
+        if m.member_type in ('truss', 'cable'):
+            raise ValueError(
+                f"member {dm.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲"
+                f"勁度, 不能承受分布彎矩(理由同dofmanager.py既有檢查)。"
+            )
+        L = member_L[dm.member]
+        f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        _add(dm.member, f_FE_local)
 
     for pl_m in frame.member_point_loads:
         m = frame.members[pl_m.member]
