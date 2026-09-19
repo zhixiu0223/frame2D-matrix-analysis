@@ -44,6 +44,7 @@ from .elements import (
     fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load,
     fixed_end_forces_distributed_moment,
+    fixed_end_forces_partial_distributed_moment,
 )
 
 
@@ -249,7 +250,18 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
                 f"member {dm.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲勁度,"
                 " 不能承受分布彎矩(理由同distributed_load的既有檢查)。")
         L = member_L[dm.member]
-        f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        m_end = dm.m if dm.m_end is None else dm.m_end
+        x_start = 0.0 if dm.x_start is None else dm.x_start
+        x_end = L if dm.x_end is None else dm.x_end
+        if x_start < -1e-6 or x_end > L + 1e-6 or x_start > x_end + 1e-9:
+            raise ValueError(
+                f"member {dm.member} 的分布彎矩範圍[{x_start},{x_end}]超出桿件"
+                f"實際長度[0,{L}], 或起點大於終點——不會靜默截斷或外推, 請檢查"
+                f"x_start/x_end。")
+        if x_start <= 1e-9 and x_end >= L - 1e-9 and dm.m_end is None:
+            f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        else:
+            f_FE_local = fixed_end_forces_partial_distributed_moment(dm.m, m_end, x_start, x_end, L)
         fixed_end_local[dm.member] = fixed_end_local.get(dm.member, np.zeros(6)) + f_FE_local
         F[np.array(member_dofs[dm.member])] += member_T[dm.member].T @ f_FE_local
 

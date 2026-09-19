@@ -153,3 +153,156 @@ assert abs(M0_pushover - (-m_val * L)) < 1e-6, f"pushover重力預載M0反力應
 print(f"PASS: pushover重力預載 M0反力={M0_pushover:.6f}(理論{-m_val*L})\n")
 
 print("PASS: frame2d distributed_moment所有案例通過(含Newton/co-rotational/pushover)")
+
+
+print("=== 案例7: fixed_end_forces_partial_distributed_moment()對照sympy符號積分獨立驗證")
+print("    (數值高斯積分 vs 封閉式符號解析解, 兩條完全獨立的推導路徑) ===")
+import sympy as sp
+from frame2d.elements import fixed_end_forces_partial_distributed_moment
+
+_L, _x, _c, _d, _m0, _m1 = sp.symbols('L x c d m0 m1', real=True)
+_N1 = 1 - 3*(_x/_L)**2 + 2*(_x/_L)**3
+_N2 = _x*(1 - _x/_L)**2
+_N3 = 3*(_x/_L)**2 - 2*(_x/_L)**3
+_N4 = (_x**2/_L)*(_x/_L - 1)
+_mx = _m0 + (_m1 - _m0)*(_x - _c)/(_d - _c)
+_F1s = sp.simplify(sp.integrate(_mx * sp.diff(_N1, _x), (_x, _c, _d)))
+_F2s = sp.simplify(sp.integrate(_mx * sp.diff(_N2, _x), (_x, _c, _d)))
+_F3s = sp.simplify(sp.integrate(_mx * sp.diff(_N3, _x), (_x, _c, _d)))
+_F4s = sp.simplify(sp.integrate(_mx * sp.diff(_N4, _x), (_x, _c, _d)))
+_subs = {_L: 8.0, _c: 2.0, _d: 5.0, _m0: 3.0, _m1: 9.0}
+exact = np.array([0.0, float(_F1s.subs(_subs)), float(_F2s.subs(_subs)),
+                   0.0, float(_F3s.subs(_subs)), float(_F4s.subs(_subs))])
+numeric = fixed_end_forces_partial_distributed_moment(3.0, 9.0, 2.0, 5.0, 8.0)
+rel_err7 = np.max(np.abs(exact - numeric))
+assert rel_err7 < 1e-10, f"高斯積分應該跟sympy符號解析解精確一致, 實際最大誤差={rel_err7}"
+print(f"PASS: 符號解={exact}, 數值解={numeric}, 最大誤差={rel_err7:.2e}\n")
+
+print("=== 案例8: 退化檢查——局部段c=0,d=L, m_start=m_end=m時, 應該完全等於")
+print("    fixed_end_forces_distributed_moment(m, L) ===")
+from frame2d.elements import fixed_end_forces_distributed_moment
+full1 = fixed_end_forces_distributed_moment(7.0, 6.0)
+full2 = fixed_end_forces_partial_distributed_moment(7.0, 7.0, 0.0, 6.0, 6.0)
+assert np.allclose(full1, full2, atol=1e-10), f"退化情況應該完全一致, 實際: {full1} vs {full2}"
+print(f"PASS: 全長常數m={full1} 跟局部段退化版{full2}完全一致\n")
+
+print("PASS: frame2d partial distributed_moment所有案例通過")
+
+
+print("=== 案例9: 局部段+線性變化分布彎矩, 簡支樑反力驗證(純力偶的關鍵性質:")
+print("    反力大小只跟合力矩總量有關, 跟力偶作用在桿件哪個位置無關) ===")
+c9, d9, m0_9, m1_9 = 1.0, 3.0, 3.0, 9.0
+total_moment9 = (m0_9 + m1_9) / 2 * (d9 - c9)
+R_left_theory9 = total_moment9 / L
+R_right_theory9 = -total_moment9 / L
+
+f9 = Frame2D()
+f9.add_node(0, 0, 0)
+f9.add_node(1, L, 0)
+f9.add_section('sec', E=E, I=I, A=A)
+f9.add_member(0, node_i=0, node_j=1, section='sec')
+f9.distributed_moment(0, m=m0_9, m_end=m1_9, x_start=c9, x_end=d9)
+f9.pin(0)
+f9.roller_y(1)
+r9 = solve(f9)
+R0y9 = r9.reactions[f9.dofs_of(0)[1]]
+R1y9 = r9.reactions[f9.dofs_of(1)[1]]
+assert abs(R0y9 - R_left_theory9) < 1e-6, f"R0y應該={R_left_theory9}, 實際={R0y9}"
+assert abs(R1y9 - R_right_theory9) < 1e-6, f"R1y應該={R_right_theory9}, 實際={R1y9}"
+print(f"PASS: R0y={R0y9}(理論{R_left_theory9}), R1y={R1y9}(理論{R_right_theory9})\n")
+
+
+print("=== 案例10: 退化檢查——不給m_end/x_start/x_end時, 應該完全等同全長常數版 ===")
+f10a = Frame2D()
+f10a.add_node(0, 0, 0)
+f10a.add_node(1, L, 0)
+f10a.add_section('sec', E=E, I=I, A=A)
+f10a.add_member(0, node_i=0, node_j=1, section='sec')
+f10a.distributed_moment(0, m=m_val)
+f10a.fix(0)
+r10a = solve(f10a)
+
+f10b = Frame2D()
+f10b.add_node(0, 0, 0)
+f10b.add_node(1, L, 0)
+f10b.add_section('sec', E=E, I=I, A=A)
+f10b.add_member(0, node_i=0, node_j=1, section='sec')
+f10b.distributed_moment(0, m=m_val, m_end=m_val, x_start=0.0, x_end=L)
+f10b.fix(0)
+r10b = solve(f10b)
+assert np.allclose(r10a.displacements, r10b.displacements, atol=1e-9), "退化情況應該完全一致"
+print("PASS: 顯式指定全長常數 跟 預設(不給任何額外參數) 結果一致\n")
+
+print("PASS: frame2d 局部段+線性變化分布彎矩所有案例通過")
+
+
+print("=== 案例11: 範圍超出桿件實際長度時, 明確拒絕(不會靜默外推給錯誤答案) ===")
+f11 = Frame2D()
+f11.add_node(0, 0, 0)
+f11.add_node(1, L, 0)
+f11.add_section('sec', E=E, I=I, A=A)
+f11.add_member(0, node_i=0, node_j=1, section='sec')
+f11.distributed_moment(0, m=5.0, x_start=1.0, x_end=10.0)
+f11.pin(0)
+f11.roller_y(1)
+try:
+    solve(f11)
+    assert False, "範圍超出桿件長度應該要raise"
+except ValueError as e:
+    assert '超出桿件' in str(e)
+print("PASS: 範圍超出桿件長度正確拒絕\n")
+
+
+print("=== 案例12: 局部段+線性變化分布彎矩在Newton/co-rotational單步裡也正確生效 ===")
+from frame2d.hinge import HingeState
+from frame2d.newton import run_pushover_newton, _assemble_global, _gravity_fixed_end_forces
+from frame2d.dofmanager import initial_hinge_states
+
+
+def cantilever_for_partial_dm():
+    f = Frame2D()
+    f.add_node(0, 0, 0)
+    f.add_node(1, L, 0)
+    f.add_section('sec', E=E, I=I, A=A)
+    f.add_member(0, node_i=0, node_j=1, section='sec', Mp_i=1e30, Mp_j=1e30,
+                 R_post_yield_i=1.0, R_post_yield_j=1.0)
+    f.distributed_moment(0, m=3.0, m_end=9.0, x_start=1.0, x_end=3.0)
+    f.fix(0)
+    return f
+
+
+f12 = cantilever_for_partial_dm()
+total_moment12 = (3.0 + 9.0) / 2 * (3.0 - 1.0)
+f_ext_gravity12, _ = _gravity_fixed_end_forces(f12)
+hs12 = {0: HingeState(Mp1=1e30, Mp2=1e30, R_post_yield_1=1.0, R_post_yield_2=1.0)}
+u12, F12, ev12, hsf12, conv12, u_full12 = run_pushover_newton(
+    f12, hs12, prescribed_dofs=[f12.dofs_of(1)[0]], direction=[1.0], target_total=1e-9, d_nominal=1e-9,
+    base_reaction_dofs=[f12.dofs_of(0)[0]], tol=1e-6, include_final_displacement=True,
+    # tol刻意用1e-6, 不是1e-9: co-rotational的切線用有限差分(corotational_
+    # tangent_fd(), 不是解析導數)算, 實測發現這個局部段+線性變化的案例
+    # 殘餘力會在1e-7量級附近震盪、收斂不到1e-9(不是我這個功能本身的
+    # bug, 是有限差分切線本身固有的精度上限)——這不是計算錯誤, 是
+    # Newton疊代對"多緊算收斂"這個容許誤差要設得跟切線本身的精度匹配,
+    # 1e-6對這個模型的量級來說仍然是很緊的容許誤差。
+)
+member_ref12 = {0: (0.0, 0.0, 0.0, 0.0)}
+f_int12, _ = _assemble_global(f12, hs12, u_full12, len(u_full12), member_ref12)
+rot_dof12 = f12.dofs_of(0)[2]
+M0_newton12 = f_int12[rot_dof12] - f_ext_gravity12[rot_dof12]
+# 懸臂樑: 固定端彎矩反力應該精確等於"合力矩"(不管作用在哪個位置)取負號
+assert abs(M0_newton12 - (-total_moment12)) < 1e-6, (
+    f"Newton裡局部段+線性變化分布彎矩應該正確生效, 理論M0={-total_moment12}, 實際={M0_newton12}"
+)
+print(f"PASS: Newton M0反力={M0_newton12:.6f}(理論{-total_moment12})\n")
+
+f12b = cantilever_for_partial_dm()
+hs12b = initial_hinge_states(f12b)
+from frame2d.pushover import apply_gravity
+init_forces12b, gravity_result12b = apply_gravity(f12b, hs12b)
+M0_pushover12 = gravity_result12b.reactions[f12b.dofs_of(0)[2]]
+assert abs(M0_pushover12 - (-total_moment12)) < 1e-6, (
+    f"pushover重力預載裡局部段+線性變化分布彎矩應該正確生效, 理論M0={-total_moment12}, 實際={M0_pushover12}"
+)
+print(f"PASS: pushover重力預載 M0反力={M0_pushover12:.6f}(理論{-total_moment12})\n")
+
+print("PASS: frame2d 局部段+線性變化分布彎矩(含Newton/pushover)所有案例通過")

@@ -57,6 +57,7 @@ from .elements import (
     fixed_end_forces_partial_udl, fixed_end_forces_axial_partial_udl,
     fixed_end_forces_point_load, fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load, fixed_end_forces_distributed_moment,
+    fixed_end_forces_partial_distributed_moment,
 )
 
 
@@ -161,7 +162,18 @@ def _gravity_fixed_end_forces(frame):
                 f"勁度, 不能承受分布彎矩(理由同dofmanager.py既有檢查)。"
             )
         L = member_L[dm.member]
-        f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        m_end = dm.m if dm.m_end is None else dm.m_end
+        x_start = 0.0 if dm.x_start is None else dm.x_start
+        x_end = L if dm.x_end is None else dm.x_end
+        if x_start < -1e-6 or x_end > L + 1e-6 or x_start > x_end + 1e-9:
+            raise ValueError(
+                f"member {dm.member} 的分布彎矩範圍[{x_start},{x_end}]超出桿件"
+                f"實際長度[0,{L}], 或起點大於終點——不會靜默截斷或外推, 請檢查"
+                f"x_start/x_end。")
+        if x_start <= 1e-9 and x_end >= L - 1e-9 and dm.m_end is None:
+            f_FE_local = fixed_end_forces_distributed_moment(dm.m, L)
+        else:
+            f_FE_local = fixed_end_forces_partial_distributed_moment(dm.m, m_end, x_start, x_end, L)
         _add(dm.member, f_FE_local)
 
     for pl_m in frame.member_point_loads:

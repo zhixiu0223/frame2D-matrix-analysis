@@ -330,6 +330,34 @@ def fixed_end_forces_distributed_moment(m, L):
     return np.array([0.0, -m, 0.0, 0.0, m, 0.0])
 
 
+def fixed_end_forces_partial_distributed_moment(m_start, m_end, c, d, L):
+    """局部座標系下, 桿件內部局部段[c,d](0<=c<=d<=L, 可以不是整根桿件)
+    的均佈/線性變化分布彎矩之固定端反力(kN·m/m, 逆時針為正, 跟
+    fixed_end_forces_point_moment()的M0同一個符號慣例)。
+
+    手法跟fixed_end_forces_partial_udl()完全一致: 不手動謄寫封閉式
+    展開式(降低抄寫出錯風險), 改用高斯-勒讓德數值積分, 對已經驗證過的
+    fixed_end_forces_point_moment()在[c,d]區間積分(等於把分布彎矩拆成
+    無限多個集中力矩疊加)。c=0, d=L, m_start=m_end=m時應該退化成
+    fixed_end_forces_distributed_moment()的結果。
+
+    這條數值積分結果另外還用sympy對Hermite形狀函數做過一次獨立的
+    封閉式符號推導交叉驗證(見tests/test_distributed_moment_partial.py),
+    確認兩種完全不同的推導路徑(數值積分 vs 符號積分)給出一致的答案,
+    而且對退化情況(全長、常數m)、整體力平衡(合力=0, 合力矩=∫m(x)dx)
+    都驗證過, 不是自己驗證自己。
+    """
+    if d <= c:
+        return np.zeros(6)
+    jac = 0.5 * (d - c)
+    s_vals = jac * _GAUSS_NODES + 0.5 * (d + c)
+    f_FE = np.zeros(6)
+    for si, wi in zip(s_vals, _GAUSS_WEIGHTS):
+        m_si = m_start + (m_end - m_start) * (si - c) / (d - c)
+        f_FE += wi * jac * fixed_end_forces_point_moment(m_si, si, L)
+    return f_FE
+
+
 def fixed_end_forces_axial_point_load(P, a, L):
     """局部座標系下, 桿件內部任意位置(距node_i為a)的軸向集中力P
     (沿局部+x方向為正)之固定端反力。
