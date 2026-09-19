@@ -507,6 +507,7 @@ let model = {
   equal_dofs: [],
   point_loads: [ {node:6, fx:10000, fy:0, m:0}, {node:3, fx:15000, fy:0, m:0} ],
   distributed_loads: [],
+  distributed_moments: [],
   member_point_loads: []
 };
 
@@ -3044,6 +3045,7 @@ function _renderPropPanelInner() {
     const m = model.members.find(x => x.id === selected.id);
     const sec = model.sections.find(s => s.name === m.section);
     const dlCount = model.distributed_loads.filter(d => d.member === m.id).length;
+    const dmCount = model.distributed_moments.filter(d => d.member === m.id).length;
     const mpCount = model.member_point_loads.filter(p => p.member === m.id).length;
     panel.innerHTML = `
       <h3 style="margin:0 0 0.5rem;font-size:1rem;">桿件 M${m.id}(N${m.node_i}→N${m.node_j})</h3>
@@ -3197,6 +3199,18 @@ function _renderPropPanelInner() {
             <option value="local">局部y向(垂直於桿件本身)</option>
           </select>
           <button id="dl_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增均佈載重</button>
+        </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
+      </details>
+
+      <details class="propSection">
+        <summary>桿件分布彎矩 <span class="sectionCount">(${dmCount} 筆)</span></summary>
+        <div class="propSectionBody">
+          <p class="hint">跟均佈載重(分布"力", ${unitOf('force')}/m)不一樣, 這是分布"力矩"(${unitOf('moment')}/m, 逆時針為正, 跟下面「桿件集中力/集中彎矩」的m同一個符號慣例)——比較少見的載重類型, 目前只支援整根桿件的固定值, 不支援局部範圍或線性變化。實務上比較少見, 常見動機: 桿件截面深度方向有溫度梯度(等效成分布彎矩模擬溫度應力)、密集偏心軸力的連續近似。</p>
+          ${renderDistributedMomentList(m.id)}
+          <label>強度 m(${unitOf('moment')}/m, 逆時針為正)</label>
+          <input id="dm_m" type="number" step="any" value="0">
+          <button id="dm_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增分布彎矩</button>
         </div>
         <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
@@ -3411,6 +3425,16 @@ function _renderPropPanelInner() {
       renderPropPanel();
       render();
     };
+    document.getElementById('dm_add').onclick = () => {
+      if (m.member_type === 'truss' || m.member_type === 'cable') {
+        setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受分布彎矩(理由同均佈載重, 後端solver會直接拒絕)。`);
+        return;
+      }
+      const mVal = toSI('moment', parseFloat(document.getElementById('dm_m').value) || 0);
+      model.distributed_moments.push({member: m.id, m: mVal});
+      renderPropPanel();
+      render();
+    };
     document.getElementById('mp_add').onclick = () => {
       if (m.member_type === 'truss' || m.member_type === 'cable') {
         setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受桿件內部集中力/力矩(理由同均佈載重, 後端solver會直接拒絕)。如果要模擬桁架/纜線中間的集中力, 改成用「在桿件中間插入節點」把這根桿件拆成兩段, 在新節點上加節點集中力。`);
@@ -3461,6 +3485,18 @@ function _renderPropPanelInner() {
         setStatus('已載入這筆均佈載重到下面的表單, 改完按「新增均佈載重」套用');
       };
     });
+    model.distributed_moments.filter(d => d.member === m.id).forEach((d, i) => {
+      const btn = document.getElementById('dm_del_' + i);
+      if (btn) btn.onclick = () => { model.distributed_moments = model.distributed_moments.filter(x => x !== d); renderPropPanel(); render(); };
+      const editBtn = document.getElementById('dm_edit_' + i);
+      if (editBtn) editBtn.onclick = () => {
+        document.getElementById('dm_m').value = fromSI('moment', d.m);
+        model.distributed_moments = model.distributed_moments.filter(x => x !== d);
+        renderPropPanel();
+        render();
+        setStatus('已載入這筆分布彎矩到下面的表單, 改完按「新增分布彎矩」套用');
+      };
+    });
     model.member_point_loads.filter(p => p.member === m.id).forEach((p, i) => {
       const btn = document.getElementById('mp_del_' + i);
       if (btn) btn.onclick = () => { model.member_point_loads = model.member_point_loads.filter(x => x !== p); renderPropPanel(); render(); };
@@ -3494,6 +3530,16 @@ function renderDistLoadList(memberId) {
     list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${fromSI('force', d.w_start).toFixed(2)}</td><td>${fromSI('force', d.w_end ?? d.w_start).toFixed(2)}</td><td>${distLoadDirLabel(d)}</td>
       <td><button id="dl_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
       <td><button id="dl_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
+    '</tbody></table>';
+}
+function renderDistributedMomentList(memberId) {
+  const list = model.distributed_moments.filter(d => d.member === memberId);
+  if (!list.length) return '<p class="hint">目前沒有分布彎矩。</p>';
+  const mu = unitOf('moment');
+  return `<table><thead><tr><th>m(${mu}/m)</th><th></th><th></th></tr></thead><tbody>` +
+    list.map((d, i) => `<tr><td>${fromSI('moment', d.m).toFixed(2)}</td>
+      <td><button id="dm_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
+      <td><button id="dm_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
     '</tbody></table>';
 }
 function renderMemberPointLoadList(memberId) {
@@ -4351,7 +4397,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('新建會清空目前畫布內容(未儲存的修改會遺失),確定繼續?')) return;
   model = {
     nodes: [], sections: [{name: 'sec', E: 200e9, I: 1e-4, A: 0.01}],
-    members: [], supports: [], equal_dofs: [], point_loads: [], distributed_loads: [], member_point_loads: []
+    members: [], supports: [], equal_dofs: [], point_loads: [], distributed_loads: [], distributed_moments: [], member_point_loads: []
   };
   lastResult = null;
   currentName = null;

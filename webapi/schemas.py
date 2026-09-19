@@ -86,6 +86,16 @@ class DistributedLoadIn(BaseModel):
     angle_deg: Optional[float] = None
 
 
+class DistributedMomentIn(BaseModel):
+    """跟frame2d.model.DistributedMoment對應——見Frame2D.
+    distributed_moment()的說明, 桿件全長均佈的分布彎矩(kN·m/m, 逆
+    時針為正, 跟member_point_load()的m參數同一個符號慣例)。目前只
+    支援整根桿件的常數m, 不支援線性變化或局部段(比DistributedLoadIn
+    簡化很多, 是刻意先做最常見/最基本的情況)。"""
+    member: int
+    m: float
+
+
 class MemberPointLoadIn(BaseModel):
     member: int
     a: float
@@ -106,6 +116,7 @@ class FrameIn(BaseModel):
     equal_dofs: List[EqualDofIn] = Field(default_factory=list)
     point_loads: List[PointLoadIn] = Field(default_factory=list)
     distributed_loads: List[DistributedLoadIn] = Field(default_factory=list)
+    distributed_moments: List[DistributedMomentIn] = Field(default_factory=list)
     member_point_loads: List[MemberPointLoadIn] = Field(default_factory=list)
     units: Optional[dict] = None
     """匯出PDF/報告時, 前端目前「顯示設定」裡選的單位(E/I/A/disp/

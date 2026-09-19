@@ -65,6 +65,8 @@ def _build_frame(payload: FrameIn) -> Frame2D:
         f.distributed_load(dl.member, w=dl.w_start, w_end=dl.w_end,
                             x_start=dl.x_start, x_end=dl.x_end,
                             direction=dl.direction, angle_deg=dl.angle_deg)
+    for dm in payload.distributed_moments:
+        f.distributed_moment(dm.member, m=dm.m)
     for mpl in payload.member_point_loads:
         f.member_point_load(mpl.member, a=mpl.a, fx=mpl.fx, fy=mpl.fy, m=mpl.m,
                              direction=mpl.direction, F=mpl.F, angle_deg=mpl.angle_deg)
