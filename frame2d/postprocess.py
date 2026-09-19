@@ -154,6 +154,11 @@ def member_internal_forces(frame, result, member_id, n=21):
             extra += [max(0.0, pl.a - eps), min(L, pl.a + eps)]
     for _, _, c, d in ranges:
         extra += [max(0.0, c - eps), min(L, c + eps), max(0.0, d - eps), min(L, d + eps)]
+    for dm in frame.distributed_moments:
+        if dm.member == member_id:
+            c = 0.0 if dm.x_start is None else dm.x_start
+            d = L if dm.x_end is None else dm.x_end
+            extra += [max(0.0, c - eps), min(L, c + eps), max(0.0, d - eps), min(L, d + eps)]
     if extra:
         x = np.unique(np.concatenate([x, extra]))
 
@@ -170,7 +175,28 @@ def member_internal_forces(frame, result, member_id, n=21):
         W += _partial_load_W(w_start, w_end, c, d, x)
         Mcum += _partial_load_M(w_start, w_end, c, d, x)
     V = Fy1 + W
-    M = -M1 + Fy1 * x + Mcum
+
+    # 分布彎矩(kN·m/m)對V(x)沒有直接貢獻(純力偶不產生淨側向力, 標準樑
+    # 理論: 點力偶只讓M(x)在該處出現跳躍, 不影響V(x)——這是之前完全
+    # 沒有處理的真實bug: 使用者實際發現分布彎矩不管放在桿件哪個位置、
+    # 是均佈還是梯形, M圖看起來都一樣(只是一條端點連線的直線), 因為
+    # 這裡完全沒有把frame.distributed_moments納入計算, 只更新了兩端
+    # 節點的整體反力/端點彎矩(那個部分是對的, solve()算出來的反力
+    # 沒有錯), 但M(x)在桿件內部完全沒有反映分布彎矩實際造成的局部
+    # 彎矩變化。dM(x)/dx = m(x)(分布彎矩直接貢獻M(x)的斜率, 不像分布
+    # 力那樣要先累積成V(x)才能算M(x)的斜率, 所以直接用_partial_load_W
+    # (單重積分)就是m(x)的累積量, 不需要_partial_load_M那種雙重積分)。
+    # 符號用懸臂樑案例(m=10全長, 固定端反力矩-40、自由端M=0)驗證過:
+    # 減號才對得上(M(x)應該從40線性降到0, 不是保持常數), 見
+    # tests/test_distributed_moment.py。
+    dms = [dm for dm in frame.distributed_moments if dm.member == member_id]
+    Mcum_moment = np.zeros_like(x)
+    for dm in dms:
+        c = 0.0 if dm.x_start is None else dm.x_start
+        d = L if dm.x_end is None else dm.x_end
+        m_end = dm.m if dm.m_end is None else dm.m_end
+        Mcum_moment += _partial_load_W(dm.m, m_end, c, d, x)
+    M = -M1 + Fy1 * x + Mcum - Mcum_moment
 
     for pl in frame.member_point_loads:
         if pl.member != member_id:

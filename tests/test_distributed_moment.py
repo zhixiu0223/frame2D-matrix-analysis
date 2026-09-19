@@ -306,3 +306,89 @@ assert abs(M0_pushover12 - (-total_moment12)) < 1e-6, (
 print(f"PASS: pushover重力預載 M0反力={M0_pushover12:.6f}(理論{-total_moment12})\n")
 
 print("PASS: frame2d 局部段+線性變化分布彎矩(含Newton/pushover)所有案例通過")
+
+
+print("=== 案例13: M(x)在桿件內部正確反映分布彎矩造成的局部變化(不是只看")
+print("    端點值連成一條直線)——這是實際使用者用M圖截圖發現、回報的真實bug:")
+print("    member_internal_forces()完全沒有把distributed_moments納入計算,")
+print("    只有兩端節點反力/端點彎矩是對的, 桿件內部的M(x)完全沒反映分布")
+print("    彎矩的局部效應(不管放在哪裡、是均佈還是梯形, M圖看起來都一樣) ===")
+from frame2d.postprocess import member_internal_forces
+
+L13 = 8.0
+c13, d13, m0_13, m1_13 = 2.5, 4.0, 2.0, 3.0
+f13 = Frame2D()
+f13.add_node(0, 0, 0)
+f13.add_node(1, L13, 0)
+f13.add_section('sec', E=E, I=I, A=A)
+f13.add_member(0, node_i=0, node_j=1, section='sec')
+f13.distributed_moment(0, m=m0_13, m_end=m1_13, x_start=c13, x_end=d13)
+f13.pin(0)
+f13.roller_y(1)
+r13 = solve(f13)
+x13, N13, V13, M13 = member_internal_forces(f13, r13, 0, n=25)
+
+# 獨立驗證1: 分布彎矩範圍前後M(x)應該是直線(斜率=反力大小, 不受分布
+# 彎矩的"形狀"影響, 只受它的"總量"透過反力間接影響)——用範圍前兩個點
+# 的斜率去外插到x=0, 應該等於M(0)。
+before_mask = x13 < c13 - 1e-9
+after_mask = x13 > d13 + 1e-9
+x_before, M_before = x13[before_mask], M13[before_mask]
+x_after, M_after = x13[after_mask], M13[after_mask]
+slope_before = np.polyfit(x_before, M_before, 1)[0]
+slope_after = np.polyfit(x_after, M_after, 1)[0]
+resid_before = M_before - np.polyval(np.polyfit(x_before, M_before, 1), x_before)
+resid_after = M_after - np.polyval(np.polyfit(x_after, M_after, 1), x_after)
+assert np.max(np.abs(resid_before)) < 1e-8, "分布彎矩範圍前, M(x)應該是精確直線"
+assert np.max(np.abs(resid_after)) < 1e-8, "分布彎矩範圍後, M(x)應該是精確直線"
+print(f"PASS: 分布彎矩範圍前後M(x)都是精確直線(殘差<1e-8), 斜率分別={slope_before:.4f}, {slope_after:.4f}\n")
+
+# 獨立驗證2: 跨越分布彎矩範圍[c,d]前後, M(x)的"落差"應該精確等於
+# Fy1*(d-c) - ∫[c,d]m(x')dx'(前者是剪力/反力對這段長度的線性貢獻,
+# 後者是分布彎矩本身的合力矩, 梯形公式, m線性變化的精確解)——一開始
+# 漏算了Fy1*(d-c)這一項(簡支樑受純力偶會產生剪力反力, V(x)不是0,
+# 是常數=支承反力, 這裡也一併驗證), 這是純粹幾何/微積分的關係, 不
+# 依賴這條公式本身怎麼實作。
+M_at_c = np.interp(c13, x13, M13)
+M_at_d = np.interp(d13, x13, M13)
+Fy1_13 = V13[0]   # 簡支樑受純力偶, V(x)應該全程是常數=左支承反力
+total_moment13 = (m0_13 + m1_13) / 2 * (d13 - c13)
+expected_drop = Fy1_13 * (d13 - c13) - total_moment13
+actual_drop = M_at_d - M_at_c
+# 容許誤差用1e-4不是1e-6: M(x)在[c,d]範圍內是二次曲線(m線性變化的
+# 累積), 這裡用np.interp在c/d的eps鄰近點(見member_internal_forces()
+# 的extra取樣點)做線性內插取值, 對二次曲線的線性內插本來就會有跟
+# eps同量級的殘留誤差, 不是物理計算本身不精確。
+assert abs(actual_drop - expected_drop) < 1e-4, (
+    f"M(x)跨越分布彎矩範圍的落差應該精確等於Fy1*(d-c)-合力矩, 理論={expected_drop}, 實際={actual_drop}"
+)
+print(f"PASS: M(c)={M_at_c:.4f}, M(d)={M_at_d:.4f}, 落差={actual_drop:.4f}(理論{expected_drop:.4f})\n")
+
+# 獨立驗證3: 簡支樑受純力偶(沒有其他分布力), V(x)應該全程是常數,
+# 精確等於支承反力(純力偶用"力偶等效成兩端支承反力"這個關鍵性質,
+# 這裡直接拿反力去對照V(x))。
+R0_13 = r13.reactions[f13.dofs_of(0)[1]]
+assert np.max(np.abs(V13 - R0_13)) < 1e-8, (
+    f"簡支樑受純力偶時V(x)應該全程等於支承反力{R0_13}, 實際V(x)範圍=[{V13.min()},{V13.max()}]"
+)
+print(f"PASS: V(x)全程={V13[0]:.6f}(精確等於支承反力{R0_13:.6f})\n")
+
+print("=== 案例14: 全長常數分布彎矩的懸臂樑, M(x)應該是精確直線(斜率=m) ===")
+f14 = Frame2D()
+f14.add_node(0, 0, 0)
+f14.add_node(1, L, 0)
+f14.add_section('sec', E=E, I=I, A=A)
+f14.add_member(0, node_i=0, node_j=1, section='sec')
+f14.distributed_moment(0, m=m_val)
+f14.fix(0)
+r14 = solve(f14)
+x14, N14, V14, M14 = member_internal_forces(f14, r14, 0, n=9)
+# 理論: M(0)應該等於固定端反力矩的相反數(=+m*L, 跟_partial_load_W在
+# 全長時累積到m*L、用減號扣掉一致), M(L)=0(自由端), 中間線性內插:
+# M(x) = m*L - m*x = m*(L-x)。
+theory_M14 = m_val * (L - x14)
+assert np.max(np.abs(M14 - theory_M14)) < 1e-6, f"全長常數分布彎矩M(x)應該精確線性, 實際={M14}, 理論={theory_M14}"
+assert np.max(np.abs(V14)) < 1e-8, "V(x)應該全程接近0(懸臂樑受純力偶, 固定端只提供彎矩反力, 不提供剪力反力)"
+print(f"PASS: M(x)={M14}\n     理論={theory_M14}\n")
+
+print("PASS: frame2d M(x)內部彎矩圖正確反映分布彎矩局部效應, 所有案例通過")
