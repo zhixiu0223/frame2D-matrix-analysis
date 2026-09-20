@@ -1804,8 +1804,18 @@ function drawSupports(t) {
       hatch(x+20, y-8, 0, 5.3, 3, 8).forEach(put);
     } else {
       put(el('rect', {x: x-6, y: y+4, width: 12, height: 12, fill: 'none', stroke: '#9333ea', 'stroke-width': 2, transform: `rotate(45 ${x} ${y+10})`}));
+      // 之前這裡只標「自訂支承」四個字, 沒有顯示實際的沉陷/強制位移
+      // 數值——跟外力(均佈載重、分布彎矩等)都會直接把數值標在圖示
+      // 旁邊不一樣, 使用者要另外點開節點面板才看得到到底設定了多少,
+      // 不容易一眼看出「這裡到底發生了什麼事」。改成把有設定的方向
+      // 數值直接列出來(跟其餘外力載重一致, 用disp單位換算, 不是
+      // 寫死公尺), 沒設定的方向(null=自由)不列出來。
+      const parts = [];
+      if (s.ux !== null && s.ux !== undefined) parts.push(`ux=${fromSI('disp', s.ux).toFixed(2)}${unitOf('disp')}`);
+      if (s.uy !== null && s.uy !== undefined) parts.push(`uy=${fromSI('disp', s.uy).toFixed(2)}${unitOf('disp')}`);
+      if (s.rot !== null && s.rot !== undefined) parts.push(`rot=${s.rot.toFixed(4)}rad`);
       const lbl = el('text', {x: x+12, y: y+18, 'font-size': 9, fill: '#9333ea'});
-      lbl.textContent = '自訂支承';
+      lbl.textContent = '自訂支承 ' + parts.join(' ');
       put(lbl);
     }
   }
@@ -3148,10 +3158,10 @@ function _renderPropPanelInner() {
           <option value="custom" ${kind==='custom'?'selected':''}>✎ 自訂位移(沉陷/斜支承)</option>
         </select>
         <div id="p_sup_custom" style="display:${kind==='custom'?'block':'none'};">
-          <p class="hint">每個方向留空=該方向自由(不受支承限制), 填數值(含0)=該方向被強制固定在這個位移——0.0=固定在原位, 非0=支座沉陷/強制位移。ux/uy單位是m, rot是徑度(rad)。</p>
+          <p class="hint">每個方向留空=該方向自由(不受支承限制), 填數值(含0)=該方向被強制固定在這個位移——0.0=固定在原位, 非0=支座沉陷/強制位移。ux/uy單位跟顯示設定的位移單位一致, rot是徑度(rad)。</p>
           <div class="row3">
-            <div><label>ux(m)</label><input id="p_sup_ux" type="number" step="any" value="${sup && sup.ux !== null && sup.ux !== undefined ? sup.ux : ''}" placeholder="留空=自由"></div>
-            <div><label>uy(m)</label><input id="p_sup_uy" type="number" step="any" value="${sup && sup.uy !== null && sup.uy !== undefined ? sup.uy : ''}" placeholder="留空=自由"></div>
+            <div><label>ux(${unitOf('disp')})</label><input id="p_sup_ux" type="number" step="any" value="${sup && sup.ux !== null && sup.ux !== undefined ? fromSI('disp', sup.ux) : ''}" placeholder="留空=自由"></div>
+            <div><label>uy(${unitOf('disp')})</label><input id="p_sup_uy" type="number" step="any" value="${sup && sup.uy !== null && sup.uy !== undefined ? fromSI('disp', sup.uy) : ''}" placeholder="留空=自由"></div>
             <div><label>rot(rad)</label><input id="p_sup_rot" type="number" step="any" value="${sup && sup.rot !== null && sup.rot !== undefined ? sup.rot : ''}" placeholder="留空=自由"></div>
           </div>
         </div>
@@ -3184,8 +3194,8 @@ function _renderPropPanelInner() {
         const uxRaw = document.getElementById('p_sup_ux').value;
         const uyRaw = document.getElementById('p_sup_uy').value;
         const rotRaw = document.getElementById('p_sup_rot').value;
-        const ux = uxRaw === '' ? null : parseFloat(uxRaw);
-        const uy = uyRaw === '' ? null : parseFloat(uyRaw);
+        const ux = uxRaw === '' ? null : toSI('disp', parseFloat(uxRaw));
+        const uy = uyRaw === '' ? null : toSI('disp', parseFloat(uyRaw));
         const rot = rotRaw === '' ? null : parseFloat(rotRaw);
         if (ux !== null || uy !== null || rot !== null) {
           model.supports.push({node: n.id, ux, uy, rot});
