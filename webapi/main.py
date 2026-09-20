@@ -49,7 +49,7 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     for n in payload.nodes:
         f.add_node(n.id, n.x, n.y)
     for s in payload.sections:
-        f.add_section(s.name, E=s.E, I=s.I, A=s.A)
+        f.add_section(s.name, E=s.E, I=s.I, A=s.A, alpha=s.alpha, depth=s.depth)
     for m in payload.members:
         f.add_member(m.id, node_i=m.node_i, node_j=m.node_j, section=m.section,
                      member_type=m.member_type, release_i=m.release_i, release_j=m.release_j,
@@ -67,6 +67,9 @@ def _build_frame(payload: FrameIn) -> Frame2D:
                             direction=dl.direction, angle_deg=dl.angle_deg)
     for dm in payload.distributed_moments:
         f.distributed_moment(dm.member, m=dm.m, m_end=dm.m_end, x_start=dm.x_start, x_end=dm.x_end)
+    for tl in payload.thermal_loads:
+        f.thermal_load(tl.member, delta_T=tl.delta_T, delta_T_top=tl.delta_T_top,
+                        delta_T_bottom=tl.delta_T_bottom)
     for mpl in payload.member_point_loads:
         f.member_point_load(mpl.member, a=mpl.a, fx=mpl.fx, fy=mpl.fy, m=mpl.m,
                              direction=mpl.direction, F=mpl.F, angle_deg=mpl.angle_deg)

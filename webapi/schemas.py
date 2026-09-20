@@ -18,6 +18,10 @@ class SectionIn(BaseModel):
     E: float
     I: float
     A: float = 1e8
+    alpha: Optional[float] = None   # 熱膨脹係數(1/°C或1/K), 只有thermal_loads
+                                     # 要用到才需要填
+    depth: Optional[float] = None   # 截面深度(m), 只有溫度梯度(彎曲熱效應)
+                                     # 才需要填
 
 
 class MemberIn(BaseModel):
@@ -101,6 +105,18 @@ class DistributedMomentIn(BaseModel):
     x_end: Optional[float] = None
 
 
+class ThermalLoadIn(BaseModel):
+    """跟frame2d.model.ThermalLoad對應——見Frame2D.thermal_load()的
+    說明, 桿件的溫度效應載重: delta_T(均勻溫度變化, 軸向熱效應, 需要
+    斷面設定alpha)、delta_T_top/delta_T_bottom(截面頂/底溫度變化,
+    彎曲熱效應, 兩者不同時才有效果, 需要斷面同時設定alpha跟depth)。
+    這兩個分量各自獨立, 可以只給其中一個。"""
+    member: int
+    delta_T: float = 0.0
+    delta_T_top: Optional[float] = None
+    delta_T_bottom: Optional[float] = None
+
+
 class MemberPointLoadIn(BaseModel):
     member: int
     a: float
@@ -122,6 +138,7 @@ class FrameIn(BaseModel):
     point_loads: List[PointLoadIn] = Field(default_factory=list)
     distributed_loads: List[DistributedLoadIn] = Field(default_factory=list)
     distributed_moments: List[DistributedMomentIn] = Field(default_factory=list)
+    thermal_loads: List[ThermalLoadIn] = Field(default_factory=list)
     member_point_loads: List[MemberPointLoadIn] = Field(default_factory=list)
     units: Optional[dict] = None
     """匯出PDF/報告時, 前端目前「顯示設定」裡選的單位(E/I/A/disp/

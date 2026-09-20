@@ -508,6 +508,7 @@ let model = {
   point_loads: [ {node:6, fx:10000, fy:0, m:0}, {node:3, fx:15000, fy:0, m:0} ],
   distributed_loads: [],
   distributed_moments: [],
+  thermal_loads: [],
   member_point_loads: []
 };
 
@@ -1758,10 +1759,15 @@ function supportKind(s) {
   const hasUx = s.ux !== null && s.ux !== undefined;
   const hasUy = s.uy !== null && s.uy !== undefined;
   const hasRot = s.rot !== null && s.rot !== undefined;
-  if (hasUx && hasUy && hasRot) return 'fixed';
-  if (hasUx && hasUy && !hasRot) return 'pin';
-  if (hasUy && !hasUx && !hasRot) return 'roller_y';
-  if (hasUx && !hasUy && !hasRot) return 'roller_x';
+  // 之前這裡只看"這個方向有沒有被設定"(null vs 非null), 沒有看實際
+  // 數值——一個非0的沉陷值(例如uy=-0.02)剛好符合"有ux、有uy、沒有rot"
+  // 這個null-presence pattern, 會被誤判成"鉸支承", 導致重新打開節點
+  // 面板時看不到沉陷數值、下拉選單也選錯選項。改成同時檢查數值是否
+  // 精確等於0.0, 不是0的一律歸類成'custom'。
+  if (hasUx && hasUy && hasRot && s.ux === 0.0 && s.uy === 0.0 && s.rot === 0.0) return 'fixed';
+  if (hasUx && hasUy && !hasRot && s.ux === 0.0 && s.uy === 0.0) return 'pin';
+  if (hasUy && !hasUx && !hasRot && s.uy === 0.0) return 'roller_y';
+  if (hasUx && !hasUy && !hasRot && s.ux === 0.0) return 'roller_x';
   return 'custom';
 }
 function hatch(x0, y0, dx, dy, n, len) {
@@ -2475,6 +2481,11 @@ function renderSectionManager() {
             <div><label>I(${iu})</label><input id="sm_I_${i}" type="number" step="any" value="${fromSI('I', s.I)}"></div>
             <div><label>A(${au})</label><input id="sm_A_${i}" type="number" step="any" value="${fromSI('A', s.A)}"></div>
           </div>
+          <p class="hint" style="margin-top:0.3rem;">以下兩個只有用到溫度效應載重(thermal_load)才需要填, 其他分析用不到。</p>
+          <div class="row2">
+            <div><label>α熱膨脹係數(1/°C)</label><input id="sm_alpha_${i}" type="number" step="any" value="${s.alpha ?? ''}" placeholder="留空=不能用溫度效應"></div>
+            <div><label>截面深度(m)</label><input id="sm_depth_${i}" type="number" step="any" value="${s.depth ?? ''}" placeholder="只有溫度梯度才需要"></div>
+          </div>
           <div class="row2" style="margin-top:0.3rem;">
             <button data-idx="${i}" class="sm_apply" style="background:#16a34a;color:white;">套用這個斷面的修改</button>
             <button data-idx="${i}" class="sm_delete" style="background:#dc2626;color:white;" ${useCount > 0 ? 'disabled title="還有桿件在用這個斷面, 不能刪"' : ''}>${useCount > 0 ? '刪除(還有桿件在用)' : '刪除'}</button>
@@ -2495,6 +2506,11 @@ function renderSectionManager() {
           <input id="sm_new_E" type="number" step="any" placeholder="E(${eu})">
           <input id="sm_new_I" type="number" step="any" placeholder="I(${iu})">
           <input id="sm_new_A" type="number" step="any" placeholder="A(${au})">
+        </div>
+        <p class="hint">以下兩個只有用到溫度效應載重才需要填(選填)。</p>
+        <div class="row2">
+          <input id="sm_new_alpha" type="number" step="any" placeholder="α熱膨脹係數(1/°C, 選填)">
+          <input id="sm_new_depth" type="number" step="any" placeholder="截面深度(m, 選填)">
         </div>
         <button id="sm_new_add" style="width:100%;margin-top:0.4rem;background:#7c3aed;color:white;">➕ 新增斷面</button>
         <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
@@ -2518,6 +2534,10 @@ function renderSectionManager() {
       s.E = toSI('E', parseFloat(document.getElementById('sm_E_' + i).value));
       s.I = toSI('I', parseFloat(document.getElementById('sm_I_' + i).value));
       s.A = toSI('A', parseFloat(document.getElementById('sm_A_' + i).value));
+      const alphaRaw = document.getElementById('sm_alpha_' + i).value;
+      const depthRaw = document.getElementById('sm_depth_' + i).value;
+      s.alpha = alphaRaw === '' ? null : parseFloat(alphaRaw);
+      s.depth = depthRaw === '' ? null : parseFloat(depthRaw);
       if (oldName !== newName) {
         for (const m of model.members) if (m.section === oldName) m.section = newName;
       }
@@ -2550,8 +2570,12 @@ function renderSectionManager() {
     const iRaw = document.getElementById('sm_new_I').value;
     const aRaw = document.getElementById('sm_new_A').value;
     if (eRaw === '' || iRaw === '' || aRaw === '') { setStatus('新斷面的 E/I/A 都要填'); return; }
+    const alphaRaw = document.getElementById('sm_new_alpha').value;
+    const depthRaw = document.getElementById('sm_new_depth').value;
     model.sections.push({
       name, E: toSI('E', parseFloat(eRaw)), I: toSI('I', parseFloat(iRaw)), A: toSI('A', parseFloat(aRaw)),
+      alpha: alphaRaw === '' ? null : parseFloat(alphaRaw),
+      depth: depthRaw === '' ? null : parseFloat(depthRaw),
     });
     setStatus('已新增斷面 "' + name + '"');
     renderSectionManager();
@@ -3121,7 +3145,16 @@ function _renderPropPanelInner() {
           <option value="fixed" ${kind==='fixed'?'selected':''}>▦ 固定支承(ux=uy=rot=0)</option>
           <option value="roller_y" ${kind==='roller_y'?'selected':''}>◎↕ 滾支承-擋垂直(uy=0)</option>
           <option value="roller_x" ${kind==='roller_x'?'selected':''}>◎↔ 滾支承-擋水平(ux=0)</option>
+          <option value="custom" ${kind==='custom'?'selected':''}>✎ 自訂位移(沉陷/斜支承)</option>
         </select>
+        <div id="p_sup_custom" style="display:${kind==='custom'?'block':'none'};">
+          <p class="hint">每個方向留空=該方向自由(不受支承限制), 填數值(含0)=該方向被強制固定在這個位移——0.0=固定在原位, 非0=支座沉陷/強制位移。ux/uy單位是m, rot是徑度(rad)。</p>
+          <div class="row3">
+            <div><label>ux(m)</label><input id="p_sup_ux" type="number" step="any" value="${sup && sup.ux !== null && sup.ux !== undefined ? sup.ux : ''}" placeholder="留空=自由"></div>
+            <div><label>uy(m)</label><input id="p_sup_uy" type="number" step="any" value="${sup && sup.uy !== null && sup.uy !== undefined ? sup.uy : ''}" placeholder="留空=自由"></div>
+            <div><label>rot(rad)</label><input id="p_sup_rot" type="number" step="any" value="${sup && sup.rot !== null && sup.rot !== undefined ? sup.rot : ''}" placeholder="留空=自由"></div>
+          </div>
+        </div>
         <label>集中力 fx / fy (${unitOf('force')}) / m (${unitOf('moment')})</label>
         <div class="row3">
           <input id="p_fx" type="number" step="any" value="${pl ? fromSI('force', pl.fx) : 0}">
@@ -3135,6 +3168,9 @@ function _renderPropPanelInner() {
         </div>
       </fieldset>`;
     document.getElementById('p_cancel').onclick = clearSelection;
+    document.getElementById('p_sup').addEventListener('change', (e) => {
+      document.getElementById('p_sup_custom').style.display = e.target.value === 'custom' ? 'block' : 'none';
+    });
     document.getElementById('p_apply').onclick = () => {
       n.x = parseFloat(document.getElementById('p_x').value);
       n.y = parseFloat(document.getElementById('p_y').value);
@@ -3144,6 +3180,17 @@ function _renderPropPanelInner() {
       if (supVal === 'fixed') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: 0.0});
       if (supVal === 'roller_y') model.supports.push({node: n.id, ux: null, uy: 0.0, rot: null});
       if (supVal === 'roller_x') model.supports.push({node: n.id, ux: 0.0, uy: null, rot: null});
+      if (supVal === 'custom') {
+        const uxRaw = document.getElementById('p_sup_ux').value;
+        const uyRaw = document.getElementById('p_sup_uy').value;
+        const rotRaw = document.getElementById('p_sup_rot').value;
+        const ux = uxRaw === '' ? null : parseFloat(uxRaw);
+        const uy = uyRaw === '' ? null : parseFloat(uyRaw);
+        const rot = rotRaw === '' ? null : parseFloat(rotRaw);
+        if (ux !== null || uy !== null || rot !== null) {
+          model.supports.push({node: n.id, ux, uy, rot});
+        }
+      }
       const fx = toSI('force', parseFloat(document.getElementById('p_fx').value) || 0);
       const fy = toSI('force', parseFloat(document.getElementById('p_fy').value) || 0);
       const fm = toSI('moment', parseFloat(document.getElementById('p_fm').value) || 0);
@@ -3163,6 +3210,7 @@ function _renderPropPanelInner() {
     const sec = model.sections.find(s => s.name === m.section);
     const dlCount = model.distributed_loads.filter(d => d.member === m.id).length;
     const dmCount = model.distributed_moments.filter(d => d.member === m.id).length;
+    const thCount = model.thermal_loads.filter(d => d.member === m.id).length;
     const mpCount = model.member_point_loads.filter(p => p.member === m.id).length;
     panel.innerHTML = `
       <h3 style="margin:0 0 0.5rem;font-size:1rem;">桿件 M${m.id}(N${m.node_i}→N${m.node_j})</h3>
@@ -3336,6 +3384,23 @@ function _renderPropPanelInner() {
             <input id="dm_m2" type="number" step="any" placeholder="留空同m1">
           </div>
           <button id="dm_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增分布彎矩</button>
+        </div>
+        <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
+      </details>
+
+      <details class="propSection">
+        <summary>桿件溫度載重 <span class="sectionCount">(${thCount} 筆)</span></summary>
+        <div class="propSectionBody">
+          <p class="hint">分成軸向(均勻溫度變化, 需要斷面設定α)、彎曲(截面頂/底溫度變化, 兩者不同時才有效果, 需要斷面同時設定α跟截面深度)兩個獨立分量, 可以只給其中一個。常見動機: 日曬/背陰面溫差、季節溫度變化、火害後溫度分佈評估。</p>
+          ${renderThermalLoadList(m.id)}
+          <label>ΔT 均勻溫度變化(°C或K, 升溫為正)</label>
+          <input id="th_dT" type="number" step="any" value="0">
+          <label>ΔT 頂/底溫度變化(°C或K, 兩者不同才有彎曲效應, 留空=不設定)</label>
+          <div class="row2">
+            <input id="th_dT_top" type="number" step="any" placeholder="頂部, 留空=不設定">
+            <input id="th_dT_bottom" type="number" step="any" placeholder="底部, 留空=不設定">
+          </div>
+          <button id="th_add" style="width:100%;margin-top:0.5rem;background:#16a34a;color:white;">➕ 新增溫度載重</button>
         </div>
         <button style="width:100%;margin-top:0.6rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
       </details>
@@ -3566,6 +3631,28 @@ function _renderPropPanelInner() {
       renderPropPanel();
       render();
     };
+    document.getElementById('th_add').onclick = () => {
+      const dT = parseFloat(document.getElementById('th_dT').value) || 0;
+      const topRaw = document.getElementById('th_dT_top').value;
+      const bottomRaw = document.getElementById('th_dT_bottom').value;
+      const top = topRaw === '' ? null : parseFloat(topRaw);
+      const bottom = bottomRaw === '' ? null : parseFloat(bottomRaw);
+      if (dT === 0 && top === null && bottom === null) {
+        setStatus('至少要填ΔT, 或頂/底溫度變化其中之一, 不然這個溫度載重沒有任何效果。');
+        return;
+      }
+      // 溫度梯度(頂/底不同)才需要彎曲勁度, truss/cable只能承受均勻
+      // 溫度變化(軸向), 理由同分布彎矩的既有檢查——這裡只在真的有梯度
+      // 時才擋, 純軸向溫度變化即使是truss也可以用。
+      if ((m.member_type === 'truss' || m.member_type === 'cable') &&
+          top !== null && bottom !== null && top !== bottom) {
+        setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受溫度梯度造成的彎曲熱效應(均勻溫度變化ΔT則不受此限制, 後端solver會直接拒絕梯度部分)。`);
+        return;
+      }
+      model.thermal_loads.push({member: m.id, delta_T: dT, delta_T_top: top, delta_T_bottom: bottom});
+      renderPropPanel();
+      render();
+    };
     document.getElementById('mp_add').onclick = () => {
       if (m.member_type === 'truss' || m.member_type === 'cable') {
         setStatus(`M${m.id} 是${m.member_type}元素, 兩端本來就是鉸接、沒有彎曲勁度, 不能承受桿件內部集中力/力矩(理由同均佈載重, 後端solver會直接拒絕)。如果要模擬桁架/纜線中間的集中力, 改成用「在桿件中間插入節點」把這根桿件拆成兩段, 在新節點上加節點集中力。`);
@@ -3641,6 +3728,21 @@ function _renderPropPanelInner() {
         setStatus('已載入這筆分布彎矩到下面的表單, 改完按「新增分布彎矩」套用');
       };
     });
+    model.thermal_loads.filter(d => d.member === m.id).forEach((d, i) => {
+      const btn = document.getElementById('th_del_' + i);
+      if (btn) btn.onclick = () => { model.thermal_loads = model.thermal_loads.filter(x => x !== d); renderPropPanel(); render(); };
+      const editBtn = document.getElementById('th_edit_' + i);
+      if (editBtn) editBtn.onclick = () => {
+        // 先renderPropPanel()再設定欄位值, 理由同dm_edit/dl_edit。
+        model.thermal_loads = model.thermal_loads.filter(x => x !== d);
+        renderPropPanel();
+        render();
+        document.getElementById('th_dT').value = d.delta_T || 0;
+        document.getElementById('th_dT_top').value = d.delta_T_top ?? '';
+        document.getElementById('th_dT_bottom').value = d.delta_T_bottom ?? '';
+        setStatus('已載入這筆溫度載重到下面的表單, 改完按「新增溫度載重」套用');
+      };
+    });
     model.member_point_loads.filter(p => p.member === m.id).forEach((p, i) => {
       const btn = document.getElementById('mp_del_' + i);
       if (btn) btn.onclick = () => { model.member_point_loads = model.member_point_loads.filter(x => x !== p); renderPropPanel(); render(); };
@@ -3684,6 +3786,15 @@ function renderDistributedMomentList(memberId) {
     list.map((d, i) => `<tr><td>${d.x_start ?? 0}~${d.x_end ?? 'L'}</td><td>${fromSI('moment', d.m).toFixed(2)}</td><td>${fromSI('moment', d.m_end ?? d.m).toFixed(2)}</td>
       <td><button id="dm_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
       <td><button id="dm_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
+    '</tbody></table>';
+}
+function renderThermalLoadList(memberId) {
+  const list = model.thermal_loads.filter(d => d.member === memberId);
+  if (!list.length) return '<p class="hint">目前沒有溫度載重。</p>';
+  return `<table><thead><tr><th>ΔT</th><th>頂/底</th><th></th><th></th></tr></thead><tbody>` +
+    list.map((d, i) => `<tr><td>${d.delta_T || 0}</td><td>${d.delta_T_top ?? '-'} / ${d.delta_T_bottom ?? '-'}</td>
+      <td><button id="th_edit_${i}" style="width:auto;padding:0.1rem 0.4rem;">✎</button></td>
+      <td><button id="th_del_${i}" style="color:#dc2626;width:auto;padding:0.1rem 0.4rem;">✕</button></td></tr>`).join('') +
     '</tbody></table>';
 }
 function renderMemberPointLoadList(memberId) {
@@ -4345,6 +4456,7 @@ function backfillModelDefaults(m) {
   if (!Array.isArray(m.point_loads)) m.point_loads = [];
   if (!Array.isArray(m.distributed_loads)) m.distributed_loads = [];
   if (!Array.isArray(m.distributed_moments)) m.distributed_moments = [];
+  if (!Array.isArray(m.thermal_loads)) m.thermal_loads = [];
   if (!Array.isArray(m.member_point_loads)) m.member_point_loads = [];
   return m;
 }
@@ -4374,6 +4486,10 @@ function sanitizeModel() {
   const beforeDm = model.distributed_moments.length;
   model.distributed_moments = model.distributed_moments.filter(d => memberIds.has(d.member));
   if (model.distributed_moments.length !== beforeDm) removed.push('分布彎矩');
+
+  const beforeTh = model.thermal_loads.length;
+  model.thermal_loads = model.thermal_loads.filter(d => memberIds.has(d.member));
+  if (model.thermal_loads.length !== beforeTh) removed.push('溫度載重');
 
   const beforeEd = model.equal_dofs.length;
   model.equal_dofs = model.equal_dofs.filter(ed => nodeIds.has(ed.master_node) && nodeIds.has(ed.slave_node));
@@ -4571,7 +4687,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   if (!confirm('新建會清空目前畫布內容(未儲存的修改會遺失),確定繼續?')) return;
   model = {
     nodes: [], sections: [{name: 'sec', E: 200e9, I: 1e-4, A: 0.01}],
-    members: [], supports: [], equal_dofs: [], point_loads: [], distributed_loads: [], distributed_moments: [], member_point_loads: []
+    members: [], supports: [], equal_dofs: [], point_loads: [], distributed_loads: [], distributed_moments: [], thermal_loads: [], member_point_loads: []
   };
   lastResult = null;
   currentName = null;
