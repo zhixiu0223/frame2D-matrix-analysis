@@ -303,6 +303,46 @@ def fixed_end_forces_point_moment(M0, a, L):
     return np.array([0.0, V1, M1, 0.0, V2, M2])
 
 
+def fixed_end_forces_thermal_axial(E, A, alpha, delta_T):
+    """局部座標系下, 桿件均勻溫度變化delta_T(°C或K, 升溫為正)造成的
+    軸向固定端反力(kN, 跟fixed_end_forces_axial_udl同一個"壓力為正"
+    Fx慣例)。
+
+    推導(虛功法, 用軸向線性形狀函數N1=1-x/L, N2=x/L): 均勻熱應變
+    eps=alpha*delta_T沿桿長常數, F_i = integral(EA*eps*dNi/dx dx) =
+    EA*eps*(Ni(L)-Ni(0)), sympy積分結果: Fx1=-EA*eps, Fx2=+EA*eps。
+
+    用懸臂樑(一端自由)驗證過(這種情況桿件可以自由伸縮, 靜定, 不會
+    有任何應力/內力, 自由端應該精確位移alpha*delta_T*L)——見
+    tests/test_thermal_load.py, 不是自己驗證自己。
+    """
+    eps = alpha * delta_T
+    Fx = -E * A * eps
+    return np.array([Fx, 0.0, 0.0, -Fx, 0.0, 0.0])
+
+
+def fixed_end_forces_thermal_gradient(E, I, alpha, delta_T_top, delta_T_bottom, depth):
+    """局部座標系下, 桿件截面深度方向溫度梯度(delta_T_top=頂部溫度變化,
+    delta_T_bottom=底部溫度變化, 頂/底以局部+y方向判斷, °C或K)造成的
+    彎曲固定端反力(kN·m)。
+
+    推導: 自由(無束制)熱曲率kappa_thermal = alpha*(delta_T_top -
+    delta_T_bottom)/depth(標準溫度梯度-曲率關係, 頂部升溫較多會讓
+    桿件"想要"往預期方向彎曲)。用虛功法(對Hermite形狀函數的二次導數
+    積分, 對應曲率虛功) 推導等效節點力: F_i = EI*kappa_thermal*
+    integral(d2Ni/dx2 dx) = EI*kappa_thermal*(dNi/dx(L)-dNi/dx(0)),
+    sympy積分結果: Fy1=0, M1=-EI*kappa, Fy2=0, M2=+EI*kappa(兩端力矩
+    正負號相反, 不是同號——這點容易憑直覺猜錯, 已經用懸臂樑跟固定-
+    固定樑兩種案例交叉驗證過, 不是自己驗證自己, 見
+    tests/test_thermal_load.py)。
+
+    depth: 桿件截面深度(m), 要跟alpha(1/°C或1/K)、E用同一套SI單位系統。
+    """
+    kappa = alpha * (delta_T_top - delta_T_bottom) / depth
+    M = E * I * kappa
+    return np.array([0.0, 0.0, -M, 0.0, 0.0, M])
+
+
 def fixed_end_forces_distributed_moment(m, L):
     """局部座標系下, 全長均佈的分布彎矩m(kN·m/m, 逆時針為正, 跟
     fixed_end_forces_point_moment()的M0同一個符號慣例——業界對「均佈

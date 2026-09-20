@@ -24,6 +24,11 @@ class Section:
     E: float   # 楊氏模數
     I: float   # 慣性矩
     A: float   # 斷面積 (若只做彎矩分析可給大數字近似軸向剛體)
+    alpha: float = None   # 熱膨脹係數(1/°C或1/K), 只有thermal_load()要用
+                           # 到才需要填, 其他分析用不到, 預設None
+    depth: float = None   # 截面深度(m), 只有thermal_load()的溫度梯度
+                           # (彎曲熱效應)才需要, 只做均勻溫度變化(軸向
+                           # 熱效應)不需要填這個
 
 
 @dataclass
@@ -161,6 +166,34 @@ class DistributedMoment:
 
 
 @dataclass
+class ThermalLoad:
+    """桿件的溫度效應載重, 分成兩個獨立的分量:
+
+    delta_T(均勻溫度變化, °C或K, 升溫為正): 造成軸向熱效應(桿件整體
+    想要伸長/縮短, 若被束制住會產生軸力)。用Section.alpha(熱膨脹
+    係數)換算成等效軸向應變, 見frame2d.elements.
+    fixed_end_forces_thermal_axial()的推導。
+
+    delta_T_top/delta_T_bottom(頂部/底部溫度變化, 頂/底以桿件局部+y
+    方向判斷, °C或K): 兩者不同時, 代表截面深度方向有溫度梯度, 造成
+    彎曲熱效應(桿件想要往某個方向彎, 若被束制住會產生彎矩)。需要
+    Section.depth(截面深度)才能換算, 見frame2d.elements.
+    fixed_end_forces_thermal_gradient()的推導。delta_T_top==
+    delta_T_bottom(含都是None、都留空的情況)時, 沒有梯度效應,
+    不需要用到depth。
+
+    這兩個分量各自獨立、可以同時給或只給其中一個——桿件截面上下溫度
+    都變化但幅度不同的常見情境(例如日曬面/背陰面溫差), 拆解成
+    "平均溫度變化"(=(top+bottom)/2, 走軸向效應)加"溫度梯度"
+    (=top-bottom, 走彎曲效應)兩個獨立分量疊加, 這裡直接讓兩個分量
+    各自輸入, 不用使用者自己先手動拆解平均值。"""
+    member: int
+    delta_T: float = 0.0
+    delta_T_top: float = None
+    delta_T_bottom: float = None
+
+
+@dataclass
 class MemberPointLoad:
     """桿件內部任意位置(不一定在節點上)的集中力/集中力矩。
     a: 距node_i沿桿軸的距離(局部座標, 0<=a<=L)。
@@ -204,6 +237,7 @@ class Frame2D:
         self.point_loads: list[PointLoad] = []
         self.distributed_loads: list[DistributedLoad] = []
         self.distributed_moments: list[DistributedMoment] = []
+        self.thermal_loads: list[ThermalLoad] = []
         self.member_point_loads: list[MemberPointLoad] = []
         self._node_index_cache: dict[int, int] = None   # node_id -> 緊湊的0-based索引, 延遲建立
 
@@ -213,8 +247,9 @@ class Frame2D:
         self._node_index_cache = None   # 節點集合變了, 快取失效
         return self
 
-    def add_section(self, name: str, E: float, I: float, A: float = 1e8):
-        self.sections[name] = Section(name, E, I, A)
+    def add_section(self, name: str, E: float, I: float, A: float = 1e8,
+                    alpha: float = None, depth: float = None):
+        self.sections[name] = Section(name, E, I, A, alpha, depth)
         return self
 
     def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame',
@@ -326,6 +361,24 @@ class Frame2D:
         用分布力+分布彎矩的組合來表示。不是結構分析裡最常見的載重
         類型, 大部分實務案例還是用分布力、集中力矩處理就夠。"""
         self.distributed_moments.append(DistributedMoment(member, m, m_end, x_start, x_end))
+        return self
+
+    def thermal_load(self, member: int, delta_T: float = 0.0,
+                     delta_T_top: float = None, delta_T_bottom: float = None):
+        """桿件的溫度效應載重——delta_T是均勻溫度變化(軸向熱效應,
+        需要這根桿件的斷面有設定alpha); delta_T_top/delta_T_bottom是
+        截面頂/底溫度變化(彎曲熱效應, 兩者不同時才有效果, 需要這根
+        桿件的斷面有設定depth)。這兩個分量各自獨立, 可以只給其中一個。
+        見frame2d.model.ThermalLoad的說明。
+
+        常見動機: 日曬/背陰面溫差、季節溫度變化、火害後的溫度分佈
+        評估、橋梁伸縮縫設計檢核等。"""
+        if delta_T == 0.0 and delta_T_top is None and delta_T_bottom is None:
+            raise ValueError(
+                "thermal_load()至少要指定delta_T, 或delta_T_top/delta_T_bottom其中之一, "
+                "不然這個溫度載重沒有任何效果。"
+            )
+        self.thermal_loads.append(ThermalLoad(member, delta_T, delta_T_top, delta_T_bottom))
         return self
 
     def member_point_load(self, member: int, a: float, fx: float = 0.0, fy: float = 0.0,

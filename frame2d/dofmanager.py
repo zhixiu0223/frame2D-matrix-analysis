@@ -45,6 +45,8 @@ from .elements import (
     fixed_end_forces_axial_point_load,
     fixed_end_forces_distributed_moment,
     fixed_end_forces_partial_distributed_moment,
+    fixed_end_forces_thermal_axial,
+    fixed_end_forces_thermal_gradient,
 )
 
 
@@ -264,6 +266,41 @@ def _solve_once_dofmanager(frame: Frame2D, slack_cables: set, member_axial: dict
             f_FE_local = fixed_end_forces_partial_distributed_moment(dm.m, m_end, x_start, x_end, L)
         fixed_end_local[dm.member] = fixed_end_local.get(dm.member, np.zeros(6)) + f_FE_local
         F[np.array(member_dofs[dm.member])] += member_T[dm.member].T @ f_FE_local
+
+    # ---- 2c. 溫度效應(見model.py的ThermalLoad說明): 軸向(均勻溫度
+    #      變化)+彎曲(截面深度方向溫度梯度)兩個獨立分量, 分開算固定
+    #      端反力後直接疊加(線性疊加, 兩者互不影響)。 ----
+    for tl in frame.thermal_loads:
+        m = frame.members[tl.member]
+        section = frame.sections[m.section]
+        f_FE_local = np.zeros(6)
+        if tl.delta_T != 0.0:
+            if section.alpha is None:
+                raise ValueError(
+                    f"member {tl.member} 的溫度載重指定了delta_T, 但斷面"
+                    f"'{m.section}'沒有設定alpha(熱膨脹係數)——不會靜默"
+                    f"忽略, 請用add_section(..., alpha=...)補上。")
+            f_FE_local += fixed_end_forces_thermal_axial(section.E, section.A, section.alpha, tl.delta_T)
+        if tl.delta_T_top is not None or tl.delta_T_bottom is not None:
+            t_top = 0.0 if tl.delta_T_top is None else tl.delta_T_top
+            t_bot = 0.0 if tl.delta_T_bottom is None else tl.delta_T_bottom
+            if t_top != t_bot:
+                if m.member_type in ('truss', 'cable'):
+                    raise ValueError(
+                        f"member {tl.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲"
+                        f"勁度, 不能承受溫度梯度造成的彎曲熱效應(理由同distributed_"
+                        f"moment的既有檢查; 均勻溫度變化delta_T則不受此限制, truss/"
+                        f"cable一樣可以承受軸向熱效應)。")
+                if section.alpha is None or section.depth is None:
+                    raise ValueError(
+                        f"member {tl.member} 的溫度載重指定了delta_T_top/"
+                        f"delta_T_bottom且兩者不同(有溫度梯度), 但斷面'{m.section}'"
+                        f"沒有同時設定alpha跟depth——不會靜默忽略, 請用add_section"
+                        f"(..., alpha=..., depth=...)補上。")
+                f_FE_local += fixed_end_forces_thermal_gradient(
+                    section.E, section.I, section.alpha, t_top, t_bot, section.depth)
+        fixed_end_local[tl.member] = fixed_end_local.get(tl.member, np.zeros(6)) + f_FE_local
+        F[np.array(member_dofs[tl.member])] += member_T[tl.member].T @ f_FE_local
 
     # ---- 2b. 桿件內部集中力/力矩: 同樣用標準公式 ----
     for pl_m in frame.member_point_loads:
