@@ -58,6 +58,7 @@ from .elements import (
     fixed_end_forces_point_load, fixed_end_forces_point_moment,
     fixed_end_forces_axial_point_load, fixed_end_forces_distributed_moment,
     fixed_end_forces_partial_distributed_moment,
+    fixed_end_forces_thermal_axial, fixed_end_forces_thermal_gradient,
 )
 
 
@@ -175,6 +176,38 @@ def _gravity_fixed_end_forces(frame):
         else:
             f_FE_local = fixed_end_forces_partial_distributed_moment(dm.m, m_end, x_start, x_end, L)
         _add(dm.member, f_FE_local)
+
+    for tl in frame.thermal_loads:
+        m = frame.members[tl.member]
+        section = frame.sections[m.section]
+        f_FE_local = np.zeros(6)
+        if tl.delta_T != 0.0:
+            if section.alpha is None:
+                raise ValueError(
+                    f"member {tl.member} 的溫度載重指定了delta_T, 但斷面"
+                    f"'{m.section}'沒有設定alpha(熱膨脹係數)——不會靜默"
+                    f"忽略, 請用add_section(..., alpha=...)補上(理由同"
+                    f"dofmanager.py既有檢查)。")
+            f_FE_local += fixed_end_forces_thermal_axial(section.E, section.A, section.alpha, tl.delta_T)
+        if tl.delta_T_top is not None or tl.delta_T_bottom is not None:
+            t_top = 0.0 if tl.delta_T_top is None else tl.delta_T_top
+            t_bot = 0.0 if tl.delta_T_bottom is None else tl.delta_T_bottom
+            if t_top != t_bot:
+                if m.member_type in ('truss', 'cable'):
+                    raise ValueError(
+                        f"member {tl.member} 是{m.member_type}元素, 兩端鉸接、沒有彎曲"
+                        f"勁度, 不能承受溫度梯度造成的彎曲熱效應(理由同dofmanager.py"
+                        f"既有檢查; 均勻溫度變化delta_T則不受此限制)。")
+                if section.alpha is None or section.depth is None:
+                    raise ValueError(
+                        f"member {tl.member} 的溫度載重指定了delta_T_top/"
+                        f"delta_T_bottom且兩者不同(有溫度梯度), 但斷面'{m.section}'"
+                        f"沒有同時設定alpha跟depth——不會靜默忽略, 請用add_section"
+                        f"(..., alpha=..., depth=...)補上(理由同dofmanager.py既有"
+                        f"檢查)。")
+                f_FE_local += fixed_end_forces_thermal_gradient(
+                    section.E, section.I, section.alpha, t_top, t_bot, section.depth)
+        _add(tl.member, f_FE_local)
 
     for pl_m in frame.member_point_loads:
         m = frame.members[pl_m.member]
@@ -514,14 +547,13 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     n_nodes = len(frame.nodes)
     n_dof = 3 * n_nodes
     fixed_dofs = set()
+    u_prescribed = {}   # {dof: 指定位移值}, 支援支承沉陷(非0的支承值)
     for s in frame.supports:
         ux_i, uy_i, rot_i = frame.dofs_of(s.node)
-        if s.ux is not None:
-            fixed_dofs.add(ux_i)
-        if s.uy is not None:
-            fixed_dofs.add(uy_i)
-        if s.rot is not None:
-            fixed_dofs.add(rot_i)
+        for dof_i, val in zip((ux_i, uy_i, rot_i), (s.ux, s.uy, s.rot)):
+            if val is not None:
+                fixed_dofs.add(dof_i)
+                u_prescribed[dof_i] = val
     free_dofs = [d for d in range(n_dof) if d not in fixed_dofs]
     control_dof0 = prescribed_dofs[0]
     if not free_dofs:
@@ -541,6 +573,12 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     f_ext_gravity, member_fem_local = _gravity_fixed_end_forces(frame)
 
     u_full = np.zeros(n_dof)
+    # 支承沉陷(非0的支承值): 一開始就把u_full設成指定值, 之後
+    # _newton_iterate()只解resid_dofs(不含這些固定dof), 全程不會被
+    # 疊代動到, 維持在指定值——跟dofmanager.py的u[sup]=u_prescribed[sup]
+    # 同一個精神, 只是這裡是疊代求解, 那邊是一次線性解。
+    for dof_i, val in u_prescribed.items():
+        u_full[dof_i] = val
     f_ext_cum = f_ext_gravity.copy()   # 力控制模式下, 累積施加的外力
                                         # (從重力這個固定基礎開始疊加
                                         # pushover本身的力, 不是每一步
@@ -577,13 +615,21 @@ def run_pushover_newton(frame, hinge_states, prescribed_dofs, direction, target_
     # 傳遞一部分進柱子"這個間接效應), 這跟event-to-event/converged
     # 版本用apply_gravity()先solve一次的做法不一致, 也不符合實際力學
     # 行為——見對話紀錄裡使用者用實際截圖比對兩種求解器抓出來的差異。
-    if np.any(f_ext_gravity != 0.0):
+    # 這裡刻意也把"有支承沉陷(u_prescribed非空)"納入觸發條件, 不是只看
+    # f_ext_gravity——沉陷是邊界條件(不是外力), 不會讓f_ext_gravity
+    # 非0, 但u_full已經在前面被設成非零的沉陷值, 如果這裡不重新解一次
+    # 平衡、更新member_ref, member_ref會停留在(0,0,0,0), 跟"u_full其實
+    # 已經有沉陷變形"這個事實不一致, 導致後續每一步的塑鉸彎矩增量計算
+    # 都是錯的(這是實際測試比對線性解才抓到的問題: 有沉陷時Newton跟
+    # 線性解的反力對不起來, 差距遠超過大轉角co-rotational本身該有的
+    # 微小差異)。
+    if np.any(f_ext_gravity != 0.0) or u_prescribed:
         conv_gravity, _, u_full = _newton_iterate(
             frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
             n_dof, free_dofs, f_ext_gravity, tol, max_iter, use_pdelta, k_pen)
         if not conv_gravity:
             raise RuntimeError(
-                "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
+                "重力預載階段(側推還沒開始前, 光是重力/支承沉陷本身)無法收斂"
                 "到平衡狀態——這通常代表模型本身在重力載重下就已經接近"
                 "或超過極限承載力, 請檢查斷面/塑鉸容量設定是否合理。"
             )
@@ -816,14 +862,13 @@ def run_pushover_corotational_oneshot(frame, hinge_states, prescribed_dofs, dire
     n_nodes = len(frame.nodes)
     n_dof = 3 * n_nodes
     fixed_dofs = set()
+    u_prescribed = {}   # {dof: 指定位移值}, 支援支承沉陷(非0的支承值)
     for s in frame.supports:
         ux_i, uy_i, rot_i = frame.dofs_of(s.node)
-        if s.ux is not None:
-            fixed_dofs.add(ux_i)
-        if s.uy is not None:
-            fixed_dofs.add(uy_i)
-        if s.rot is not None:
-            fixed_dofs.add(rot_i)
+        for dof_i, val in zip((ux_i, uy_i, rot_i), (s.ux, s.uy, s.rot)):
+            if val is not None:
+                fixed_dofs.add(dof_i)
+                u_prescribed[dof_i] = val
     free_dofs = [d for d in range(n_dof) if d not in fixed_dofs]
     if not free_dofs:
         raise ValueError(
@@ -835,18 +880,21 @@ def run_pushover_corotational_oneshot(frame, hinge_states, prescribed_dofs, dire
     f_ext_gravity, member_fem_local = _gravity_fixed_end_forces(frame)
 
     u_full = np.zeros(n_dof)
+    # 支承沉陷(非0的支承值), 理由同run_pushover_newton()那段說明。
+    for dof_i, val in u_prescribed.items():
+        u_full[dof_i] = val
     member_ref = {mid: (0.0, 0.0, 0.0, 0.0) for mid in frame.members}
     theta_def_at_yield = {mid: [None, None] for mid in hinge_states}
 
     k_pen = _initial_equal_dof_penalty(frame, hinge_states, n_dof, use_pdelta)
 
-    if np.any(f_ext_gravity != 0.0):
+    if np.any(f_ext_gravity != 0.0) or u_prescribed:   # 理由同run_pushover_newton()那段說明
         conv_gravity, _, u_full = _newton_iterate(
             frame, hinge_states, u_full, member_ref, member_fem_local, theta_def_at_yield,
             n_dof, free_dofs, f_ext_gravity, 1e-6, 30, use_pdelta, k_pen)
         if not conv_gravity:
             raise RuntimeError(
-                "重力預載階段(側推還沒開始前, 光是重力本身)無法收斂"
+                "重力預載階段(側推還沒開始前, 光是重力/支承沉陷本身)無法收斂"
                 "到平衡狀態——這通常代表模型本身在重力載重下就已經接近"
                 "或超過極限承載力, 請檢查斷面/塑鉸容量設定是否合理。"
             )
