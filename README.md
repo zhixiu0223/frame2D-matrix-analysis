@@ -30,7 +30,9 @@
   質量來源是 `add_section(..., rho=)` 與 `add_mass(node, mx, my, Iz)`。**單位要一致**:
   質量單位 = 力單位·s²/長度單位(SI: N、m → kg; kN、m → ton), 核心不做換算。
   網頁的「單位設定」已包含質量、密度、轉動慣量、加速度、速度
-- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、模態/反應譜/時程
+  模態分析 `frame2d.modal.eigen(frame, n_modes, mass='lumped'|'consistent')`: 週期/頻率、
+  對質量正規化的模態形狀、參與係數、有效模態質量與累積質量比(已對 OpenSeesPy 交叉驗證)
+- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、反應譜/時程
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -43,6 +45,7 @@ frame2d/
   solve.py         — 靜力凝縮版求解器 solve_condensation()(參考/回歸用)
   assembly.py      — assemble_K(): 公開的全域勁度矩陣組裝入口(動力分析用)
   mass.py          — assemble_M(): 集中/一致質量矩陣、影響向量、總質量(動力分析用)
+  modal.py         — eigen(): 模態分析(靜力凝縮無質量DOF、模態性質)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力
