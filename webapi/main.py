@@ -18,6 +18,7 @@ from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
+from frame2d.modal import eigen, modal_to_dict
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -48,6 +49,8 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     f = Frame2D()
     for n in payload.nodes:
         f.add_node(n.id, n.x, n.y)
+        if n.mx or n.my or n.Iz:
+            f.add_mass(n.id, mx=n.mx or 0.0, my=n.my or 0.0, Iz=n.Iz or 0.0)
     for s in payload.sections:
         f.add_section(s.name, E=s.E, I=s.I, A=s.A, alpha=s.alpha, depth=s.depth, rho=s.rho)
     for m in payload.members:
@@ -394,6 +397,22 @@ def solve_frame(payload: FrameIn):
         out["deformed_linear"] = build_deformed_with_scale(f, result_linear, deform_scale)
 
     return out
+
+
+@app.post("/modal")
+def modal_analysis(payload: FrameIn):
+    """模態分析(frame2d.modal.eigen): 週期/頻率、參與係數、有效質量比、模態形狀曲線。
+    不支援的模型(cable、equal_dof、非零指定位移)、機構、沒有質量, 都是清楚的400訊息。"""
+    f = _build_frame(payload)
+    try:
+        md = eigen(f, n_modes=payload.modal_n_modes, mass=payload.modal_mass_kind)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return modal_to_dict(md)
 
 
 @app.post("/pushover_step_diagrams")

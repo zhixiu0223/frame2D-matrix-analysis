@@ -25,3 +25,7 @@ venv/
 # Generated plots
 examples/output_plots/
 saved_models/
+
+# 選用: 網頁端到端測試(tests/test_web_modal_e2e.py)需要 npm install jsdom
+node_modules/
+package-lock.json

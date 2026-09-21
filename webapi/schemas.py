@@ -11,6 +11,9 @@ class NodeIn(BaseModel):
     id: int
     x: float
     y: float
+    mx: Optional[float] = None    # 節點質量(動力分析用, 後端固定SI: kg), x/y方向平動質量
+    my: Optional[float] = None
+    Iz: Optional[float] = None    # 繞z軸質量轉動慣量(kg·m²)
 
 
 class SectionIn(BaseModel):
@@ -165,6 +168,10 @@ class FrameIn(BaseModel):
     fbd_only: Optional[bool] = False
     """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
     跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""
+    modal_n_modes: Optional[int] = None
+    """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""
+    modal_mass_kind: Literal['lumped', 'consistent'] = 'lumped'
+    """只有/modal端點用: 集中質量(預設)或一致質量, 見frame2d/mass.py。"""
     analysis_type: Literal['linear', 'pdelta', 'pushover'] = 'linear'
     """'linear'(預設, 完全等同舊行為)、'pdelta'(疊代更新軸力的線性化
     P-Delta, 見frame2d.dofmanager.solve_pdelta)、或'pushover'(遞增側推,

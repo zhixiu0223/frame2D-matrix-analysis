@@ -28,6 +28,8 @@ Start/End Distance局部段功能。
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 import numpy as np
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
@@ -54,6 +56,10 @@ def test_three_way_crosscheck_still_passes():
         [sys.executable, str(TESTS_DIR / "test_partial_snow_three_way_crosscheck.py")],
         capture_output=True, text=True, cwd=str(TESTS_DIR.parent),
     )
+    if result.returncode != 0 and "Skipped:" in result.stderr:
+        # 腳本在沒裝 anastruct / PyNiteFEA 時用 pytest.skip() 跳過, 但被 subprocess 當腳本執行時
+        # 那個 Skipped 例外會變成 exit code 1 —— 這不是失敗, 回報成 skip。
+        pytest.skip(result.stderr.strip().splitlines()[-1])
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 

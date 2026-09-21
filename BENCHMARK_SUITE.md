@@ -196,3 +196,6 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_modal.py` | 模態分析: 解析頻率(懸臂/簡支/兩質量)、收斂階數、有效質量解析值、正交性與完備性、凝縮與 release 的獨立路徑、單位一致性(動力 D2) |
 | `test_modal_vs_openseespy.py` | 模態分析 vs OpenSeesPy(選用): 特徵值 3e-13、MAC=1.0、集中質量參與係數逐項一致 |
 | `test_force_control_roundoff.py` | 力控制的機構偵測不依賴恰好為零的主元: 加 1e-16~1e-13 雜訊仍優雅停在 Mp/L, 且後降伏勁度 0.1% 的跨度大結構不被誤判(Termux 實際踩到的迴歸) |
+| `test_modal_shape.py` | 模態形狀曲線: 剛體位移場精確、端點連續、對精確懸臂模態形狀、release 端斜率、JSON 序列化(動力 D2b) |
+| `test_web_modal_api.py` | 網頁後端 `/modal`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、各種錯誤訊息 |
+| `test_web_modal_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 真實後端 + 真實 index.html, 節點質量輸入→模態 Solve→結果表→振型→單位切換→錯誤訊息 |

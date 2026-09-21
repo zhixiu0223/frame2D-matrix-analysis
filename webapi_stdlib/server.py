@@ -23,6 +23,7 @@ from frame2d.dofmanager import solve_pdelta, initial_hinge_states
 from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
 from frame2d.postprocess import member_internal_forces
+from frame2d.modal import eigen, modal_to_dict
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
@@ -41,6 +42,8 @@ def _build_frame(payload: dict) -> Frame2D:
     f = Frame2D()
     for n in payload.get("nodes", []):
         f.add_node(n["id"], n["x"], n["y"])
+        if n.get("mx") or n.get("my") or n.get("Iz"):
+            f.add_mass(n["id"], mx=n.get("mx") or 0.0, my=n.get("my") or 0.0, Iz=n.get("Iz") or 0.0)
     for s in payload.get("sections", []):
         f.add_section(s["name"], E=s["E"], I=s["I"], A=s.get("A", 1e8),
                        alpha=s.get("alpha"), depth=s.get("depth"), rho=s.get("rho"))
@@ -325,6 +328,22 @@ def _pushover_step_diagrams_payload(payload: dict) -> dict:
     }
 
 
+def _modal_payload(payload: dict) -> dict:
+    """模態分析(frame2d.modal.eigen), 跟 webapi/main.py 的 /modal 端點同一個行為。
+    不支援的模型(cable、equal_dof、非零指定位移)、機構、沒有質量會丟出有清楚訊息的
+    ValueError, do_POST 會轉成 400。"""
+    kind = payload.get("modal_mass_kind", "lumped")
+    if kind not in ("lumped", "consistent"):
+        raise ValueError(f"modal_mass_kind必須是'lumped'或'consistent', 收到'{kind}'")
+    n_modes = payload.get("modal_n_modes")
+    f = _build_frame(payload)
+    try:
+        md = eigen(f, n_modes=n_modes, mass=kind)
+    except KeyError as e:
+        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    return modal_to_dict(md)
+
+
 def _solve_payload(payload: dict) -> dict:
     if payload.get("analysis_type", "linear") == "pushover":
         return _solve_pushover_payload(payload)
@@ -436,6 +455,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json_body()
                 self._send_json(_solve_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/modal":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_modal_payload(payload))
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return

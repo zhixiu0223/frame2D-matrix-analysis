@@ -44,11 +44,13 @@
 質量矩陣在動力DOF上不正定、以及 mass.check_dynamic_supported() 的限制
 (cable / equal_dof / 非零指定位移)。
 """
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from .assembly import assemble_K
+from .elements import member_geometry, transformation_matrix
 from .mass import assemble_M, influence_vector
 from .model import Frame2D
 
@@ -71,6 +73,7 @@ class Modal:
     n_dof: int
     n_node_dof: int
     frame: Frame2D = field(repr=False, default=None)
+    member_dofs: dict = field(repr=False, default=None)    # {member_id: 6個全域DOF編號(含release端專屬DOF)}
 
     @property
     def n_modes(self) -> int:
@@ -80,6 +83,37 @@ class Modal:
         """第 mode 個模態(0起算)在某節點的 (ux, uy, rot)。"""
         ux, uy, rot = self.frame.dofs_of(node_id)
         return (float(self.phi[ux, mode]), float(self.phi[uy, mode]), float(self.phi[rot, mode]))
+
+    def member_curves(self, mode: int, scale: float = 1.0, n: int = 21) -> dict:
+        """第 mode 個模態(0起算)每根桿件變形後的全域座標 {member_id: (X, Y)}, 各 n 個點。
+
+        用桿端的**局部位移** u_local = T @ φ[member_dofs] (含release端專屬轉角DOF, 所以鉸接端
+        的斜率是對的, 不是節點轉角)。橫向用 Hermite 三次形函數(跟Euler-Bernoulli元素的位移場
+        同一組, 所以是這個元素的精確位移場, 不是另外的近似), 軸向線性; truss/cable 沒有彎曲勁度,
+        橫向也用線性內插(桿件維持直線)。scale 是放大倍率(模態形狀本身只有相對大小, 沒有絕對量級)。
+        """
+        f = self.frame
+        out = {}
+        for mid, m in f.members.items():
+            ni, nj = f.nodes[m.node_i], f.nodes[m.node_j]
+            L, angle = member_geometry(ni, nj)
+            T = transformation_matrix(angle)
+            u1, v1, th1, u2, v2, th2 = T @ self.phi[np.array(self.member_dofs[mid]), mode]
+            xi = np.linspace(0.0, 1.0, n)
+            u = (1 - xi) * u1 + xi * u2
+            if m.member_type in ('truss', 'cable'):
+                v = (1 - xi) * v1 + xi * v2
+            else:
+                N1 = 1 - 3 * xi**2 + 2 * xi**3
+                N2 = L * (xi - 2 * xi**2 + xi**3)
+                N3 = 3 * xi**2 - 2 * xi**3
+                N4 = L * (-xi**2 + xi**3)
+                v = N1 * v1 + N2 * th1 + N3 * v2 + N4 * th2
+            c, sn = math.cos(angle), math.sin(angle)
+            X = ni.x + xi * L * c + scale * (c * u - sn * v)
+            Y = ni.y + xi * L * sn + scale * (sn * u + c * v)
+            out[mid] = (X, Y)
+        return out
 
     def modes_needed(self, ratio: float = 0.9, direction: str = 'x'):
         """累積有效質量比達到 ratio 所需的最少模態數; 取到的模態數不夠回傳None。"""
@@ -230,4 +264,49 @@ def eigen(frame: Frame2D, n_modes: int = None, mass: str = 'lumped',
     return Modal(omega=omega, period=period, frequency=frequency, phi=phi,
                  gamma=gamma, eff_mass=eff, cum_ratio=cum, cum_ratio_total=cum_tot,
                  mass_free=m_free, mass_total=m_tot,
-                 kind=mass, n_dof=n, n_node_dof=asm.n_node_dof, frame=frame)
+                 kind=mass, n_dof=n, n_node_dof=asm.n_node_dof, frame=frame,
+                 member_dofs=asm.member_dofs)
+
+
+def _finite(x):
+    """JSON安全的浮點數: 非有限值(nan/inf)一律轉成None(前端顯示成「—」)。"""
+    x = float(x)
+    return x if math.isfinite(x) else None
+
+
+def modal_to_dict(md: Modal, n_curve: int = 21, target_fraction: float = 0.15) -> dict:
+    """把 Modal 轉成可直接 json.dumps 的 dict (網頁後端的 /modal 端點用, 兩個後端共用, 不重複實作)。
+
+    全部是「跟輸入一致的單位」(網頁後端固定SI: 質量kg、週期s、頻率Hz、ω rad/s)。
+    每個模態附 curves: 桿件變形後的全域座標, 自動放大成「最大節點位移 ≈ 結構外接矩形對角線 ×
+    target_fraction」(跟靜力變形圖一樣的做法; 模態形狀只有相對大小, 沒有絕對位移)。
+    """
+    f = md.frame
+    xs = [n.x for n in f.nodes.values()]
+    ys = [n.y for n in f.nodes.values()]
+    diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) if xs else 1.0
+    if diag < 1e-9:
+        diag = 1.0
+
+    modes = []
+    for i in range(md.n_modes):
+        disp = [math.hypot(md.phi[f.dofs_of(nid)[0], i], md.phi[f.dofs_of(nid)[1], i]) for nid in f.nodes]
+        max_d = max(disp) if disp else 0.0
+        scale = diag * target_fraction / max_d if max_d > 1e-30 else 1.0
+        curves = {}
+        for mid, (X, Y) in md.member_curves(i, scale=scale, n=n_curve).items():
+            curves[str(mid)] = {"X": [float(v) for v in X], "Y": [float(v) for v in Y]}
+        entry = {"index": i + 1, "omega": _finite(md.omega[i]), "period": _finite(md.period[i]),
+                 "frequency": _finite(md.frequency[i]), "deform_scale": _finite(scale), "curves": curves}
+        for d in ('x', 'y'):
+            mf, mt = md.mass_free[d], md.mass_total[d]
+            entry[f"gamma_{d}"] = _finite(md.gamma[d][i])
+            entry[f"eff_{d}"] = _finite(md.eff_mass[d][i])
+            entry[f"ratio_{d}"] = _finite(md.eff_mass[d][i] / mf) if mf > 0 else None
+            entry[f"cum_{d}"] = _finite(md.cum_ratio[d][i]) if mf > 0 else None
+            entry[f"cum_total_{d}"] = _finite(md.cum_ratio_total[d][i]) if mt > 0 else None
+        modes.append(entry)
+    return {"analysis_type": "modal", "mass_kind": md.kind, "n_modes": md.n_modes,
+            "mass_total": {d: _finite(md.mass_total[d]) for d in ('x', 'y')},
+            "mass_free": {d: _finite(md.mass_free[d]) for d in ('x', 'y')},
+            "modes": modes}

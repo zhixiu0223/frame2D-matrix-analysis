@@ -117,6 +117,10 @@
   .member-label { font-size: 10px; fill: #6b7280; pointer-events: none; }
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
   .deformed-linear-line { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
+  .mode-line { stroke: #7c3aed; stroke-width: 2.5; fill: none; }
+  tr.modalRow { cursor: pointer; }
+  tr.modalRow:hover { background: #f5f3ff; }
+  tr.modalRow.active { background: #ede9fe; font-weight: bold; }
   .axisLine { stroke: #334155; stroke-width: 1.5; }
   .axisTickLine { stroke: #cbd5e1; stroke-width: 1; }
   .axisTickLabel { font-size: 16px; fill: #64748b; }
@@ -176,6 +180,7 @@
         <option value="linear">線性</option>
         <option value="pdelta">P-Delta</option>
         <option value="pushover">Pushover</option>
+        <option value="modal">模態</option>
       </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
@@ -330,6 +335,14 @@
          內容太長而把畫面吃光。 -->
     <div id="topbarRest">
 
+    <div id="modalConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel">模態數<input id="md_nmodes" type="number" min="1" step="1" value="6" style="width:4rem;"></label>
+      <label class="snapLabel">質量矩陣<select id="md_kind" style="width:8rem;">
+        <option value="lumped">集中質量</option>
+        <option value="consistent">一致質量</option>
+      </select></label>
+      <p class="hint" style="margin:0.3rem 0 0;">模態分析需要質量: 桿件質量來自「斷面管理」的密度 ρ, 節點質量在點選節點後的屬性面板輸入(mx/my/Iz)。集中質量把桿件質量各半分到兩端節點(不計轉動慣量), 一致質量用完整的 Euler-Bernoulli 質量矩陣(頻率從上方收斂, 精度較高)。目前不支援 cable、equalDOF、非零支座沉陷; 結構有機構或支承不足會直接報錯。</p>
+    </div>
     <div id="pushoverConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
       <label class="snapLabel">控制節點(逗號分隔)<input id="pv_nodes" type="text" style="width:6rem;" placeholder="例如6,7,8"></label>
       <label class="snapLabel">權重(逗號分隔)<input id="pv_weights" type="text" style="width:6rem;" placeholder="留空=全部1.0"></label>
@@ -399,6 +412,7 @@
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
+      <button data-view="modal" class="viewBtn" id="btnViewModal" style="display:none;">模態形狀</button>
       <button data-view="combined" class="viewBtn">組合顯示</button>
       <span class="sep-v"></span>
       <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
@@ -421,6 +435,12 @@
       <g id="camera"><g id="content"></g></g>
       <g id="overlay"></g>
     </svg>
+  </div>
+
+  <div id="modalPanel" style="display:none;margin:0.5rem 0;">
+    <h3 style="font-size:0.9rem;margin:0.3rem 0;">模態分析結果 <span id="md_summary" class="hint"></span></h3>
+    <div style="overflow-x:auto;"><table id="modalTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint" style="margin:0.3rem 0 0;">點選一列, 畫面上顯示該模態的振型(只有相對形狀, 已放大顯示, 不是真實位移)。質量比 = 該模態有效質量 ÷ 可動質量; 累積(總) = 到該模態為止的有效質量 ÷ 總質量(含直接掛在支承上的質量), 規範檢核「累積 ≥ 90%」看這一欄。「—」表示該方向沒有可動質量(例如全部被支承拘束)。</p>
   </div>
 
   <div id="debugPanel" style="display:none;">
@@ -532,6 +552,8 @@ let lastResult = null;
 let selected = null;        // {type:'node'|'member', id}
 let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面上標記)
 let viewMode = 'structure';
+let modalResult = null;     // /modal 的回傳(模態分析結果), 跟靜力的lastResult分開存
+let modalModeIndex = 0;     // 目前顯示振型的模態(0起算)
 let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
 let pushoverStepCache = {};  // 索引(數字) -> /pushover_step_diagrams的回應, 避免同一步重複打API
 let pushoverStepFetchInFlight = null;  // 目前正在抓的步驟索引(避免同一步驟重複同時發出好幾個請求)
@@ -657,7 +679,7 @@ function computeTransformForRect(pad, sx, sy, availW, availH) {
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
-const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, N: 0.14, V: 0.14, M: 0.14};
+const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, N: 0.14, V: 0.14, M: 0.14};
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
@@ -895,6 +917,7 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
+  document.getElementById('modalPanel').style.display = (viewMode === 'modal' && modalResult) ? 'block' : 'none';
   // 容量曲線是固定螢幕座標的overlay圖層, camera平移/縮放對它完全沒有
   // 視覺效果——但svg元素原本用CSS寫死touch-action:none(為了讓結構視圖
   // 的自訂雙指縮放/拖曳平移生效, 見下面svg.addEventListener('wheel'...)
@@ -956,6 +979,11 @@ function render() {
     if (document.getElementById('overlayDimsToggle').checked) drawDimensionsAndSections(t);
     if (lastResult && lastResult.analysis_type === 'pushover') drawHingeCircles(t);
     else drawHingeDefinedMarkers(t);
+  } else if (viewMode === 'modal') {
+    drawMembers(t, true);
+    drawSupports(t);
+    if (!modalResult) drawNeedSolveMsg();
+    else drawModeShape(t);
   } else if (viewMode === 'deformed') {
     drawMembers(t, true);
     if (document.getElementById('overlayLoadsToggle').checked) {
@@ -1740,6 +1768,11 @@ function drawNodes(t) {
     const inMulti = multiSelection && multiSelection.nodeIds.includes(n.id);
     const c = el('circle', {cx: x, cy: y, r: 6, class: 'node-circle' + (sel ? ' selected' : '') + (inMulti ? ' multi-selected' : '')});
     put(c);
+    if (n.mx || n.my || n.Iz) {      // 有節點質量: 旁邊標一個小小的紫色 m
+      const mt = el('text', {x: x + 9, y: y - 9, style: 'font-size:13px;font-weight:bold;fill:#7c3aed;pointer-events:none;'});
+      mt.textContent = 'm';
+      put(mt);
+    }
     // 真正看得到的圓點半徑只有6px, 手機上等於米粒大小, 縮小一點的
     // 結構圖幾乎點不到。這裡疊一個看不見(fill:transparent, 不是
     // fill:none —— none不會接收觸控事件)但範圍大很多的熱區圓
@@ -3212,6 +3245,12 @@ function _renderPropPanelInner() {
           <input id="p_fy" type="number" step="any" value="${pl ? fromSI('force', pl.fy) : 0}">
           <input id="p_fm" type="number" step="any" value="${pl ? fromSI('moment', pl.m) : 0}">
         </div>
+        <label>節點質量(動力分析用) mx / my (${unitOf('mass')}) / Iz (${unitOf('inertia')})</label>
+        <div class="row3">
+          <input id="p_mx" type="number" step="any" min="0" value="${n.mx ? fromSI('mass', n.mx) : 0}">
+          <input id="p_my" type="number" step="any" min="0" value="${n.my ? fromSI('mass', n.my) : 0}">
+          <input id="p_Iz" type="number" step="any" min="0" value="${n.Iz ? fromSI('inertia', n.Iz) : 0}">
+        </div>
         <button id="p_apply" style="width:100%;background:#16a34a;color:white;">套用</button>
         <div class="row2" style="margin-top:0.4rem;">
           <button id="p_delete" style="background:#dc2626;color:white;">刪除節點</button>
@@ -3223,8 +3262,15 @@ function _renderPropPanelInner() {
       document.getElementById('p_sup_custom').style.display = e.target.value === 'custom' ? 'block' : 'none';
     });
     document.getElementById('p_apply').onclick = () => {
+      // 質量先驗證(負數直接拒絕, 不做任何修改), 避免套用到一半才發現
+      const massMx = toSI('mass', parseFloat(document.getElementById('p_mx').value) || 0);
+      const massMy = toSI('mass', parseFloat(document.getElementById('p_my').value) || 0);
+      const massIz = toSI('inertia', parseFloat(document.getElementById('p_Iz').value) || 0);
+      if (massMx < 0 || massMy < 0 || massIz < 0) { setStatus('節點質量不能是負數'); return; }
       n.x = parseFloat(document.getElementById('p_x').value);
       n.y = parseFloat(document.getElementById('p_y').value);
+      if (massMx || massMy || massIz) { n.mx = massMx; n.my = massMy; n.Iz = massIz; }
+      else { delete n.mx; delete n.my; delete n.Iz; }
       const supVal = document.getElementById('p_sup').value;
       model.supports = model.supports.filter(s => s.node !== n.id);
       if (supVal === 'pin') model.supports.push({node: n.id, ux: 0.0, uy: 0.0, rot: null});
@@ -4254,13 +4300,14 @@ document.getElementById('momentArcScale').addEventListener('input', () => {
 });
 document.getElementById('loadLabelFontSize').addEventListener('change', render);
 document.getElementById('valueLabelFontSize').addEventListener('change', render);
-['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce', 'unitDensity'].forEach(id => {
+['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce', 'unitDensity', 'unitMass', 'unitInertia'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     // 斷面管理面板開著時(它不是靠selected顯示的), 標籤跟輸入框裡的數值也要跟著換算重畫,
     // 否則畫面上還是舊單位的數字, 按「套用」時卻用新單位換算, 會靜默存成錯的值。
     if (document.querySelector('#propPanel .sm_apply')) renderSectionManager();
     else if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
+    if (modalResult) renderModalTable();   // 模態結果表的質量單位也要跟著換
     updatePushoverUnitLabels();      // Pushover設定列的「目標位移」「步長」單位標籤也要跟著換
   });
 });
@@ -4452,6 +4499,10 @@ function resetViewToStructure() {
   document.querySelector('.viewBtn[data-view="structure"]').classList.add('active');
   document.getElementById('analysisType').value = 'linear';
   document.getElementById('pushoverConfigBar').style.display = 'none';
+  document.getElementById('modalConfigBar').style.display = 'none';
+  document.getElementById('btnViewModal').style.display = 'none';
+  modalResult = null;
+  modalModeIndex = 0;
   document.getElementById('btnViewPushover').style.display = 'none';
   document.getElementById('btnViewPlayback').style.display = 'none';
   document.getElementById('playbackBar').style.display = 'none';
@@ -4569,11 +4620,102 @@ document.getElementById('btnTogglePostProcess').addEventListener('click', () => 
 document.getElementById('analysisType').addEventListener('change', (e) => {
   const isPushover = e.target.value === 'pushover';
   document.getElementById('pushoverConfigBar').style.display = isPushover ? 'block' : 'none';
+  document.getElementById('modalConfigBar').style.display = e.target.value === 'modal' ? 'block' : 'none';
 });
+
+// 後端錯誤訊息: FastAPI回{detail: 字串或驗證錯誤陣列}, stdlib後端回{error: 字串}, 統一轉成一行文字
+async function apiErrorMessage(res) {
+  const txt = await res.text();
+  try {
+    const j = JSON.parse(txt);
+    if (typeof j.detail === 'string') return j.detail;
+    if (Array.isArray(j.detail)) return j.detail.map(d => (d.loc ? d.loc.join('.') + ': ' : '') + d.msg).join('; ');
+    if (j.error) return j.error;
+  } catch (e) { /* 不是JSON, 直接顯示原文 */ }
+  return txt;
+}
+
+function fmtPct(v) { return (v === null || v === undefined) ? '—' : (v * 100).toFixed(1) + '%'; }
+
+// 模態分析結果表: 一列一個模態, 點選一列切換畫面上顯示的振型
+function renderModalTable() {
+  if (!modalResult) return;
+  const r = modalResult, mu = unitOf('mass');
+  const massStr = v => (v === null || v === undefined) ? '—' : Number(fromSI('mass', v).toPrecision(5)).toString();
+  document.getElementById('md_summary').textContent =
+    `(${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}; 總質量 x向 ${massStr(r.mass_total.x)} / y向 ${massStr(r.mass_total.y)} ${mu}; `
+    + `可動質量 x向 ${massStr(r.mass_free.x)} / y向 ${massStr(r.mass_free.y)} ${mu})`;
+  document.querySelector('#modalTable thead').innerHTML =
+    `<tr><th>模態</th><th>T(s)</th><th>f(Hz)</th><th>ω(rad/s)</th>`
+    + `<th>有效質量x(${mu})</th><th>質量比x</th><th>累積x(總)</th>`
+    + `<th>有效質量y(${mu})</th><th>質量比y</th><th>累積y(總)</th></tr>`;
+  const tb = document.querySelector('#modalTable tbody');
+  tb.innerHTML = '';
+  r.modes.forEach((m, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'modalRow' + (i === modalModeIndex ? ' active' : '');
+    tr.innerHTML = `<td>${m.index}</td><td>${m.period.toFixed(5)}</td><td>${m.frequency.toFixed(4)}</td><td>${m.omega.toFixed(4)}</td>`
+      + `<td>${massStr(m.eff_x)}</td><td>${fmtPct(m.ratio_x)}</td><td>${fmtPct(m.cum_total_x)}</td>`
+      + `<td>${massStr(m.eff_y)}</td><td>${fmtPct(m.ratio_y)}</td><td>${fmtPct(m.cum_total_y)}</td>`;
+    tr.addEventListener('click', () => { modalModeIndex = i; renderModalTable(); render(); });
+    tb.appendChild(tr);
+  });
+}
+
+// 畫目前選的模態的振型(桿件變形後的曲線, 已放大; 只有相對形狀)
+function drawModeShape(t) {
+  const md = modalResult.modes[modalModeIndex];
+  if (!md) return;
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#7c3aed;`});
+  lbl.textContent = `第 ${md.index} 模態  T = ${md.period.toFixed(4)} s,  f = ${md.frequency.toFixed(3)} Hz`
+    + `(振型只有相對形狀, 放大 ×${md.deform_scale.toFixed(1)})`;
+  putOverlay(lbl);
+  for (const mid in md.curves) {
+    const d = md.curves[mid];
+    let pts = '';
+    for (let i = 0; i < d.X.length; i++) {
+      const [x, y] = toScreen(d.X[i], d.Y[i], t);
+      pts += `${x},${y} `;
+    }
+    put(el('polyline', {points: pts.trim(), class: 'mode-line'}));
+  }
+}
+
+async function runModalAnalysis() {
+  const nModes = parseInt(document.getElementById('md_nmodes').value, 10);
+  if (!Number.isFinite(nModes) || nModes < 1) { setStatus('模態數必須是不小於 1 的整數'); return; }
+  const body = {...model, modal_n_modes: nModes, modal_mass_kind: document.getElementById('md_kind').value};
+  setStatus('模態分析中...');
+  try {
+    const res = await fetch('/modal', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    if (!res.ok) { setStatus('模態分析失敗: ' + await apiErrorMessage(res)); return; }
+    modalResult = await res.json();
+    modalModeIndex = 0;
+    document.getElementById('btnViewModal').style.display = '';
+    const bar = document.getElementById('viewBar');
+    if (!bar.classList.contains('open')) {
+      bar.classList.add('open');
+      document.getElementById('btnTogglePostProcess').textContent = '▾ 後處理';
+    }
+    document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btnViewModal').classList.add('active');
+    viewMode = 'modal';
+    document.getElementById('playbackBar').style.display = 'none';
+    document.getElementById('combinedConfigBar').style.display = 'none';
+    renderModalTable();
+    const m1 = modalResult.modes[0];
+    setStatus(`模態分析完成: ${modalResult.n_modes} 個模態, T1 = ${m1.period.toFixed(4)} s (f1 = ${m1.frequency.toFixed(3)} Hz), `
+      + `x向累積有效質量 ${fmtPct(modalResult.modes[modalResult.n_modes - 1].cum_total_x)} / y向 ${fmtPct(modalResult.modes[modalResult.n_modes - 1].cum_total_y)}(相對總質量)`);
+    render();
+  } catch (e) { setStatus('連線失敗: ' + e.message); }
+}
 
 document.getElementById('btnSolve').addEventListener('click', async () => {
   sanitizeModel();
   const analysisType = document.getElementById('analysisType').value;
+  if (analysisType === 'modal') { await runModalAnalysis(); return; }
   const isPushover = analysisType === 'pushover';
 
   let body;
