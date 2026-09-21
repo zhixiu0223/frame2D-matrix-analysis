@@ -22,15 +22,15 @@
     ArpackSolver::Error ... Could not build an Arnoldi factorization
 必須改用  ops.eigen('-fullGenLapack', n)  (很慢, 只適合小模型, 但這裡夠用)。
 """
-import sys
-
 import numpy as np
 
+# 注意: 不能在模組層級 sys.exit()。pytest 收集測試時會 import 每個 test_*.py,
+# 模組層級的 SystemExit 會讓整個 pytest 以 INTERNALERROR 中止。所以沒裝就只設 ops=None,
+# 所有實際工作放在 main() 裡, 只有直接執行(或被 test_zz 的 subprocess 執行)才會跑。
 try:
     import openseespy.opensees as ops
 except ImportError:
-    print("SKIPPED: 沒有安裝 openseespy (pip install openseespy), 略過與 OpenSeesPy 的交叉驗證")
-    sys.exit(0)
+    ops = None
 
 from frame2d import Frame2D
 from frame2d.modal import eigen
@@ -93,41 +93,49 @@ def mac(v, u):
     return float((v @ u) ** 2 / ((v @ v) * (u @ u)))
 
 
-N_MODES = 6
-for name, make in (("懸臂梁(8元素, 只留彎曲)", cantilever), ("斜桿+桁架混合剛架", mixed_frame)):
-    for kind in ('lumped', 'consistent'):
-        f = make()
-        build_opensees(f, kind)
-        lam_os = np.array(ops.eigen('-fullGenLapack', N_MODES))
-        md = eigen(f, n_modes=N_MODES, mass=kind)
-        e = float(np.max(np.abs(md.omega**2 / lam_os - 1.0)))
-        ids = sorted(f.nodes)
-        macs = []
-        for j in range(N_MODES):
-            v = np.array([[ops.nodeEigenvector(n, j + 1, d) for d in (1, 2, 3)] for n in ids]).ravel()
-            u = np.array([md.node_shape(j, n) for n in ids]).ravel()
-            macs.append(mac(v, u))
-        print(f"[{name} / {kind}] ω² 最大相對誤差 {e:.2e}, 最小MAC {min(macs):.12f}")
-        assert e < 1e-9, "特徵值與 OpenSeesPy 不一致"
-        assert min(macs) > 1 - 1e-9, "模態形狀與 OpenSeesPy 不一致(MAC)"
+def main():
+    if ops is None:
+        print("SKIPPED: 沒有安裝 openseespy (pip install openseespy), 略過與 OpenSeesPy 的交叉驗證")
+        return
+    N_MODES = 6
+    for name, make in (("懸臂梁(8元素, 只留彎曲)", cantilever), ("斜桿+桁架混合剛架", mixed_frame)):
+        for kind in ('lumped', 'consistent'):
+            f = make()
+            build_opensees(f, kind)
+            lam_os = np.array(ops.eigen('-fullGenLapack', N_MODES))
+            md = eigen(f, n_modes=N_MODES, mass=kind)
+            e = float(np.max(np.abs(md.omega**2 / lam_os - 1.0)))
+            ids = sorted(f.nodes)
+            macs = []
+            for j in range(N_MODES):
+                v = np.array([[ops.nodeEigenvector(n, j + 1, d) for d in (1, 2, 3)] for n in ids]).ravel()
+                u = np.array([md.node_shape(j, n) for n in ids]).ravel()
+                macs.append(mac(v, u))
+            print(f"[{name} / {kind}] ω² 最大相對誤差 {e:.2e}, 最小MAC {min(macs):.12f}")
+            assert e < 1e-9, "特徵值與 OpenSeesPy 不一致"
+            assert min(macs) > 1 - 1e-9, "模態形狀與 OpenSeesPy 不一致(MAC)"
 
-        mp = ops.modalProperties('-return')
-        for d, key in (('x', 'MX'), ('y', 'MY')):
-            tm = mp['totalMass'][0 if d == 'x' else 1]
-            assert abs(md.mass_total[d] - tm) < 1e-10 * tm, f"總質量與OpenSees不一致({d})"
-            if md.mass_free[d] <= 0:            # 該方向沒有可動質量(例如全部被拘束), 無參與係數可比
-                continue
-            gam_os = np.abs(np.array(mp['partiFactor' + key])[:N_MODES])
-            if kind == 'lumped':
-                free_os = mp['totalFreeMass'][0 if d == 'x' else 1]
-                assert abs(md.mass_free[d] - free_os) < 1e-10 * free_os, f"可動質量與OpenSees不一致({d})"
-                assert np.allclose(np.abs(md.gamma[d]), gam_os, rtol=1e-8, atol=1e-10), f"|Γ{d}|與OpenSees不一致"
-                ms_os = np.array(mp['partiMass' + key])[:N_MODES]
-                assert np.allclose(md.eff_mass[d], ms_os, rtol=1e-8, atol=1e-10), f"有效質量({d})與OpenSees不一致"
-            else:
-                # 一致質量: 定義不同, 只檢查第1模態在 2% 內, 並印出差異供參考
-                d1 = abs(abs(md.gamma[d][0]) - gam_os[0]) / gam_os[0]
-                print(f"    一致質量 方向{d}: 第1模態 |Γ| frame2d {abs(md.gamma[d][0]):.5f} vs OpenSees {gam_os[0]:.5f} (差 {d1:.2%}, 定義不同)")
-                assert d1 < 0.02, "一致質量的第1模態參與係數與OpenSees相差超過2%, 不只是定義差異"
+            mp = ops.modalProperties('-return')
+            for d, key in (('x', 'MX'), ('y', 'MY')):
+                tm = mp['totalMass'][0 if d == 'x' else 1]
+                assert abs(md.mass_total[d] - tm) < 1e-10 * tm, f"總質量與OpenSees不一致({d})"
+                if md.mass_free[d] <= 0:            # 該方向沒有可動質量(例如全部被拘束), 無參與係數可比
+                    continue
+                gam_os = np.abs(np.array(mp['partiFactor' + key])[:N_MODES])
+                if kind == 'lumped':
+                    free_os = mp['totalFreeMass'][0 if d == 'x' else 1]
+                    assert abs(md.mass_free[d] - free_os) < 1e-10 * free_os, f"可動質量與OpenSees不一致({d})"
+                    assert np.allclose(np.abs(md.gamma[d]), gam_os, rtol=1e-8, atol=1e-10), f"|Γ{d}|與OpenSees不一致"
+                    ms_os = np.array(mp['partiMass' + key])[:N_MODES]
+                    assert np.allclose(md.eff_mass[d], ms_os, rtol=1e-8, atol=1e-10), f"有效質量({d})與OpenSees不一致"
+                else:
+                    # 一致質量: 定義不同, 只檢查第1模態在 2% 內, 並印出差異供參考
+                    d1 = abs(abs(md.gamma[d][0]) - gam_os[0]) / gam_os[0]
+                    print(f"    一致質量 方向{d}: 第1模態 |Γ| frame2d {abs(md.gamma[d][0]):.5f} vs OpenSees {gam_os[0]:.5f} (差 {d1:.2%}, 定義不同)")
+                    assert d1 < 0.02, "一致質量的第1模態參與係數與OpenSees相差超過2%, 不只是定義差異"
 
-print("\n全部通過: 特徵值(1e-9)、模態形狀MAC(1-1e-9)、總質量與 OpenSeesPy 一致; 集中質量的可動質量/參與係數/有效質量逐項一致; 一致質量的參與係數定義不同(差異<2%)。")
+    print("\n全部通過: 特徵值(1e-9)、模態形狀MAC(1-1e-9)、總質量與 OpenSeesPy 一致; 集中質量的可動質量/參與係數/有效質量逐項一致; 一致質量的參與係數定義不同(差異<2%)。")
+
+
+if __name__ == "__main__":
+    main()

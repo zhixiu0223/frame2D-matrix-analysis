@@ -36,6 +36,10 @@ def test_script_style_validation(script_name):
         text=True,
         timeout=120,
     )
+    if result.returncode == 0 and result.stdout.lstrip().startswith("SKIPPED"):
+        # 選用依賴沒安裝(例如OpenSeesPy): 腳本自己印SKIPPED並正常結束, 這裡回報成skip,
+        # 不要讓「其實沒跑」被算成passed。
+        pytest.skip(result.stdout.strip().splitlines()[0])
     if result.returncode != 0:
         pytest.fail(f"{script_name} 失敗 (exit code {result.returncode}):\n"
                     f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}")
