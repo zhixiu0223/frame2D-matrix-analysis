@@ -181,6 +181,17 @@ def run_cyclic(frame, hinge_states, prescribed_dofs, direction, protocol, d_nomi
     cum_reaction = np.zeros(n_total)
     u_full = np.zeros(n_total)
 
+    for mid, hs in hinge_states.items():          # 起點(例如重力預載後)的彎矩必須還在彈性區間內
+        for e in (0, 1):
+            if np.isfinite(hs.Mp[e]):
+                M0 = cum_forces[mid][M_LOCAL_IDX[e]]
+                lo, hi = hs.elastic_range(e)
+                if M0 > hi * (1 + 1e-9) + 1e-12 or M0 < lo * (1 + 1e-9) - 1e-12:
+                    raise ValueError(
+                        f"起始狀態(例如重力預載)下 member {mid} 的{'i' if e == 0 else 'j'}端彎矩 "
+                        f"{M0:.6g} 已超出塑性彎矩 Mp = {hs.Mp[e]:.6g}: 鉸在反覆載重開始前就已經降伏, "
+                        "請降低重力載重或提高 Mp。")
+
     keys = [(mid, e) for mid in hinge_states for e in (0, 1)]
     hist_u, hist_F, hist_W = [0.0], [0.0], [0.0]
     hist_M = {k: [float(cum_forces[k[0]][M_LOCAL_IDX[k[1]]])] for k in keys}
@@ -222,9 +233,16 @@ def run_cyclic(frame, hinge_states, prescribed_dofs, direction, protocol, d_nomi
                 try:
                     du = solve_displacement_increment(K, prescribed_dofs, direction * d_step, fixed_dofs)
                 except RuntimeError as exc:
+                    zero_R = [f"M{mid} {'i' if e == 0 else 'j'}端" for mid, hs in hinge_states.items()
+                              for e in (0, 1) if hs.yielded[e] and hs.R_post_yield[e] <= 0.0]
+                    hint = ""
+                    if zero_R:
+                        hint = (f" 常見原因: 已降伏的塑鉸 {', '.join(zero_R)} 的硬化剛度 R_post_yield = 0(完全塑性)。"
+                                "當兩個 R=0 的鉸夾住同一個節點時, 那個節點的轉角沒有任何勁度, 矩陣就奇異了。"
+                                "請把 R_post_yield 改成小的正值(例如 0.01·EI/L)。")
                     raise RuntimeError(f"第 {step_count} 步(控制點位移約 {hist_u[-1]:.6g})勁度矩陣奇異: "
-                                       "結構在目前的塑鉸狀態下形成機構且不受位移控制約束。原始訊息: "
-                                       + str(exc))
+                                       "結構在目前的塑鉸狀態下形成機構且不受位移控制約束。" + hint
+                                       + " 原始訊息: " + str(exc))
                 changed = False
                 for mid, hs in hinge_states.items():
                     if not any(hs.yielded):
@@ -295,3 +313,144 @@ def make_protocol(amplitudes, n_cycles=1):
             proto += [float(a), -float(a)]
     proto.append(0.0)
     return proto
+
+
+def loop_summary(res: CyclicResult, amplitudes, tol: float = 1e-9) -> list:
+    """每個位移幅值的「一個完整穩態迴圈」(+a → -a → 回到 +a)的耗能與等效黏性阻尼比。
+
+    - 該幅值走了 ≥ 2 圈: 取最後兩個正向峰之間的迴圈。
+    - 只走 1 圈: 迴圈在下一級較大幅值的載入途中回到 +a 時閉合, 用內插找閉合點。
+    - 兩者都沒有(例如只走 1 圈的最後一個幅值): energy = None (迴圈沒有閉合, 不亂給數字)。
+
+    耗能 E_D = ∮F du (= 塑鉸累積塑性功); 等效黏性阻尼比 ξ_eq = E_D / (4π·E_S), E_S = ½·F_max·a。
+    回傳 [{'amplitude', 'energy', 'F_max', 'F_min', 'xi_eq', 'closed'}]。
+    """
+    u, F, W = res.u, res.F, res.work_ext
+    out = []
+    for a in amplitudes:
+        a = float(a)
+        atol = tol * (1.0 + abs(a))
+        peaks = [i for i in range(1, len(u) - 1)
+                 if abs(u[i] - a) <= atol and u[i] >= u[i - 1] and u[i] >= u[i + 1]]
+        i0 = i1 = None
+        energy = None
+        if len(peaks) >= 2:
+            i0, i1 = peaks[-2], peaks[-1]
+            energy = float(W[i1] - W[i0])
+        elif len(peaks) == 1:
+            i0 = peaks[0]
+            j = next((k for k in range(i0 + 1, len(u))
+                      if u[k] >= a - atol and u[k] >= u[k - 1] and min(u[i0:k]) < 0), None)
+            if j is not None:
+                # 在 [j-1, j] 之間內插到 u = a 的閉合點
+                if u[j] > u[j - 1] and u[j - 1] < a < u[j]:
+                    t = (a - u[j - 1]) / (u[j] - u[j - 1])
+                    Wc = W[j - 1] + t * (W[j] - W[j - 1])
+                    Fc = F[j - 1] + t * (F[j] - F[j - 1])
+                else:
+                    Wc, Fc = W[j], F[j]
+                energy = float(Wc - W[i0])
+                i1 = j
+        if i0 is None or energy is None:
+            out.append({'amplitude': a, 'energy': None, 'F_max': None, 'F_min': None,
+                        'xi_eq': None, 'closed': False})
+            continue
+        seg = F[i0:i1 + 1]
+        F_max, F_min = float(np.max(seg)), float(np.min(seg))
+        xi = energy / (4.0 * np.pi * 0.5 * F_max * a) if F_max > 0 and a > 0 else None
+        out.append({'amplitude': a, 'energy': energy, 'F_max': F_max, 'F_min': F_min,
+                    'xi_eq': float(xi) if xi is not None else None, 'closed': True})
+    return out
+
+
+MAX_WEB_STEPS = 40000      # cyclic_analysis(網頁入口)預估步數上限, 避免使用者輸入極小步長把後端卡住
+
+
+def cyclic_analysis(frame, control_nodes, weights, direction, amplitudes, n_cycles, step):
+    """網頁 /cyclic 端點用的一站式入口(兩個後端共用): 建塑鉸狀態、算控制點與底反力自由度、
+    (模型有載重時)重力預載、產生 protocol、執行 run_cyclic。錯誤一律是有清楚訊息的 ValueError。
+
+    control_nodes: 控制節點 id 清單; weights: 各控制節點的比例(None=全部 1.0), 第一個是參考點;
+    direction: 'x' 或 'y'; amplitudes: 位移幅值(控制點, 正數, 單位跟模型一致); n_cycles: 每級圈數。
+    """
+    from .dofmanager import initial_hinge_states
+    from .pushover import apply_gravity
+
+    if direction not in ('x', 'y'):
+        raise ValueError(f"direction必須是'x'或'y', 收到'{direction}'")
+    if not control_nodes:
+        raise ValueError("反覆載重需要至少一個控制節點")
+    if weights is None:
+        weights = [1.0] * len(control_nodes)
+    if len(weights) != len(control_nodes):
+        raise ValueError(f"權重個數({len(weights)})必須跟控制節點個數({len(control_nodes)})一樣")
+    amplitudes = [float(a) for a in amplitudes]
+    if not amplitudes or any(a <= 0 or not np.isfinite(a) for a in amplitudes):
+        raise ValueError("幅值序列必須是一個以上的正數")
+    if int(n_cycles) < 1 or int(n_cycles) != n_cycles:
+        raise ValueError("每級圈數必須是不小於 1 的整數")
+    if not (step > 0 and np.isfinite(step)):
+        raise ValueError("步長必須是正數")
+    hs0 = initial_hinge_states(frame)
+    if not hs0:
+        raise ValueError("模型裡沒有任何桿件設定塑鉸容量(Mp_i/Mp_j), 無法做遲滯分析 —— "
+                         "至少要有一根 frame 桿件設定 Mp 與降伏後硬化剛度 R_post_yield")
+    li = {'x': 0, 'y': 1}[direction]
+    try:
+        control_dofs = [frame.dofs_of(n)[li] for n in control_nodes]
+    except KeyError as e:
+        raise ValueError(f"找不到控制節點 {e}")
+    base_dofs = list(dict.fromkeys(frame.dofs_of(s.node)[li] for s in frame.supports))
+    if not base_dofs:
+        raise ValueError("模型沒有支承, 無法計算底剪力")
+    initial_cum = None
+    if frame.point_loads or frame.distributed_loads or frame.member_point_loads:
+        initial_cum, _ = apply_gravity(frame, hs0)          # 模型裡的載重當作重力預載
+    hs = CyclicHingeState.from_hinge_states(hs0)
+    protocol = make_protocol(amplitudes, int(n_cycles))
+    est_steps = sum(abs(b - a) for a, b in zip([0.0] + protocol[:-1], protocol)) / (step * abs(weights[0]))
+    if est_steps > MAX_WEB_STEPS:
+        raise ValueError(f"預估要走 {est_steps:.0f} 步(總位移行程 ÷ 步長), 超過上限 {MAX_WEB_STEPS}: "
+                         "請加大步長, 或減少幅值個數/圈數。降伏事件會自動在事件點切開, 步長不用小到能抓事件。")
+    res = run_cyclic(frame, hs, control_dofs, weights, protocol, step, base_dofs,
+                     initial_cum_forces=initial_cum)
+    res.protocol = protocol
+    res.amplitudes = amplitudes
+    return res
+
+
+def _finite(x):
+    x = float(x)
+    return x if np.isfinite(x) else None
+
+
+def cyclic_to_dict(res: CyclicResult, control_nodes, direction, n_cycles) -> dict:
+    """把 CyclicResult 轉成可直接 json.dumps 的 dict(網頁 /cyclic 端點, 兩個後端共用)。
+    全部是 SI(跟輸入一致): 位移 m、力 N、彎矩 N·m、能量 N·m、轉角 rad。
+    只附「曾經降伏」的塑鉸的 M / θp 歷程(從沒降伏的鉸是一條平線, 不佔傳輸量)。"""
+    amplitudes = getattr(res, 'amplitudes', [])
+    ev = [{'kind': e['kind'], 'member': int(e['member']), 'end': int(e['end']),
+           'u': float(e['u']), 'F': float(e['F'])} for e in res.events]
+    hinges = []
+    for (mid, e) in res.hinge_M:
+        ys = [x for x in ev if x['kind'] == 'yield' and x['member'] == mid and x['end'] == e]
+        if not ys:
+            continue
+        hinges.append({
+            'member': int(mid), 'end': int(e), 'label': f"M{mid} {'i' if e == 0 else 'j'}端",
+            'M': [float(v) for v in res.hinge_M[(mid, e)]],
+            'theta_p': [float(v) for v in res.hinge_theta_p[(mid, e)]],
+            'work': float(res.hinge_work[(mid, e)][-1]),
+            'n_yield': len(ys), 'first_yield': {'u': ys[0]['u'], 'F': ys[0]['F']},
+        })
+    hinges.sort(key=lambda h: (h['first_yield']['u'] if h['first_yield']['u'] >= 0 else 1e30, h['member'], h['end']))
+    loops = [{k: (_finite(v) if isinstance(v, float) else v) for k, v in row.items()}
+             for row in loop_summary(res, amplitudes)]
+    return {
+        'analysis_type': 'cyclic', 'control_nodes': list(control_nodes), 'direction': direction,
+        'amplitudes': [float(a) for a in amplitudes], 'n_cycles': int(n_cycles),
+        'protocol': [float(x) for x in getattr(res, 'protocol', [])],
+        'u': [float(v) for v in res.u], 'F': [float(v) for v in res.F],
+        'events': ev, 'hinges': hinges, 'loops': loops,
+        'total_plastic_work': _finite(res.total_plastic_work), 'n_steps': int(res.n_steps),
+    }

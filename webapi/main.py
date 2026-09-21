@@ -19,6 +19,7 @@ from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from frame2d.modal import eigen, modal_to_dict
+from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -413,6 +414,28 @@ def modal_analysis(payload: FrameIn):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return modal_to_dict(md)
+
+
+@app.post("/cyclic")
+def cyclic_endpoint(payload: FrameIn):
+    """反覆載重(遲滯)分析(frame2d.cyclic): 力-位移遲滯迴圈、各塑鉸的 M-θp 迴圈、每級幅值的
+    耗能與等效黏性阻尼比。模型裡的載重當作重力預載; 需要至少一根桿件設定塑鉸容量 Mp。"""
+    if not payload.cyclic_control_nodes or not payload.cyclic_amplitudes or payload.cyclic_step is None:
+        raise HTTPException(
+            status_code=400,
+            detail="反覆載重需要指定 cyclic_control_nodes(控制節點)、cyclic_amplitudes(幅值序列)、cyclic_step(步長)")
+    f = _build_frame(payload)
+    try:
+        res = cyclic_analysis(f, payload.cyclic_control_nodes, payload.cyclic_weights,
+                              payload.cyclic_direction, payload.cyclic_amplitudes,
+                              payload.cyclic_n_cycles, payload.cyclic_step)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return cyclic_to_dict(res, payload.cyclic_control_nodes, payload.cyclic_direction, payload.cyclic_n_cycles)
 
 
 @app.post("/pushover_step_diagrams")

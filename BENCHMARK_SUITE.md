@@ -201,3 +201,5 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_web_modal_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 真實後端 + 真實 index.html, 節點質量輸入→模態 Solve→結果表→振型→單位切換→錯誤訊息 |
 | `test_cyclic.py` | 循環塑鉸: 對獨立回歸映射、解析頂點(包辛格型)、迴圈面積=塑性耗能、單調時與 pushover 逐點一致、6塑鉸反覆載重、突變檢查(動力 D7) |
 | `test_cyclic_vs_openseespy.py` | 循環塑鉸 vs OpenSeesPy zeroLength+Steel01(選用): 4 案例力-位移逐點差 1.5e-13 |
+| `test_web_cyclic_api.py` | 網頁後端 `/cyclic`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、重力預載、各種錯誤訊息 |
+| `test_web_cyclic_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「循環」→Solve→遲滯迴圈圖/M-θp 圖/結果表→單位切換→錯誤訊息 |

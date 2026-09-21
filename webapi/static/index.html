@@ -118,6 +118,10 @@
   .deformed-line { stroke: #ea580c; stroke-width: 2; fill: none; }
   .deformed-linear-line { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
   .mode-line { stroke: #7c3aed; stroke-width: 2.5; fill: none; }
+  .cyclicLoopLine { stroke: #7c3aed; stroke-width: 2; fill: none; stroke-linejoin: round; }
+  .cyclicHingeLine { stroke: #ea580c; stroke-width: 1.8; fill: none; stroke-linejoin: round; }
+  .cyclicYieldDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
+  .cyclicChartBox { fill: white; stroke: #cbd5e1; stroke-width: 1; }
   tr.modalRow { cursor: pointer; }
   tr.modalRow:hover { background: #f5f3ff; }
   tr.modalRow.active { background: #ede9fe; font-weight: bold; }
@@ -181,6 +185,7 @@
         <option value="pdelta">P-Delta</option>
         <option value="pushover">Pushover</option>
         <option value="modal">模態</option>
+        <option value="cyclic">循環</option>
       </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
@@ -335,6 +340,18 @@
          內容太長而把畫面吃光。 -->
     <div id="topbarRest">
 
+    <div id="cyclicConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel">控制節點(逗號分隔)<input id="cy_nodes" type="text" style="width:6rem;" placeholder="例如1"></label>
+      <label class="snapLabel">權重(逗號分隔)<input id="cy_weights" type="text" style="width:6rem;" placeholder="留空=全部1.0"></label>
+      <label class="snapLabel">方向<select id="cy_dir" style="width:4rem;">
+        <option value="x">水平(x)</option>
+        <option value="y">垂直(y)</option>
+      </select></label>
+      <label class="snapLabel">位移幅值(逗號分隔, <span id="cy_amp_unit"></span>)<input id="cy_amps" type="text" style="width:11rem;" placeholder="例如15,30,45,60"></label>
+      <label class="snapLabel">每級圈數<input id="cy_ncycles" type="number" min="1" step="1" value="2" style="width:3.5rem;"></label>
+      <label class="snapLabel">步長(<span id="cy_step_unit"></span>)<input id="cy_step" type="number" step="any" style="width:5rem;"></label>
+      <p class="hint" style="margin:0.3rem 0 0;">位移控制的反覆載重: 控制節點依序走 +a1 → −a1(每級重複「每級圈數」次)→ +a2 → −a2 ... 最後回到 0。<b>需要桿件設定塑鉸容量 Mp 與降伏後硬化剛度 R</b>(桿件屬性面板, 跟 Pushover 一樣; R 填 0 = 完全塑性, 但兩個 R=0 的鉸夾住同一個節點時該節點轉角沒有勁度、矩陣會奇異, 請填小的正值, 例如 0.01·EI/L)。幅值/步長單位跟「顯示設定」的位移單位一致; 步長不用小到能抓降伏點(降伏/卸載事件會自動切開)。模型裡的節點力/均佈載重會當成重力預載(先加載, 再反覆推); 底剪力 = 支承在該方向的反力總和。準靜態、小位移, 不含 P-Delta、強度/勁度劣化與捏縮; 塑鉸是雙線性運動硬化(等同 OpenSees Steel01)。</p>
+    </div>
     <div id="modalConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
       <label class="snapLabel">模態數<input id="md_nmodes" type="number" min="1" step="1" value="6" style="width:4rem;"></label>
       <label class="snapLabel">質量矩陣<select id="md_kind" style="width:8rem;">
@@ -412,6 +429,8 @@
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
+      <button data-view="cyclic_loop" class="viewBtn" id="btnViewCyclic" style="display:none;">遲滯迴圈</button>
+      <button data-view="cyclic_hinge" class="viewBtn" id="btnViewCyclicHinge" style="display:none;">塑鉸 M-θp</button>
       <button data-view="modal" class="viewBtn" id="btnViewModal" style="display:none;">模態形狀</button>
       <span id="modalNav" style="display:none;white-space:nowrap;">
         <button id="btnModePrev" title="上一個模態" style="width:auto;">◀</button>
@@ -440,6 +459,15 @@
       <g id="camera"><g id="content"></g></g>
       <g id="overlay"></g>
     </svg>
+  </div>
+
+  <div id="cyclicPanel" style="display:none;margin:0.5rem 0;">
+    <h3 style="font-size:0.9rem;margin:0.3rem 0;">反覆載重(遲滯)分析結果 <span id="cy_summary" class="hint"></span></h3>
+    <h4 style="font-size:0.82rem;margin:0.4rem 0 0;">每級幅值的一個完整迴圈: 耗能與等效黏性阻尼比</h4>
+    <div style="overflow-x:auto;"><table id="cyclicLoopTable"><thead></thead><tbody></tbody></table></div>
+    <h4 style="font-size:0.82rem;margin:0.6rem 0 0;">塑鉸降伏順序(第一次降伏)</h4>
+    <div style="overflow-x:auto;"><table id="cyclicHingeTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint" style="margin:0.3rem 0 0;">耗能 E_D = 迴圈面積(∮F du, 等於全部塑鉸的塑性功); 等效黏性阻尼比 ξ_eq = E_D ÷ (4π·E_S), E_S = ½·F_max·a。「—」表示該幅值的迴圈沒有閉合(例如只走 1 圈的最後一級), 不亂給數字; 0 表示還在彈性範圍內。</p>
   </div>
 
   <div id="modalPanel" style="display:none;margin:0.5rem 0;">
@@ -559,6 +587,7 @@ let queryMarker = null;     // 桿件內部任意位置查詢的結果(供畫面
 let viewMode = 'structure';
 let modalResult = null;     // /modal 的回傳(模態分析結果), 跟靜力的lastResult分開存
 let modalModeIndex = 0;     // 目前顯示振型的模態(0起算)
+let cyclicResult = null;    // /cyclic 的回傳(反覆載重/遲滯分析結果)
 let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
 let pushoverStepCache = {};  // 索引(數字) -> /pushover_step_diagrams的回應, 避免同一步重複打API
 let pushoverStepFetchInFlight = null;  // 目前正在抓的步驟索引(避免同一步驟重複同時發出好幾個請求)
@@ -684,7 +713,7 @@ function computeTransformForRect(pad, sx, sy, availW, availH) {
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
-const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, N: 0.14, V: 0.14, M: 0.14};
+const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, cyclic_loop: 0.14, cyclic_hinge: 0.14, N: 0.14, V: 0.14, M: 0.14};
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
@@ -922,6 +951,8 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
+  const cyclicOn = (viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') && cyclicResult;
+  document.getElementById('cyclicPanel').style.display = cyclicOn ? 'block' : 'none';
   const modalOn = viewMode === 'modal' && modalResult;
   document.getElementById('modalPanel').style.display = modalOn ? 'block' : 'none';
   document.getElementById('modalNav').style.display = modalOn ? 'inline-block' : 'none';
@@ -945,7 +976,10 @@ function render() {
   // 反而更困擾——兩者都改成'auto', 放棄單指拖曳平移這個視圖, 換成
   // 讓瀏覽器原生捲動生效; 要縮放結構還是可以用🔍+/-/原大小這幾個按鈕,
   // 沒有被這個改動影響。
-  svg.style.touchAction = (viewMode === 'pushover_curve' || viewMode === 'pushover_playback') ? 'auto' : 'none';
+  svg.style.touchAction = (viewMode === 'pushover_curve' || viewMode === 'pushover_playback'
+                           || viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') ? 'auto' : 'none';
+  if (viewMode === 'cyclic_loop') { drawCyclicLoop(); return; }     // 固定螢幕座標的圖表, 不套用結構視圖的 camera
+  if (viewMode === 'cyclic_hinge') { drawCyclicHinges(); return; }
   if (viewMode === 'pushover_curve') {
     // 容量曲線是完全不同性質的圖(u vs F的歷程, 不是空間座標), 不套用
     // 結構視圖那一套camera平移縮放/格線, 直接畫在固定的overlay圖層上。
@@ -3373,9 +3407,9 @@ function _renderPropPanelInner() {
       </details>
 
       <details class="propSection">
-        <summary>塑性鉸容量(Pushover用)</summary>
+        <summary>塑性鉸容量(Pushover與循環分析用)</summary>
         <div class="propSectionBody">
-          <p class="hint">只有元素類型是frame時有意義, 只有做Pushover(遞增側推)分析時才會用到——線性/P-Delta分析完全忽略這裡的設定。留空(不填)代表這個端點永遠保持彈性、不會降伏。</p>
+          <p class="hint">只有元素類型是frame時有意義, 只有做Pushover(遞增側推)或「循環」(反覆載重/遲滯)分析時才會用到——線性/P-Delta/模態分析完全忽略這裡的設定。留空(不填)代表這個端點永遠保持彈性、不會降伏。</p>
           <label>i端(N${m.node_i}) 降伏彎矩 Mp (${unitOf('moment')})</label>
           <input id="p_mp_i" type="number" step="any" placeholder="留空=不設塑鉸" value="${m.Mp_i != null ? fromSI('moment', m.Mp_i) : ''}">
           <label>或用降伏應力fy(${unitOf('E')}) × 塑性斷面模數Z(cm³)算Mp</label>
@@ -4312,7 +4346,7 @@ document.getElementById('momentArcScale').addEventListener('input', () => {
 });
 document.getElementById('loadLabelFontSize').addEventListener('change', render);
 document.getElementById('valueLabelFontSize').addEventListener('change', render);
-['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce', 'unitDensity', 'unitMass', 'unitInertia'].forEach(id => {
+['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce', 'unitMoment', 'unitDensity', 'unitMass', 'unitInertia'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
     // 斷面管理面板開著時(它不是靠selected顯示的), 標籤跟輸入框裡的數值也要跟著換算重畫,
     // 否則畫面上還是舊單位的數字, 按「套用」時卻用新單位換算, 會靜默存成錯的值。
@@ -4320,6 +4354,11 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
     else if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
     if (modalResult) renderModalTable();   // 模態結果表的質量單位也要跟著換
+    updateCyclicUnitLabels();               // 反覆載重設定列的幅值/步長單位標籤
+    if (cyclicResult) {                     // 遲滯結果表與圖(位移/力/彎矩/能量單位)也要跟著換算重畫
+      renderCyclicPanel();
+      if (viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') render();
+    }
     updatePushoverUnitLabels();      // Pushover設定列的「目標位移」「步長」單位標籤也要跟著換
   });
 });
@@ -4512,6 +4551,11 @@ function resetViewToStructure() {
   document.getElementById('analysisType').value = 'linear';
   document.getElementById('pushoverConfigBar').style.display = 'none';
   document.getElementById('modalConfigBar').style.display = 'none';
+  document.getElementById('cyclicConfigBar').style.display = 'none';
+  document.getElementById('btnViewCyclic').style.display = 'none';
+  document.getElementById('btnViewCyclicHinge').style.display = 'none';
+  document.getElementById('cyclicPanel').style.display = 'none';
+  cyclicResult = null;
   document.getElementById('btnViewModal').style.display = 'none';
   document.getElementById('modalNav').style.display = 'none';
   modalResult = null;
@@ -4634,6 +4678,7 @@ document.getElementById('analysisType').addEventListener('change', (e) => {
   const isPushover = e.target.value === 'pushover';
   document.getElementById('pushoverConfigBar').style.display = isPushover ? 'block' : 'none';
   document.getElementById('modalConfigBar').style.display = e.target.value === 'modal' ? 'block' : 'none';
+  document.getElementById('cyclicConfigBar').style.display = e.target.value === 'cyclic' ? 'block' : 'none';
 });
 
 // 後端錯誤訊息: FastAPI回{detail: 字串或驗證錯誤陣列}, stdlib後端回{error: 字串}, 統一轉成一行文字
@@ -4697,6 +4742,224 @@ function drawModeShape(t) {
   }
 }
 
+// ================= 反覆載重(遲滯)分析 =================
+function updateCyclicUnitLabels() {
+  document.getElementById('cy_amp_unit').textContent = unitOf('disp');
+  document.getElementById('cy_step_unit').textContent = unitOf('disp');
+}
+updateCyclicUnitLabels();
+
+const CYCLIC_MAX_STEPS = 40000;    // 跟後端 frame2d.cyclic.MAX_WEB_STEPS 一致: 預估步數上限
+
+function buildCyclicPayload() {
+  const nodesRaw = document.getElementById('cy_nodes').value.trim();
+  const weightsRaw = document.getElementById('cy_weights').value.trim();
+  const ampsRaw = document.getElementById('cy_amps').value.trim();
+  const stepRaw = document.getElementById('cy_step').value;
+  const nCycles = parseInt(document.getElementById('cy_ncycles').value, 10);
+  if (nodesRaw === '' || ampsRaw === '' || stepRaw === '') {
+    setStatus('反覆載重需要填「控制節點」「位移幅值」「步長」三個欄位');
+    return null;
+  }
+  const controlNodes = nodesRaw.split(',').map(t => t.trim()).filter(t => t !== '').map(t => parseInt(t, 10));
+  if (controlNodes.length === 0 || controlNodes.some(n => isNaN(n))) {
+    setStatus('控制節點格式錯誤, 應該是逗號分隔的節點編號, 例如 1 或 6,7,8');
+    return null;
+  }
+  let weights = null;
+  if (weightsRaw !== '') {
+    weights = weightsRaw.split(',').map(t => t.trim()).filter(t => t !== '').map(t => parseFloat(t));
+    if (weights.some(w => isNaN(w)) || weights.length !== controlNodes.length) {
+      setStatus('權重格式錯誤, 應該是跟控制節點數量一樣多、逗號分隔的數字, 或整個留空(=全部1.0)');
+      return null;
+    }
+  }
+  const amps = ampsRaw.split(',').map(t => t.trim()).filter(t => t !== '').map(t => parseFloat(t));
+  if (amps.length === 0 || amps.some(a => !Number.isFinite(a) || a <= 0)) {
+    setStatus('位移幅值格式錯誤, 應該是逗號分隔的正數, 例如 15,30,45,60');
+    return null;
+  }
+  if (!Number.isFinite(nCycles) || nCycles < 1) { setStatus('每級圈數必須是不小於 1 的整數'); return null; }
+  const step = parseFloat(stepRaw);
+  if (!Number.isFinite(step) || step <= 0) { setStatus('步長必須是正數'); return null; }
+  // 預估步數(總位移行程 ÷ 步長): 太多就在前端先擋下, 不用等後端空轉
+  let travel = 0, prev = 0;
+  for (const a of amps) for (let k = 0; k < nCycles; k++) { travel += Math.abs(a - prev) + 2 * a; prev = -a; }
+  const est = travel / step;
+  if (est > CYCLIC_MAX_STEPS) {
+    setStatus(`預估要走 ${Math.round(est)} 步(總位移行程 ÷ 步長), 超過上限 ${CYCLIC_MAX_STEPS}: 請加大步長, 或減少幅值個數/圈數。降伏事件會自動切開, 步長不用小到能抓降伏點。`);
+    return null;
+  }
+  return {
+    ...model,
+    cyclic_control_nodes: controlNodes, cyclic_weights: weights,
+    cyclic_direction: document.getElementById('cy_dir').value,
+    cyclic_amplitudes: amps.map(a => toSI('disp', a)), cyclic_n_cycles: nCycles,
+    cyclic_step: toSI('disp', step),
+  };
+}
+
+function renderCyclicPanel() {
+  if (!cyclicResult) return;
+  const r = cyclicResult, du = unitOf('disp'), fu = unitOf('force'), eu = unitOf('moment');   // 能量(N·m)跟彎矩單位同一族
+  const nYield = r.events.filter(e => e.kind === 'yield').length, nUnload = r.events.filter(e => e.kind === 'unload').length;
+  document.getElementById('cy_summary').textContent =
+    `(${r.u.length} 個記錄點; ${nYield} 次降伏、${nUnload} 次卸載; 全部塑鉸累積塑性功 ${r.total_plastic_work === null ? '—' : Number(fromSI('moment', r.total_plastic_work).toPrecision(5))} ${eu})`;
+  document.querySelector('#cyclicLoopTable thead').innerHTML =
+    `<tr><th>幅值(${du})</th><th>F_max(${fu})</th><th>耗能 E_D(${eu})</th><th>ξ_eq</th></tr>`;
+  const tb = document.querySelector('#cyclicLoopTable tbody');
+  tb.innerHTML = '';
+  for (const l of r.loops) {
+    const tr = document.createElement('tr');
+    const fmt = (v, kind, dig) => (v === null || v === undefined) ? '—' : Number(fromSI(kind, v).toPrecision(dig)).toString();
+    const small = l.energy !== null && r.total_plastic_work !== null && Math.abs(l.energy) < 1e-9 * Math.max(1, Math.abs(r.total_plastic_work));
+    tr.innerHTML = `<td>${Number(fromSI('disp', l.amplitude).toPrecision(5))}</td><td>${fmt(l.F_max, 'force', 5)}</td>`
+      + `<td>${l.energy === null ? '—' : (small ? '0' : fmt(l.energy, 'moment', 5))}</td>`
+      + `<td>${l.xi_eq === null ? (l.closed ? '—' : '—') : (small ? '0' : l.xi_eq.toFixed(3))}</td>`;
+    tb.appendChild(tr);
+  }
+  document.querySelector('#cyclicHingeTable thead').innerHTML =
+    `<tr><th>順序</th><th>塑鉸</th><th>降伏時控制點位移(${du})</th><th>底剪力(${fu})</th><th>降伏次數</th><th>累積塑性功(${eu})</th></tr>`;
+  const hb = document.querySelector('#cyclicHingeTable tbody');
+  hb.innerHTML = '';
+  r.hinges.forEach((h, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i + 1}</td><td>${h.label}</td><td>${Number(fromSI('disp', h.first_yield.u).toPrecision(4))}</td>`
+      + `<td>${Number(fromSI('force', h.first_yield.F).toPrecision(5))}</td><td>${h.n_yield}</td>`
+      + `<td>${Number(fromSI('moment', h.work).toPrecision(5))}</td>`;
+    hb.appendChild(tr);
+  });
+}
+
+// 「好看」的刻度: 步長取 1/2/5 × 10ⁿ, 刻度落在步長的整數倍上(例如 -60, -40, ... 60 而不是 -57.4, 0, 57.4)
+function niceTicks(lo, hi, target) {
+  const span = hi - lo;
+  if (!(span > 0)) return [lo];
+  const raw = span / target, mag = Math.pow(10, Math.floor(Math.log10(raw))), norm = raw / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * mag;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) ticks.push(Number(v.toPrecision(12)));
+  return ticks;
+}
+
+function fmtTick(v) {
+  if (Math.abs(v) < 1e-12) return '0';
+  return Number(v.toPrecision(3)).toString();
+}
+
+// 通用的 XY 折線圖(畫在固定螢幕座標的 overlay 圖層, 含零軸、格線、刻度、標題、事件點)
+function drawXYChart(x, y, w, h, xs, ys, opt) {
+  const mL = opt.mL || 74, mR = 18, mT = opt.mT || 34, mB = opt.mB || 50;
+  const cw = w - mL - mR, ch = h - mT - mB;
+  let xmin = Math.min(0, ...xs), xmax = Math.max(0, ...xs), ymin = Math.min(0, ...ys), ymax = Math.max(0, ...ys);
+  if (xmax - xmin < 1e-12) { xmin -= 1; xmax += 1; }
+  if (ymax - ymin < 1e-12) { ymin -= 1; ymax += 1; }
+  const px = (xmax - xmin) * 0.05, py = (ymax - ymin) * 0.06;
+  xmin -= px; xmax += px; ymin -= py; ymax += py;
+  const sx = v => x + mL + (v - xmin) / (xmax - xmin) * cw;
+  const sy = v => y + mT + ch - (v - ymin) / (ymax - ymin) * ch;
+  putOverlay(el('rect', {x, y, width: w, height: h, rx: 6, class: 'cyclicChartBox'}));
+  for (const xv of niceTicks(xmin, xmax, opt.xTicks || 5)) {
+    putOverlay(el('line', {x1: sx(xv), y1: y + mT, x2: sx(xv), y2: y + mT + ch, class: 'axisTickLine'}));
+    const tx = el('text', {x: sx(xv), y: y + mT + ch + 18, 'text-anchor': 'middle', class: 'axisTickLabel', style: `font-size:${opt.tickFont || 15}px;`});
+    tx.textContent = fmtTick(xv);
+    putOverlay(tx);
+  }
+  for (const yv of niceTicks(ymin, ymax, opt.yTicks || 5)) {
+    putOverlay(el('line', {x1: x + mL, y1: sy(yv), x2: x + mL + cw, y2: sy(yv), class: 'axisTickLine'}));
+    const ty = el('text', {x: x + mL - 8, y: sy(yv) + 5, 'text-anchor': 'end', class: 'axisTickLabel', style: `font-size:${opt.tickFont || 15}px;`});
+    ty.textContent = fmtTick(yv);
+    putOverlay(ty);
+  }
+  // 零軸
+  putOverlay(el('line', {x1: sx(0), y1: y + mT, x2: sx(0), y2: y + mT + ch, class: 'axisLine'}));
+  putOverlay(el('line', {x1: x + mL, y1: sy(0), x2: x + mL + cw, y2: sy(0), class: 'axisLine'}));
+  let pts = '';
+  for (let i = 0; i < xs.length; i++) pts += `${sx(xs[i])},${sy(ys[i])} `;
+  putOverlay(el('polyline', {points: pts.trim(), class: opt.cls}));
+  for (const d of (opt.dots || [])) {
+    const dot = el('circle', {cx: sx(d.x), cy: sy(d.y), r: opt.dotR || 5, class: 'cyclicYieldDot'});
+    if (d.tip) { const t = el('title', {}); t.textContent = d.tip; dot.appendChild(t); }
+    putOverlay(dot);
+  }
+  const title = el('text', {x: x + mL, y: y + 22, class: 'axisTitle', style: `font-size:${opt.titleFont || 17}px;`});
+  title.textContent = opt.title;
+  putOverlay(title);
+  const xt = el('text', {x: x + mL + cw / 2, y: y + h - 8, 'text-anchor': 'middle', class: 'axisTitle', style: `font-size:${opt.axisFont || 15}px;`});
+  xt.textContent = opt.xTitle;
+  putOverlay(xt);
+  const yt = el('text', {x: x + 18, y: y + mT + ch / 2, 'text-anchor': 'middle', class: 'axisTitle',
+                          transform: `rotate(-90, ${x + 18}, ${y + mT + ch / 2})`, style: `font-size:${opt.axisFont || 15}px;`});
+  yt.textContent = opt.yTitle;
+  putOverlay(yt);
+}
+
+// 整體結構的遲滯迴圈: 底剪力 - 控制點位移(紅點 = 降伏事件)
+function drawCyclicLoop() {
+  if (!cyclicResult) { drawNeedSolveMsg(); return; }
+  const r = cyclicResult, du = unitOf('disp'), fu = unitOf('force');
+  const xs = r.u.map(v => fromSI('disp', v)), ys = r.F.map(v => fromSI('force', v));
+  const dots = r.events.filter(e => e.kind === 'yield').map(e => ({
+    x: fromSI('disp', e.u), y: fromSI('force', e.F), tip: `M${e.member} ${e.end === 0 ? 'i' : 'j'}端降伏`}));
+  drawXYChart(20, 20, VB_W - 40, 820, xs, ys, {
+    cls: 'cyclicLoopLine', dots, mL: 96, mB: 64,
+    title: `整體結構遲滯迴圈(控制節點 ${r.control_nodes.join(',')}, ${r.direction === 'x' ? '水平' : '垂直'}; 紅點 = 塑鉸降伏)`,
+    xTitle: `控制點位移 (${du})`, yTitle: `底剪力 (${fu})`, tickFont: 20, axisFont: 20, titleFont: 20, dotR: 6});
+}
+
+// 各塑鉸的彎矩 - 累積塑性轉角迴圈(只畫曾經降伏的鉸; 兩欄的小圖網格, 依降伏先後排序)
+function drawCyclicHinges() {
+  if (!cyclicResult) { drawNeedSolveMsg(); return; }
+  const r = cyclicResult, mu = unitOf('moment');
+  if (r.hinges.length === 0) {
+    const t = el('text', {x: 30, y: 60, class: 'axisTitle'});
+    t.textContent = '沒有任何塑鉸降伏(幅值太小, 全程彈性)';
+    putOverlay(t);
+    return;
+  }
+  const cols = 2, gap = 14, boxW = (VB_W - 40 - gap) / cols;
+  const rows = Math.ceil(r.hinges.length / cols);
+  const boxH = Math.min(340, (VB_H - 40 - gap * (rows - 1)) / rows);
+  r.hinges.forEach((h, i) => {
+    const cx = 20 + (i % cols) * (boxW + gap), cy = 20 + Math.floor(i / cols) * (boxH + gap);
+    const xs = h.theta_p.map(v => v * 1000), ys = h.M.map(v => fromSI('moment', v));    // θp 用 mrad
+    drawXYChart(cx, cy, boxW, boxH, xs, ys, {
+      cls: 'cyclicHingeLine', mL: 66, mB: 42, mT: 32, tickFont: 13, axisFont: 13, titleFont: 15, xTicks: 4, yTicks: 4,
+      title: `${i + 1}. ${h.label}(降伏 ${h.n_yield} 次)`,
+      xTitle: 'θp (mrad)', yTitle: `M (${mu})`});
+  });
+}
+
+async function runCyclicAnalysis() {
+  const body = buildCyclicPayload();
+  if (!body) return;
+  setStatus('反覆載重分析中...');
+  try {
+    const res = await fetch('/cyclic', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    if (!res.ok) { setStatus('反覆載重分析失敗: ' + await apiErrorMessage(res)); return; }
+    cyclicResult = await res.json();
+    document.getElementById('btnViewCyclic').style.display = '';
+    document.getElementById('btnViewCyclicHinge').style.display = '';
+    const bar = document.getElementById('viewBar');
+    if (!bar.classList.contains('open')) {
+      bar.classList.add('open');
+      document.getElementById('btnTogglePostProcess').textContent = '▾ 後處理';
+    }
+    document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btnViewCyclic').classList.add('active');
+    viewMode = 'cyclic_loop';
+    document.getElementById('playbackBar').style.display = 'none';
+    document.getElementById('combinedConfigBar').style.display = 'none';
+    renderCyclicPanel();
+    const maxF = Math.max(...cyclicResult.F.map(Math.abs));
+    setStatus(`反覆載重完成: ${cyclicResult.u.length} 個記錄點, ${cyclicResult.hinges.length} 個塑鉸降伏, `
+      + `最大底剪力 ${Number(fromSI('force', maxF).toPrecision(5))} ${unitOf('force')}`);
+    render();
+  } catch (e) { setStatus('連線失敗: ' + e.message); }
+}
+
 // 振型視圖旁邊的「◀ ▶」: 不用捲到下面的結果表, 直接切換上一個/下一個模態
 function stepMode(delta) {
   if (!modalResult) return;
@@ -4744,6 +5007,7 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
   sanitizeModel();
   const analysisType = document.getElementById('analysisType').value;
   if (analysisType === 'modal') { await runModalAnalysis(); return; }
+  if (analysisType === 'cyclic') { await runCyclicAnalysis(); return; }
   const isPushover = analysisType === 'pushover';
 
   let body;

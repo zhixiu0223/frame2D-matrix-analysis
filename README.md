@@ -36,7 +36,9 @@
   切換振型
 - **循環(遲滯)塑鉸**: `frame2d.cyclic.run_cyclic()` 位移控制反覆載重, 雙線性運動硬化塑鉸
   (`CyclicHingeState`, 等同 OpenSees Steel01), 得到力-位移遲滯迴圈、各塑鉸的 M-θp 迴圈、每圈耗能
-  (對 OpenSeesPy 驗證到機器精度)。範例: `PYTHONPATH=. python examples/cyclic_portal_demo.py`
+  (對 OpenSeesPy 驗證到機器精度)。範例: `PYTHONPATH=. python examples/cyclic_portal_demo.py`。
+  網頁版: 桿件屬性面板填 Mp 與硬化剛度 R, 上方「分析」選「循環」, 填控制節點、位移幅值(逗號分隔)、每級圈數、步長,
+  Solve 後看「遲滯迴圈」與「塑鉸 M-θp」; 範例模型 `examples/portal_cyclic_demo.json`(用「匯入JSON」載入)
 - **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、反應譜/時程(遲滯迴圈目前是準靜態反覆載重,
   還沒接到時程分析)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)

@@ -24,6 +24,7 @@ from frame2d.pushover import run_pushover, run_pushover_converged, apply_gravity
 from frame2d.newton import run_pushover_newton, run_pushover_corotational_oneshot
 from frame2d.postprocess import member_internal_forces
 from frame2d.modal import eigen, modal_to_dict
+from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
@@ -344,6 +345,24 @@ def _modal_payload(payload: dict) -> dict:
     return modal_to_dict(md)
 
 
+def _cyclic_payload(payload: dict) -> dict:
+    """反覆載重(遲滯)分析(frame2d.cyclic), 跟 webapi/main.py 的 /cyclic 端點同一個行為。
+    錯誤(缺欄位、沒有塑鉸容量、預載超過Mp、步數過多等)都是有清楚訊息的例外, do_POST 轉成 400。"""
+    nodes = payload.get("cyclic_control_nodes")
+    amps = payload.get("cyclic_amplitudes")
+    step = payload.get("cyclic_step")
+    if not nodes or not amps or step is None:
+        raise ValueError("反覆載重需要指定 cyclic_control_nodes(控制節點)、cyclic_amplitudes(幅值序列)、cyclic_step(步長)")
+    direction = payload.get("cyclic_direction", "x")
+    n_cycles = payload.get("cyclic_n_cycles", 2)
+    f = _build_frame(payload)
+    try:
+        res = cyclic_analysis(f, nodes, payload.get("cyclic_weights"), direction, amps, n_cycles, step)
+    except KeyError as e:
+        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    return cyclic_to_dict(res, nodes, direction, n_cycles)
+
+
 def _solve_payload(payload: dict) -> dict:
     if payload.get("analysis_type", "linear") == "pushover":
         return _solve_pushover_payload(payload)
@@ -455,6 +474,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json_body()
                 self._send_json(_solve_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/cyclic":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_cyclic_payload(payload))
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return

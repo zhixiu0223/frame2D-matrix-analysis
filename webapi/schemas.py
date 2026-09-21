@@ -168,6 +168,16 @@ class FrameIn(BaseModel):
     fbd_only: Optional[bool] = False
     """搭配member_ids用: True時/export/pdf只附自由體圖(含縮圖),
     跳過每根桿件自己的N/V/M/變形圖那一頁, 讓報告更精簡。"""
+    cyclic_control_nodes: Optional[List[int]] = None
+    """只有/cyclic端點用: 反覆載重的控制節點(第一個是參考點, 遲滯迴圈的位移軸就是它的位移)。"""
+    cyclic_weights: Optional[List[float]] = None
+    """各控制節點的比例, None=全部1.0(跟pushover_weights同義)。"""
+    cyclic_direction: Literal['x', 'y'] = 'x'
+    cyclic_amplitudes: Optional[List[float]] = None
+    """位移幅值序列(SI, m), 例如[0.015, 0.03, 0.045, 0.06]: 每個幅值走 cyclic_n_cycles 個(+a,-a)循環。"""
+    cyclic_n_cycles: int = 2
+    cyclic_step: Optional[float] = None
+    """位移步長上限(SI, m); 降伏事件會自動在事件點切開, 不用為了抓事件調小。"""
     modal_n_modes: Optional[int] = None
     """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""
     modal_mass_kind: Literal['lumped', 'consistent'] = 'lumped'
