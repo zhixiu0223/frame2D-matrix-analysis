@@ -244,7 +244,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D1 | 質量矩陣(集中 → 一致) + 動力單位 | `mass.py` | ✅ |
 | D2 | 特徵值/模態分析 + 模態性質 | `modal.py` | ✅ |
 | D2b | 網頁: 節點質量輸入、模態分析端點、結果表與振型顯示 | webapi | ✅ |
-| D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ⬜ |
+| D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ✅ |
 | D4 | 線性時程 (Newmark) + 諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ⬜ |
 | D5 | Rayleigh 阻尼 + 地面加速度輸入 | `damping.py` | ⬜ |
 | D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
@@ -380,15 +380,44 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 - **限制(誠實)**: jsdom 不是真的瀏覽器——沒有版面/CSS 渲染、沒有真實觸控事件, 手機瀏覽器上的外觀與
   操作手感要你實際開網頁確認。振型目前是靜態顯示(沒有動畫); 模態結果尚未納入 PDF 匯出
 
-#### D3 反應譜分析
+#### D3 反應譜分析 ✅ 已完成(核心; 網頁 D3b 之後再做)
 
-- `response_spectrum(modal, spectrum, direction, combine='SRSS' | 'CQC', damping)`
-- `spectrum` 只吃 `Sa(T)` 的 callable, 單位在文件中明講。台灣規範反應譜做成 adapter,
-  放在 `taiwan-seismic-code-calc`, 不進核心
-- 每個反應量(位移、桿件內力、基底剪力)各自做模態組合, 桿件內力是每個模態用等效
-  靜力 `f_i = Γ_i S_a,i M φ_i` 算出來再組合, 不是先組合位移再回推內力
-- 驗證: 單自由度 `S_d = S_a / ω²`; 單一模態主導時基底剪力 = 有效模態質量 × `S_a`;
-  CQC 在頻率分離良好時趨近 SRSS; 相同頻率時趨近絕對值和
+- `frame2d/spectrum.py`: `response_spectrum(modal, spectrum, direction='x'|'y', damping=0.05,
+  combine='SRSS'|'CQC', n_modes=None)`, `spectrum` 只吃 `S_a(T)` 的 callable(單位跟 modal 一致,
+  核心不做單位換算, 台灣規範譜的查表/公式做成 adapter, 放使用端不進核心)
+- 做法: 每個模態的位移 `D_i = Γ_i · S_d(T_i) · φ_i` 精確滿足 `K D_i = f_i`(等效靜力
+  `f_i = Γ_i · S_a(T_i) · M φ_i`, 這是把 `K φ_i = ω_i² M φ_i` 代入 `K D_i` 直接得到的恆等式,
+  **不需要另外解一次線性方程式**); 桿件內力用局部勁度矩陣直接算(純線性彈性); 反力
+  `R_i = K D_i − f_i`(跟 `SolveResult.reactions` 同一套 `R=Ku-F` 慣例)。**每個反應量(位移、
+  桿件內力、反力、基底剪力)各自算出各模態的訊號值(有正負號)後再組合**, 不是先組合位移
+  再反推內力/反力——`RSAResult` 的 `modal_*` 系列欄位就是組合前的訊號值
+- 總基底剪力有不用組裝 K 的簡潔公式(標準結果, Chopra): `V_i = Γ_i² · S_a(T_i) = M*_i · S_a(T_i)`
+  (D2 的有效模態質量直接可用); `response_spectrum()` 內部每次呼叫都會做一次自我一致性檢查
+  (自由DOF上 `K@D_i-f_i` 必須精確為0), 不一致直接報錯而不是吃案
+- SRSS: `combined=√(Σvᵢ²)`。CQC(Der Kiureghian & Rosenblueth): `ρᵢⱼ` 用單一阻尼比(全模態同一個,
+  等 D5 Rayleigh 阻尼才有逐模態的阻尼比); `combine_cqc`/`combine_srss`/`cqc_rho` 也公開給外部
+  客製化組合用
+- 驗證(`tests/test_spectrum.py`, 只依賴 numpy):
+  - SDOF 解析解(頂端質量懸臂柱): `S_d=A0/ω²`、基底剪力 `=m·A0`、反力慣例, 全部到 1e-12
+  - 兩質量懸臂(無質量梁, 沿用 D2 測試的獨立柔度矩陣解析解): 各模態訊號位移、SRSS/CQC 組合位移
+    對手算值(含 CQC 用同一組 `cqc_rho` 手算的相關係數矩陣), 到 1e-10
+  - 反力/基底剪力的簽名恆等式 `Σ(反力·r) = -V_i`, 在多支承斜桿桁架混合剛架(集中/一致質量、
+    x/y 兩方向, 共 4 組 × 5 個模態)驗證, 最大相對誤差 2.8e-13
+  - 獨立 K 線性方程式交叉驗證: 不用 `K D_i=f_i` 的恆等式捷徑, 直接對自由DOF解一次線性方程式,
+    確認等於 `D_i`(驗證「不用解方程式」這個捷徑本身是對的, 不是自我一致的巧合), 到 6.9e-14
+  - CQC 性質: 對角=1、對稱, 對 Der Kiureghian 公式的**手算數值**(不是鬆的區間檢查)到 1e-12,
+    頻率分離良好時 CQC 收斂到 SRSS(相對差 3.8e-4)
+  - 突變檢查 6 個(等效靜力用 M·r 而非 M·φ、CQC 分母漏項、SRSS 漏平方、基底剪力用 Γ 而非 Γ²、
+    S_d 公式漏平方、寬鬆區間檢查蓋不住的 CQC 分母錯誤), 全部被抓到——第一次寫的區間檢查
+    (`ρ>0.3`)真的漏掉了一個分母錯誤, 換成手算數值後才抓到, 過程記錄在測試裡當提醒
+- **對 OpenSeesPy 交叉驗證**(`tests/test_spectrum_vs_openseespy.py`, 選用, 沒裝就 SKIPPED):
+  單一模態(1、2、3 個模態各自單獨算)的位移與反力, 位移/反力相對差 1e-13。**範圍限制**:
+  `ops.responseSpectrumAnalysis` 的多模態 SRSS/CQC 組合語法在這個環境裡沒能摸清楚(試了幾種
+  `-mode` 傳法, 結果都像只用了其中一個模態, 不像做了組合), 所以只比對單一模態, 多模態組合
+  改由上面的兩質量懸臂獨立解析解驗證。集中質量下逐項相同; 一致質量沿用 D2 記錄過的同一個
+  限制(參與係數定義跟 OpenSees `modalProperties` 不完全一致), 這裡的比對用集中質量
+- 限制(誠實): `spectrum` 是純量函式(單一方向、單一譜), 沒有多方向組合(例如 30% 法則)、
+  沒有考慮扭轉耦合以外的三維效應(本來就是 2D 框架); CQC 的阻尼比是全模態同一個純量
 
 #### D4 線性時程
 

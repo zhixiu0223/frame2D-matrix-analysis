@@ -203,3 +203,5 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_cyclic_vs_openseespy.py` | 循環塑鉸 vs OpenSeesPy zeroLength+Steel01(選用): 4 案例力-位移逐點差 1.5e-13 |
 | `test_web_cyclic_api.py` | 網頁後端 `/cyclic`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、重力預載、各種錯誤訊息 |
 | `test_web_cyclic_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「循環」→Solve→遲滯迴圈圖/M-θp 圖/結果表→單位切換→錯誤訊息 |
+| `test_spectrum.py` | 反應譜分析: SDOF解析解、兩質量懸臂獨立柔度矩陣參考、反力恆等式、獨立K解交叉驗證、CQC對手算數值(動力 D3) |
+| `test_spectrum_vs_openseespy.py` | 反應譜分析 vs OpenSeesPy(選用, 只比單一模態): 位移/反力相對差 1e-13 |

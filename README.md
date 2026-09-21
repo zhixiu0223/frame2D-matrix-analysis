@@ -39,8 +39,11 @@
   (對 OpenSeesPy 驗證到機器精度)。範例: `PYTHONPATH=. python examples/cyclic_portal_demo.py`。
   網頁版: 桿件屬性面板填 Mp 與硬化剛度 R, 上方「分析」選「循環」, 填控制節點、位移幅值(逗號分隔)、每級圈數、步長,
   Solve 後看「遲滯迴圈」與「塑鉸 M-θp」; 範例模型 `examples/portal_cyclic_demo.json`(用「匯入JSON」載入)
-- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、反應譜/時程(遲滯迴圈目前是準靜態反覆載重,
-  還沒接到時程分析)
+- **反應譜分析**: `frame2d.spectrum.response_spectrum(modal, spectrum, direction, combine='SRSS'|'CQC')`,
+  建立在 D2 模態分析上, `spectrum` 只吃 S_a(T) 的 callable(規範譜的查表/公式放使用端, 不進核心)。
+  對 OpenSeesPy 驗證過單一模態到機器精度; 多模態 SRSS/CQC 組合用獨立解析解驗證
+- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、時程分析(遲滯迴圈目前是準靜態反覆載重,
+  反應譜是模態疊加, 都還沒接到時程)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -55,6 +58,7 @@ frame2d/
   mass.py          — assemble_M(): 集中/一致質量矩陣、影響向量、總質量(動力分析用)
   modal.py         — eigen(): 模態分析(靜力凝縮無質量DOF、模態性質)
   cyclic.py        — CyclicHingeState + run_cyclic(): 循環塑鉸與反覆載重(遲滯迴圈)
+  spectrum.py      — response_spectrum(): 反應譜分析(SRSS/CQC模態組合)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力
