@@ -191,3 +191,5 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_equal_dof.py` | equalDOF 懲罰法 |
 | `test_point_load_angle.py` | 集中力的角度便利介面 |
 | `test_assembly.py` | `assemble_K()`: 剛體運動檢核 + 與既有求解器交叉比對(動力 D0) |
+| `test_mass.py` | 質量矩陣: sympy 形函數積分、總質量與極慣量解析不變量、頂端質量懸臂柱 ω、SI 與 kN·m·ton 單位一致性(動力 D1) |
+| `test_dynamic_units.py` | 動力單位: 兩份 index.html 與兩份 pdf_export.py 的換算表一致、選單掛接、單位系統自洽、rho 管線 |

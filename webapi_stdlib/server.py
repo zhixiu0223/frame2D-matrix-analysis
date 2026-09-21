@@ -43,7 +43,7 @@ def _build_frame(payload: dict) -> Frame2D:
         f.add_node(n["id"], n["x"], n["y"])
     for s in payload.get("sections", []):
         f.add_section(s["name"], E=s["E"], I=s["I"], A=s.get("A", 1e8),
-                       alpha=s.get("alpha"), depth=s.get("depth"))
+                       alpha=s.get("alpha"), depth=s.get("depth"), rho=s.get("rho"))
     for m in payload.get("members", []):
         f.add_member(m["id"], node_i=m["node_i"], node_j=m["node_j"], section=m["section"],
                      member_type=m.get("member_type", "frame"),

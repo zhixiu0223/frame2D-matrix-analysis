@@ -26,8 +26,12 @@
   平衡疊代; 統一入口 `analyze_pushover(geometry=, solver=)`, 各函式對照表見
   [ANALYSIS_ARCHITECTURE.md](ANALYSIS_ARCHITECTURE.md)
 - 其他載重與約束: 分佈力矩、溫度效應(均勻+梯度)、任意角度均佈載重、equalDOF(懲罰法)
-- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、任何動力分析
-  (質量/模態/反應譜/時程, 規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
+- **動力分析(進行中)**: 質量矩陣 `frame2d.mass.assemble_M(frame, kind='lumped'|'consistent')`,
+  質量來源是 `add_section(..., rho=)` 與 `add_mass(node, mx, my, Iz)`。**單位要一致**:
+  質量單位 = 力單位·s²/長度單位(SI: N、m → kg; kN、m → ton), 核心不做換算。
+  網頁的「單位設定」已包含質量、密度、轉動慣量、加速度、速度
+- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、模態/反應譜/時程
+  (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
 
@@ -38,6 +42,7 @@ frame2d/
   dofmanager.py    — DOF編號(含release專屬DOF)、主要求解器solve()、solve_pdelta()、solve_with_hinges()
   solve.py         — 靜力凝縮版求解器 solve_condensation()(參考/回歸用)
   assembly.py      — assemble_K(): 公開的全域勁度矩陣組裝入口(動力分析用)
+  mass.py          — assemble_M(): 集中/一致質量矩陣、影響向量、總質量(動力分析用)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

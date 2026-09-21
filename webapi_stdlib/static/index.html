@@ -295,7 +295,23 @@
             <label class="snapLabel">彎矩單位<select id="unitMoment" style="width:8.5rem;">
               <option value="N·m">N·m(基準)</option><option value="kN·m" selected>kN·m(=10³ N·m)</option>
             </select></label>
-            <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。</p>
+            <p class="hint" style="width:100%;margin-bottom:0;"><b>動力分析單位</b>(質量/密度用於斷面與節點質量輸入, 加速度/速度用於反應譜與時程的輸入與結果顯示)</p>
+            <label class="snapLabel">質量單位<select id="unitMass" style="width:8rem;">
+              <option value="kg">kg(基準)</option><option value="t" selected>t(=10³ kg)</option>
+            </select></label>
+            <label class="snapLabel">質量轉動慣量單位<select id="unitInertia" style="width:9.5rem;">
+              <option value="kg·m²">kg·m²(基準)</option><option value="t·m²" selected>t·m²(=10³ kg·m²)</option>
+            </select></label>
+            <label class="snapLabel">密度單位<select id="unitDensity" style="width:9rem;">
+              <option value="kg/m³">kg/m³(基準)</option><option value="t/m³" selected>t/m³(=10³ kg/m³)</option>
+            </select></label>
+            <label class="snapLabel">加速度單位<select id="unitAccel" style="width:9rem;">
+              <option value="m/s²">m/s²(基準)</option><option value="g" selected>g(=9.80665 m/s²)</option><option value="gal">gal(=cm/s²=10⁻² m/s²)</option>
+            </select></label>
+            <label class="snapLabel">速度單位<select id="unitVel" style="width:8.5rem;">
+              <option value="m/s">m/s(基準)</option><option value="cm/s" selected>cm/s(=10⁻² m/s)</option><option value="mm/s">mm/s(=10⁻³ m/s)</option>
+            </select></label>
+            <p class="hint" style="width:100%;">後端solver內部永遠用SI單位(Pa/m⁴/m²/m/N/N·m; 動力分析: kg/kg·m²/kg/m³/m/s²/m/s)計算, 不會變動;這裡只是輸入/顯示轉換, 送出前自動換算成SI, 算完的結果也自動換算回你選的單位再顯示。<b>質量單位必須跟力單位一致</b>(N配kg; 換算已由這裡處理, 不需要自己湊), 週期(s)、頻率(Hz, rad/s)不需要選單位。</p>
             <button style="width:100%;margin-top:0.4rem;" onclick="this.closest('details').removeAttribute('open')">▲ 返回</button>
           </div>
         </details>
@@ -1491,9 +1507,16 @@ const UNIT_FACTORS = {
   disp: {m: 1, cm: 1e-2, mm: 1e-3},
   force: {N: 1, kN: 1e3},
   moment: {'N·m': 1, 'kN·m': 1e3},
+  // 動力分析單位(基準: kg, kg·m², kg/m³, m/s², m/s; 後端質量單位跟N一致)
+  mass: {kg: 1, t: 1e3},
+  inertia: {'kg·m²': 1, 't·m²': 1e3},
+  density: {'kg/m³': 1, 't/m³': 1e3},
+  accel: {'m/s²': 1, g: 9.80665, gal: 1e-2},
+  vel: {'m/s': 1, 'cm/s': 1e-2, 'mm/s': 1e-3},
 };
 function unitOf(kind) {
-  const ids = {E: 'unitE', I: 'unitI', A: 'unitA', disp: 'unitDisp', force: 'unitForce', moment: 'unitMoment'};
+  const ids = {E: 'unitE', I: 'unitI', A: 'unitA', disp: 'unitDisp', force: 'unitForce', moment: 'unitMoment',
+               mass: 'unitMass', inertia: 'unitInertia', density: 'unitDensity', accel: 'unitAccel', vel: 'unitVel'};
   return document.getElementById(ids[kind]).value;
 }
 function toSI(kind, displayVal) { return displayVal * UNIT_FACTORS[kind][unitOf(kind)]; }
@@ -1847,6 +1870,11 @@ const DISPLAY_SETTING_IDS = [
   {id: 'unitDisp', kind: 'value'},
   {id: 'unitForce', kind: 'value'},
   {id: 'unitMoment', kind: 'value'},
+  {id: 'unitMass', kind: 'value'},
+  {id: 'unitInertia', kind: 'value'},
+  {id: 'unitDensity', kind: 'value'},
+  {id: 'unitAccel', kind: 'value'},
+  {id: 'unitVel', kind: 'value'},
 ];
 function collectDisplaySettings() {
   const out = {};
@@ -2477,7 +2505,7 @@ function clearMultiSelection() { multiSelection = null; renderMultiSelectPanel()
 // ---------- 斷面管理: 一次看到/編輯所有斷面, 不用透過某根桿件間接操作 ----------
 function renderSectionManager() {
   const panel = document.getElementById('propPanel');
-  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A');
+  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A'), ru = unitOf('density');
   const rows = model.sections.map((s, i) => {
     const useCount = model.members.filter(m => m.section === s.name).length;
     return `
@@ -2490,6 +2518,11 @@ function renderSectionManager() {
             <div><label>E(${eu})</label><input id="sm_E_${i}" type="number" step="any" value="${fromSI('E', s.E)}"></div>
             <div><label>I(${iu})</label><input id="sm_I_${i}" type="number" step="any" value="${fromSI('I', s.I)}"></div>
             <div><label>A(${au})</label><input id="sm_A_${i}" type="number" step="any" value="${fromSI('A', s.A)}"></div>
+          </div>
+          <p class="hint" style="margin-top:0.3rem;">質量密度只有動力分析(質量矩陣)才需要填, 靜力分析用不到; 留空=這個斷面的桿件沒有分佈質量(質量只來自節點質量)。</p>
+          <div class="row2">
+            <div><label>ρ質量密度(${ru})</label><input id="sm_rho_${i}" type="number" step="any" min="0" value="${s.rho != null ? fromSI('density', s.rho) : ''}" placeholder="留空=無分佈質量"></div>
+            <div></div>
           </div>
           <p class="hint" style="margin-top:0.3rem;">以下兩個只有用到溫度效應載重(thermal_load)才需要填, 其他分析用不到。</p>
           <div class="row2">
@@ -2548,6 +2581,14 @@ function renderSectionManager() {
       const depthRaw = document.getElementById('sm_depth_' + i).value;
       s.alpha = alphaRaw === '' ? null : parseFloat(alphaRaw);
       s.depth = depthRaw === '' ? null : parseFloat(depthRaw);
+      const rhoRaw = document.getElementById('sm_rho_' + i).value;
+      if (rhoRaw === '') {
+        s.rho = null;
+      } else {
+        const rhoVal = parseFloat(rhoRaw);
+        if (!Number.isFinite(rhoVal) || rhoVal < 0) { setStatus('質量密度必須是不小於0的數字(或留空)'); return; }
+        s.rho = toSI('density', rhoVal);
+      }
       if (oldName !== newName) {
         for (const m of model.members) if (m.section === oldName) m.section = newName;
       }
@@ -4213,9 +4254,12 @@ document.getElementById('momentArcScale').addEventListener('input', () => {
 });
 document.getElementById('loadLabelFontSize').addEventListener('change', render);
 document.getElementById('valueLabelFontSize').addEventListener('change', render);
-['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce'].forEach(id => {
+['unitE', 'unitI', 'unitA', 'unitDisp', 'unitForce', 'unitDensity'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
-    if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
+    // 斷面管理面板開著時(它不是靠selected顯示的), 標籤跟輸入框裡的數值也要跟著換算重畫,
+    // 否則畫面上還是舊單位的數字, 按「套用」時卻用新單位換算, 會靜默存成錯的值。
+    if (document.querySelector('#propPanel .sm_apply')) renderSectionManager();
+    else if (selected) renderPropPanel(); // 換單位時, 如果正開著面板, 顯示的數值要跟著換算重畫
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
     updatePushoverUnitLabels();      // Pushover設定列的「目標位移」「步長」單位標籤也要跟著換
   });
@@ -4989,6 +5033,8 @@ function currentUnitsPayload() {
   return {
     E: unitOf('E'), I: unitOf('I'), A: unitOf('A'),
     disp: unitOf('disp'), force: unitOf('force'), moment: unitOf('moment'),
+    mass: unitOf('mass'), inertia: unitOf('inertia'), density: unitOf('density'),
+    accel: unitOf('accel'), vel: unitOf('vel'),
   };
 }
 document.getElementById('fbdPreviewConfirm').addEventListener('click', async () => {

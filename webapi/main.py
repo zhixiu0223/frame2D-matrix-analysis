@@ -49,7 +49,7 @@ def _build_frame(payload: FrameIn) -> Frame2D:
     for n in payload.nodes:
         f.add_node(n.id, n.x, n.y)
     for s in payload.sections:
-        f.add_section(s.name, E=s.E, I=s.I, A=s.A, alpha=s.alpha, depth=s.depth)
+        f.add_section(s.name, E=s.E, I=s.I, A=s.A, alpha=s.alpha, depth=s.depth, rho=s.rho)
     for m in payload.members:
         f.add_member(m.id, node_i=m.node_i, node_j=m.node_j, section=m.section,
                      member_type=m.member_type, release_i=m.release_i, release_j=m.release_j,

@@ -29,6 +29,12 @@ class Section:
     depth: float = None   # 截面深度(m), 只有thermal_load()的溫度梯度
                            # (彎曲熱效應)才需要, 只做均勻溫度變化(軸向
                            # 熱效應)不需要填這個
+    rho: float = None     # 質量密度(單位質量/體積), 只有動力分析(質量矩陣)
+                           # 才需要, 靜力分析完全用不到, 預設None=這個斷面的
+                           # 桿件沒有分佈質量(質量只來自add_mass()的節點質量)。
+                           # 單位要跟其他量一致: 質量單位=力單位·s²/長度單位
+                           # (SI: N,m -> kg, kg/m³; kN,m -> ton, ton/m³)。
+                           # 單位包裝見assembly/mass.py說明, 核心不做單位換算
 
 
 @dataclass
@@ -227,6 +233,18 @@ class MemberPointLoad:
                 raise ValueError("direction='global' 時fx/fy不使用, 請改用F+angle_deg指定")
 
 
+@dataclass
+class NodeMass:
+    """節點集中質量(動力分析用, 靜力分析完全忽略)。mx/my是全域x/y方向的
+    平動質量, Iz是繞z軸的質量轉動慣量(質量×長度²)。同一個節點可以呼叫
+    add_mass()多次, 組裝質量矩陣時會加總。單位: 質量=力單位·s²/長度單位
+    (SI: kg, kg·m²; kN,m制: ton, ton·m²)。"""
+    node: int
+    mx: float = 0.0
+    my: float = 0.0
+    Iz: float = 0.0
+
+
 class Frame2D:
     def __init__(self):
         self.nodes: dict[int, Node] = {}
@@ -239,6 +257,7 @@ class Frame2D:
         self.distributed_moments: list[DistributedMoment] = []
         self.thermal_loads: list[ThermalLoad] = []
         self.member_point_loads: list[MemberPointLoad] = []
+        self.node_masses: list[NodeMass] = []
         self._node_index_cache: dict[int, int] = None   # node_id -> 緊湊的0-based索引, 延遲建立
 
     # ---- 建模 API ----
@@ -248,8 +267,19 @@ class Frame2D:
         return self
 
     def add_section(self, name: str, E: float, I: float, A: float = 1e8,
-                    alpha: float = None, depth: float = None):
-        self.sections[name] = Section(name, E, I, A, alpha, depth)
+                    alpha: float = None, depth: float = None, rho: float = None):
+        if rho is not None and rho < 0:
+            raise ValueError(f"斷面'{name}'的質量密度rho不能是負數(收到{rho})")
+        self.sections[name] = Section(name, E, I, A, alpha, depth, rho)
+        return self
+
+    def add_mass(self, node: int, mx: float = 0.0, my: float = 0.0, Iz: float = 0.0):
+        """節點集中質量(動力分析用)。mx/my: 全域x/y方向平動質量; Iz: 繞z軸
+        質量轉動慣量。質量單位=力單位·s²/長度單位(SI: kg; kN,m制: ton)。
+        同一節點可以呼叫多次, 會加總。靜力分析完全忽略這些資料。"""
+        if mx < 0 or my < 0 or Iz < 0:
+            raise ValueError(f"節點{node}的質量不能是負數(mx={mx}, my={my}, Iz={Iz})")
+        self.node_masses.append(NodeMass(node, mx, my, Iz))
         return self
 
     def add_member(self, id: int, node_i: int, node_j: int, section: str, member_type: str = 'frame',

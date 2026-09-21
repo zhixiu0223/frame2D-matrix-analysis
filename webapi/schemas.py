@@ -22,6 +22,8 @@ class SectionIn(BaseModel):
                                      # 要用到才需要填
     depth: Optional[float] = None   # 截面深度(m), 只有溫度梯度(彎曲熱效應)
                                      # 才需要填
+    rho: Optional[float] = None     # 質量密度(kg/m³, 後端固定SI), 只有動力分析
+                                     # (質量矩陣)才需要填, 靜力分析完全忽略
 
 
 class MemberIn(BaseModel):

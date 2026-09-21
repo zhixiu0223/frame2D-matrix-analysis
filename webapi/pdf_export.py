@@ -160,6 +160,12 @@ UNIT_FACTORS = {
     "disp": {"m": 1, "cm": 1e-2, "mm": 1e-3},
     "force": {"N": 1, "kN": 1e3},
     "moment": {"N·m": 1, "kN·m": 1e3},
+    # 動力分析單位(基準: kg, kg·m², kg/m³, m/s², m/s), 對應index.html新增的選單
+    "mass": {"kg": 1, "t": 1e3},
+    "inertia": {"kg·m²": 1, "t·m²": 1e3},
+    "density": {"kg/m³": 1, "t/m³": 1e3},
+    "accel": {"m/s²": 1, "g": 9.80665, "gal": 1e-2},
+    "vel": {"m/s": 1, "cm/s": 1e-2, "mm/s": 1e-3},
 }
 
 

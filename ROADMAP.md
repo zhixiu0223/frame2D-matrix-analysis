@@ -219,8 +219,8 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | # | 問題 | 現況位置 | 處理方式 | 何時 |
 |---|---|---|---|---|
 | 1 | K 沒有**公開**的組裝入口 | `pushover._assemble_stiffness_with_hinges` 已經是純組裝函式(不含載重/邊界條件), 但是私有、名字綁 pushover; `dofmanager._solve_once_dofmanager` 內嵌另一份; `newton._assemble_global` 是 corotational 版 | 新增 `assembly.assemble_K` 薄包裝, **不改任何既有求解器**; 測試守住兩份組裝不分歧 | D0 ✅ |
-| 2 | Section 沒有質量 | `model.Section` 只有 E, I, A | 加 `rho`(或單位長度質量, 命名待定)與 `add_mass(node, mx, my, Iz)`, 預設 None 不影響既有行為 | D1 |
-| 3 | 單位制 | — | 決定 kN-m-ton-s(質量單位 ton = kN·s²/m), 寫進 README。質量單位錯誤不會報錯, 只會讓頻率整體差一個常數倍 | D1 開工前 |
+| 2 | Section 沒有質量 | `model.Section` 只有 E, I, A | 加 `Section.rho`(質量密度)與 `Frame2D.add_mass(node, mx, my, Iz)`, 預設 None 不影響既有行為 | D1 ✅ |
+| 3 | 單位制 | 核心與網頁後端 | **核心與單位無關, 只要求一致: 質量單位 = 力單位·s²/長度單位。** 網頁後端固定 SI(Pa, m, N → 質量 kg); kN、m 手算配 ton。網頁「單位設定」新增質量/轉動慣量/密度/加速度/速度選單。質量單位寫錯不會報錯, 只會讓頻率差常數倍, 所以每個動力測試都要有解析解量級檢核 | D1 ✅ |
 | 4 | 無質量自由度 | `build_dof_map` 的 release 專屬轉角 DOF; 集中質量沒有轉動慣量; truss 節點轉角 | 靜力凝縮 `K_eff = K_dd − K_dm K_mm⁻¹ K_md`(對無質量 DOF 是精確的) | D1~D2 |
 | 5 | EqualDOF 是懲罰法 | `dofmanager._apply_equal_dof`(1e6 倍最大對角項) | D1~D5: 有 `equal_dofs` 就明確報錯; 之後改成精確的 master-slave 消去。懲罰彈簧會造成虛假高頻模態與條件數惡化 | D1 / 之後 |
 | 6 | Cable 鬆弛迭代是狀態相依的 | `dofmanager` 的鬆弛迭代 | D1~D5: 有 cable 就明確報錯。模態分析要先定義基準狀態(例如重力下拉緊); 時程中鬆弛需要事件處理 | D6 之後 |
@@ -237,7 +237,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | Stage | 內容 | 預計新檔 | 狀態 |
 |---|---|---|---|
 | D0 | 前置: 公開 `assemble_K`(薄包裝), 同步文件 | `assembly.py` | ✅ |
-| D1 | 質量矩陣(集中 → 一致) | `mass.py` | ⬜ |
+| D1 | 質量矩陣(集中 → 一致) + 動力單位 | `mass.py` | ✅ |
 | D2 | 特徵值/模態分析 + 模態性質 | `modal.py` | ⬜ |
 | D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ⬜ |
 | D4 | 線性時程 (Newmark) + 諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ⬜ |
@@ -270,14 +270,39 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   動力分析入口明確拒絕
 - 文件同步: README 的範疇與結構、`BENCHMARK_SUITE.md` 的測試數量與未編號測試
 
-#### D1 質量矩陣
+#### D1 質量矩陣 ✅ 已完成
 
-- `Section` 加質量欄位; `Frame2D.add_mass(node, mx, my, Iz)`
-- `assemble_M(frame, kind='lumped' | 'consistent')`: 集中質量把桿件質量各半加到
-  兩端平動 DOF(不計轉動慣量); 一致質量用 Euler-Bernoulli 6×6 一致質量矩陣
-  (軸向線性形函數、橫向 Hermite 三次)
-- 明確報錯: 有 `equal_dofs`、有 cable、有非零指定位移
-- 驗證: `rᵀ M r = 總質量`(r 為影響向量); 集中/一致兩種在總質量上完全一致
+- `Section.rho`(質量密度, 預設 None=無分佈質量)、`Frame2D.add_mass(node, mx, my, Iz)`
+  (同節點可多次呼叫, 會加總)
+- `frame2d/mass.py`: `assemble_M(frame, kind='lumped' | 'consistent')`, DOF 編號與
+  `assemble_K` 完全相同; 另有 `influence_vector(frame, 'x'|'y')`、`total_mass()`、
+  `consistent_mass_local()`
+  - 集中質量: 桿件質量各半加到兩端 ux, uy; 不計轉動慣量; 矩陣對角
+  - 一致質量: Euler-Bernoulli 局部 6×6(軸向線性、橫向 Hermite 三次), 桁架用 4×4
+    平動質量; release 端的專屬 DOF 放標準 6×6 項(一致有限元素對鉸接端的正確處理)
+- 明確拒絕(`ValueError`): cable、equal_dof、非零指定支承位移、非法 kind、負密度/負質量、
+  add_mass 指到不存在的節點
+- **單位(規劃更正)**: 原本寫「決定 kN-m-ton-s」, 但網頁後端其實固定用 SI(Pa, m, N),
+  質量單位應該是 kg, 不是 ton。核心對單位不做任何假設, 只要求一致(質量 = 力·s²/長度)。
+  網頁「單位設定」新增: 質量(kg, t)、質量轉動慣量(kg·m², t·m²)、密度(kg/m³, t/m³)、
+  加速度(m/s², g, gal)、速度(m/s, cm/s, mm/s), 預設 t、t·m²、t/m³、g、cm/s(跟預設的
+  kN 自洽: 1 kN = 1 t·m/s²)。斷面管理面板新增 ρ 輸入; 節點質量與加速度/速度單位目前
+  還沒有輸入或顯示的地方, 留給 D2(模態結果)與 D3~D5(反應譜、時程)接上
+- 順手修正一個既有的網頁問題: 斷面管理面板開著時換單位(E/I/A/密度), 畫面上的數字與標籤
+  不會重畫, 但按「套用」時會用新單位換算, 會靜默存成錯的值。現在換單位會重畫該面板
+- 驗證(`tests/test_mass.py`):
+  - 層1 用 sympy 從形函數積分獨立推導局部一致質量矩陣, 相對差 6e-17
+  - 層2 不依賴係數的解析不變量: 總質量 rᵀMr = ΣρAL + 節點質量(含斜桿、桁架、release);
+    繞原點剛體轉動的極慣量, 一致質量精確等於 ΣρAL(|c|²+L²/12), 集中質量等於
+    ΣρAL(|c|²+L²/4)(剛體轉動位移場在形函數空間內, 所以一致質量是精確的, 不是近似)
+  - 層3 對稱、半正定、集中質量對角
+  - 層4 頂端質量懸臂柱靜力凝縮後 ω²=3EI/(mL³); 同一個物理結構分別用 SI(Pa, kg) 與
+    kN·m·ton 兩套單位算, ω 完全相同; 反面案例(SI 力單位配 2 而不是 2000 kg)差 √1000 倍
+  - 突變檢查: 一致質量係數 13L 抄成 12L 被層1 抓到; 座標轉換方向反了被層2 極慣量抓到
+- 單位表同步(`tests/test_dynamic_units.py`): 單位換算表同時存在於兩份 index.html 與兩份
+  pdf_export.py, 這支測試守住四份一致、選單/unitOf/持久化/匯出 payload 都掛上、
+  單位系統自洽(kN↔t、N↔kg、7.85 t/m³=7850 kg/m³), 並驗證 rho 從網頁 JSON 抵達
+  `Section.rho`
 
 #### D2 特徵值與模態性質
 
@@ -356,7 +381,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 - **阻尼要用同一組 (α, β)**, 不要各自從阻尼比反算
 - **時程要同 Δt、同 Newmark 參數、同輸入序列**; 注意 OpenSees `timeSeries` 的
   因子與正負號慣例
-- **單位先統一**(kN-m-ton-s)再比
+- **單位先統一**再比: 兩邊用同一套一致單位(例如 N-m-kg-s, 跟網頁後端一致), 質量單位 = 力單位·s²/長度單位
 
 ### 分支與版本
 
