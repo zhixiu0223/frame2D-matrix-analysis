@@ -157,11 +157,47 @@ def solve_displacement_increment(K, prescribed_dofs, du_prescribed, fixed_dofs):
     return du_full
 
 
-def solve_force_increment(K, load_dofs, dF_prescribed, fixed_dofs):
+def _is_numerically_singular(K_ff, ref_diag=None, tol=1e-12):
+    """判斷(應該是對稱半正定的)勁度矩陣是否奇異或不正定, 不依賴「恰好為零的主元」。
+
+    np.linalg.solve 只有遇到**恰好為零**的主元才會丟LinAlgError。完全塑性的鉸在x86上
+    剛好留下恰好0, 換平台(FMA、不同版本的BLAS/LAPACK)常常留下1e-13量級的殘餘, solve
+    照常成功卻解出巨大的位移增量(在Termux上實際踩到, 見tests/test_force_control_roundoff.py)。
+
+    做法: 用**彈性狀態的對角勁度**當參考尺度做對角縮放 K_s = S K S (S = 1/√ref_diag),
+    再看最小特徵值。
+    - 為什麼要縮放: 結構勁度常常跨越十幾個數量級(A預設1e8, 軸向極剛+彎曲很軟), 不縮放
+      而直接比特徵值大小, 會把合法的結構誤判成奇異。
+    - 為什麼參考尺度不能用「目前」的對角: 那個DOF的勁度若剛好掉到雜訊量級(完全塑性),
+      用它自己的對角縮放會把雜訊放大成單位對角, 看起來反而「健康」(實測踩到)。用彈性
+      參考對角, 失去勁度的DOF在縮放後就是 ~1e-14, 一眼看得出來。
+    ref_diag: 與K_ff同維度的彈性參考對角; None時退回用K_ff自己的對角(只擋得住負值/
+      明顯的不正定, 擋不住雜訊量級的殘餘勁度)。
+    整列全0的DOF(不活動DOF)不參與, 交給原本的solve處理(維持既有行為)。
+    """
+    active = np.abs(K_ff).max(axis=1) > 0.0
+    if not np.any(active):
+        return False
+    Ka = K_ff[np.ix_(active, active)]
+    d = np.diag(Ka)
+    if np.any(d <= 0.0):
+        return True            # 半正定矩陣的對角不可能<=0而該列卻不為零: 不正定/機構
+    ref = d if ref_diag is None else np.asarray(ref_diag, dtype=float)[active]
+    ref = np.where(ref > 0.0, ref, d)
+    S = 1.0 / np.sqrt(ref)
+    Ks = (S[:, None] * Ka) * S[None, :]
+    ev = np.linalg.eigvalsh((Ks + Ks.T) / 2.0)
+    return bool(ev[0] <= tol * ev[-1])
+
+
+def solve_force_increment(K, load_dofs, dF_prescribed, fixed_dofs, ref_diag=None):
     """力控制版的增量求解: 給定力增量dF(施加在load_dofs上), 解出所有
     非固定自由度的位移增量。跟位移控制不同的地方: 力控制沒有"受控但
     不求解"這個中間類別, 除了固定的自由度以外全部都是要解的自由度,
     load_dofs只是"外力施加在哪裡", 不是"這個自由度的位移已知"。
+
+    ref_diag: 選用, 全域(所有DOF)的彈性參考對角勁度, 用來判斷奇異(見
+    _is_numerically_singular)。run_pushover / run_pushover_converged 會傳進來。
 
     這個函式沒有辦法解過極限承載力(peak)之後的軟化段——一旦切線
     剛度矩陣不再正定, K_ff會奇異或病態, 直接丟RuntimeError, 這是力
@@ -181,13 +217,15 @@ def solve_force_increment(K, load_dofs, dF_prescribed, fixed_dofs):
     if len(free_dofs) > 0:
         K_ff = K[np.ix_(free_dofs, free_dofs)]
         rhs = dF_full[free_dofs]
+        _err_msg = ("勁度矩陣奇異或接近奇異, 無法求解增量 -- 結構可能已經達到或"
+                    "超過極限承載力(力控制無法穿越peak之後的軟化段, 建議改用"
+                    "位移控制才能繼續往下推)。")
+        if _is_numerically_singular(K_ff, None if ref_diag is None else ref_diag[free_dofs]):
+            raise RuntimeError(_err_msg)
         try:
             du_free = np.linalg.solve(K_ff, rhs)
         except np.linalg.LinAlgError:
-            raise RuntimeError(
-                "勁度矩陣奇異或接近奇異, 無法求解增量 -- 結構可能已經達到或"
-                "超過極限承載力(力控制無法穿越peak之後的軟化段, 建議改用"
-                "位移控制才能繼續往下推)。")
+            raise RuntimeError(_err_msg)
         for d, val in zip(free_dofs, du_free):
             du_full[d] = val
     return du_full
@@ -441,9 +479,14 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
     def current_axial_forces():
         return {mid: f[3] for mid, f in cum_forces.items()}   # 拉力為正(端j的Fx)
 
+    # 力控制判斷奇異用的「彈性參考對角」(hinge_states=None即全彈性), 只在力控制時才需要
+    ref_diag = (np.diag(_assemble_stiffness_with_hinges(frame, None)[0]).copy()
+                if control_mode == 'force' else None)
+
     def solve_increment(K, amount):
         if control_mode == 'force':
-            return solve_force_increment(K, prescribed_dofs, direction * amount, fixed_dofs)
+            return solve_force_increment(K, prescribed_dofs, direction * amount, fixed_dofs,
+                                         ref_diag=ref_diag)
         return solve_displacement_increment(K, prescribed_dofs, direction * amount, fixed_dofs)
 
     remaining = target_total
@@ -568,7 +611,7 @@ def run_pushover(frame, hinge_states, prescribed_dofs, direction, target_total,
 def _solve_step_geom_converged(frame, hinge_states, cum_forces, u_full_cum,
                                 prescribed_dofs, direction, d_amount, fixed_dofs,
                                 control_mode, use_pdelta, geometry_update,
-                                geom_tol, max_geom_iter):
+                                geom_tol, max_geom_iter, ref_diag=None):
     """對"這一步的位移/力增量大小是d_amount"這件事, 疊代到幾何/軸力
     自洽為止。回傳(converged, du_full, df_by_member, K, member_T,
     member_dofs, member_L)——K是最後一次(收斂時)那次疊代組出來的勁度
@@ -599,7 +642,8 @@ def _solve_step_geom_converged(frame, hinge_states, cum_forces, u_full_cum,
         K, member_dofs, member_T, member_L = _assemble_stiffness_with_hinges(
             frame, hinge_states, axial_forces=axial, u_full_cum=geom_u)
         if control_mode == 'force':
-            du_new = solve_force_increment(K, prescribed_dofs, direction * d_amount, fixed_dofs)
+            du_new = solve_force_increment(K, prescribed_dofs, direction * d_amount, fixed_dofs,
+                                           ref_diag=ref_diag)
         else:
             du_new = solve_displacement_increment(K, prescribed_dofs, direction * d_amount, fixed_dofs)
         df_new = _member_force_increments(frame, member_T, member_dofs, member_L, hinge_states, axial, du_new)
@@ -641,6 +685,8 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
     """
     direction = np.array(direction, dtype=float)
     fixed_dofs = _fixed_dof_set(frame)
+    ref_diag = (np.diag(_assemble_stiffness_with_hinges(frame, None)[0]).copy()
+                if control_mode == 'force' else None)
     _, n_node_dof, n_extra_dof = build_dof_map(frame)
     n_total = n_node_dof + n_extra_dof
     control_dof0 = prescribed_dofs[0]
@@ -671,7 +717,8 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
 
         converged, du_full, df_by_member, K_step, member_T, member_dofs, member_L = _solve_step_geom_converged(
             frame, hinge_states, cum_forces, u_full_cum, prescribed_dofs, direction, d_step,
-            fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter)
+            fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter,
+            ref_diag=ref_diag)
         if not converged:
             mechanism_reached = True
             break
@@ -684,7 +731,8 @@ def run_pushover_converged(frame, hinge_states, prescribed_dofs, direction, targ
             converged_sub, du_full_sub, df_by_member_sub, K_sub, member_T_sub, member_dofs_sub, member_L_sub = \
                 _solve_step_geom_converged(
                     frame, hinge_states, cum_forces, u_full_cum, prescribed_dofs, direction, d_sub,
-                    fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter)
+                    fixed_dofs, control_mode, use_pdelta, geometry_update, geom_tol, max_geom_iter,
+                    ref_diag=ref_diag)
             if not converged_sub:
                 mechanism_reached = True
                 break

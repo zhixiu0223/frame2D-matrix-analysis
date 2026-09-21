@@ -12,7 +12,7 @@
 3. 對無質量DOF做靜力凝縮 (對無質量DOF是**精確**的, 不是Guyan近似):
      無質量DOF的動力方程是  K_md φ_d + K_mm φ_m = 0  (慣性項為0)
      => φ_m = -K_mm⁻¹ K_md φ_d,   K_eff = K_dd - K_dm K_mm⁻¹ K_md
-4. 對角縮放: S = diag(1/√K_eff,ii), K_s = S K_eff S (單位對角), M_s = S M_d S。
+4. 對角縮放: S = diag(1/√K_dd,ii) (凝縮**前**的對角), K_s = S K_eff S, M_s = S M_d S。
    結構矩陣常常是「梯度式」的(例如 A 預設 1e8 讓軸向勁度比彎曲勁度大 1e13 倍),
    不縮放的話 eigh 的絕對誤差 ~ eps·‖K‖ 會吃掉低階模態; 縮放是同餘變換,
    特徵值 ω² 完全不變, 但低階模態的精度大幅改善。
@@ -161,7 +161,15 @@ def eigen(frame: Frame2D, n_modes: int = None, mass: str = 'lumped',
         bad = dyn[np.where(dk <= 0)[0]]
         raise ValueError(f"有質量的DOF {bad.tolist()[:5]} 的有效勁度為0或負: 支承不足(剛體運動)或結構有機構"
                          "(例如質量掛在只靠鉸接連著的節點上)。請檢查支承與桿件連接。")
-    S = 1.0 / np.sqrt(dk)
+    # 縮放參考用「凝縮前」的對角 K_dd,ii, 不是凝縮後的 K_eff,ii: 若用凝縮後自己的對角, 勁度已經
+    # 掉到雜訊量級(1e-14)的DOF會被放大成單位對角, 看起來反而「健康」, 機構偵測就漏掉了
+    # (實測: 鉸支承懸臂在 1e-14 相對雜訊下回傳 ω=4e-6 的假模態)。用凝縮前的對角, 凝縮把
+    # 勁度吃光的DOF縮放後就是 ~1e-14, 一眼看得出來; 合法的跨度大結構(A預設1e8)仍然是良態。
+    kdd = np.diag(Kdd)
+    if np.any(kdd <= 0):
+        bad = dyn[np.where(kdd <= 0)[0]]
+        raise ValueError(f"有質量的DOF {bad.tolist()[:5]} 完全沒有勁度: 結構有機構。請檢查支承與桿件連接。")
+    S = 1.0 / np.sqrt(kdd)
     Ks = (S[:, None] * Keff) * S[None, :]
     Ks = 0.5 * (Ks + Ks.T)
     mu = np.linalg.eigvalsh(Ks)

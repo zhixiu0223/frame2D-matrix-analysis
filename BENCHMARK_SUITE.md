@@ -195,3 +195,4 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_dynamic_units.py` | 動力單位: 兩份 index.html 與兩份 pdf_export.py 的換算表一致、選單掛接、單位系統自洽、rho 管線 |
 | `test_modal.py` | 模態分析: 解析頻率(懸臂/簡支/兩質量)、收斂階數、有效質量解析值、正交性與完備性、凝縮與 release 的獨立路徑、單位一致性(動力 D2) |
 | `test_modal_vs_openseespy.py` | 模態分析 vs OpenSeesPy(選用): 特徵值 3e-13、MAC=1.0、集中質量參與係數逐項一致 |
+| `test_force_control_roundoff.py` | 力控制的機構偵測不依賴恰好為零的主元: 加 1e-16~1e-13 雜訊仍優雅停在 Mp/L, 且後降伏勁度 0.1% 的跨度大結構不被誤判(Termux 實際踩到的迴歸) |

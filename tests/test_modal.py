@@ -316,4 +316,82 @@ expect_error("質量全部在支承上", lambda: eigen(f))
 expect_error("非法mass種類", lambda: eigen(mixed_frame(), mass='bogus'))
 expect_error("n_modes<1", lambda: eigen(mixed_frame(), n_modes=0))
 
+# ------------------------------------------------------------------
+print("=== 層6: 機構偵測不依賴恰好為零(捨入雜訊下仍然報錯, 合法結構不誤判) ===")
+# 背景: 不同平台(FMA、BLAS版本)的捨入差異會讓「理論上恰好為零」的勁度變成 1e-14 量級的殘餘。
+# 曾經有一版用凝縮後自己的對角縮放, 結果鉸支承懸臂在 1e-14 雜訊下回傳 ω=4e-6 的假模態而不是報錯。
+# 這裡把 assemble_K 換成「加上雜訊的版本」(雜訊 ∝ √(對角_i·對角_j), 1e-16 ~ 1e-13)重跑。
+import frame2d.modal as modal_mod
+from frame2d.assembly import Assembly
+
+_orig_assemble_K = modal_mod.assemble_K
+_noise = [0.0]
+_rng = np.random.default_rng(20260921)
+
+
+def _noisy_assemble_K(frame, *a, **k):
+    asm = _orig_assemble_K(frame, *a, **k)
+    K = asm.K.copy()
+    d = np.diag(K)
+    N = _rng.standard_normal(K.shape)
+    K = K + _noise[0] * np.sqrt(np.outer(d, d)) * (N + N.T) / 2.0
+    return Assembly(K, asm.member_dofs, asm.member_T, asm.member_L, asm.n_node_dof, asm.n_extra_dof)
+
+
+def _free_free():
+    f = Frame2D(); f.add_node(0, 0, 0).add_node(1, L, 0)
+    f.add_section('s', E=E, I=I, A=A, rho=RHO); f.add_member(0, 0, 1, 's')
+    return f, 'consistent'
+
+
+def _pinned_cantilever():                          # 轉動機構
+    f = Frame2D(); f.add_node(0, 0, 0).add_node(1, L, 0)
+    f.add_section('s', E=E, I=I, A=A); f.add_member(0, 0, 1, 's'); f.pin(0)
+    f.add_mass(1, mx=2.0, my=2.0)
+    return f, 'lumped'
+
+
+def _double_hinged_mass_node():                    # 有質量的節點只靠兩端鉸接連著
+    f = Frame2D(); f.add_node(0, 0, 0).add_node(1, L, 0).add_node(2, 2 * L, 0)
+    f.add_section('s', E=E, I=I, A=A)
+    f.add_member(0, 0, 1, 's', release_j=True); f.add_member(1, 1, 2, 's', release_i=True)
+    f.fix(0); f.fix(2); f.add_mass(1, mx=1.0, my=1.0, Iz=0.1)
+    return f, 'lumped'
+
+
+modal_mod.assemble_K = _noisy_assemble_K
+try:
+    for name, mk in (("無支承(剛體模態)", _free_free), ("鉸支承懸臂(轉動機構)", _pinned_cantilever),
+                     ("雙鉸接的質量節點", _double_hinged_mass_node)):
+        n_ok = 0
+        for level in (0.0, 1e-16, 1e-15, 1e-14, 1e-13):
+            for _ in range(4):
+                _noise[0] = level
+                f, kind = mk()
+                try:
+                    md_ = eigen(f, mass=kind)
+                except ValueError:
+                    n_ok += 1
+                    continue
+                raise AssertionError(f"{name}: 雜訊{level:g}下應該報錯, 卻回傳了 ω_min={md_.omega[0]:.3e} 的假模態")
+        print(f"  {name}: 5個雜訊量級×4組, {n_ok}/20 都正確報錯")
+    # 合法結構在同樣的雜訊下, 頻率不能被擾動(也不能被誤判成機構)
+    def _graded_cantilever():                      # A預設1e8: 軸向極剛 + 彎曲很軟, 兩方向都有質量
+        f = Frame2D(); f.add_node(0, 0, 0).add_node(1, L, 0)
+        f.add_section('s', E=E, I=I); f.add_member(0, 0, 1, 's'); f.fix(0)
+        f.add_mass(1, mx=2.0, my=2.0)
+        return f
+
+    _noise[0] = 0.0
+    md_clean = eigen(mixed_frame(), n_modes=5)
+    md_g_clean = eigen(_graded_cantilever())
+    for level in (1e-16, 1e-14, 1e-13):
+        _noise[0] = level
+        e1 = np.max(rel(eigen(mixed_frame(), n_modes=5).omega, md_clean.omega))
+        e2 = np.max(rel(eigen(_graded_cantilever()).omega, md_g_clean.omega))
+        print(f"  合法結構 雜訊{level:g}: 混合剛架 ω 最大相對擾動 {e1:.2e}, 軸向極剛(A=1e8)懸臂 {e2:.2e}")
+        assert e1 < 1e-8 and e2 < 1e-6, "雜訊下合法結構的頻率不應被明顯擾動, 也不能被誤判成機構"
+finally:
+    modal_mod.assemble_K = _orig_assemble_K
+
 print("\n全部通過: 頻率、模態性質、正交性、完備性、收斂階數、凝縮、release、單位一致性都吻合。")
