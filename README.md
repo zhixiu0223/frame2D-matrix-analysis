@@ -34,7 +34,11 @@
   對質量正規化的模態形狀、參與係數、有效模態質量與累積質量比(已對 OpenSeesPy 交叉驗證)。
   網頁版: 斷面管理輸入密度 ρ、節點屬性面板輸入質量, 上方「分析」選「模態」再 Solve, 結果表可點選
   切換振型
-- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、反應譜/時程
+- **循環(遲滯)塑鉸**: `frame2d.cyclic.run_cyclic()` 位移控制反覆載重, 雙線性運動硬化塑鉸
+  (`CyclicHingeState`, 等同 OpenSees Steel01), 得到力-位移遲滯迴圈、各塑鉸的 M-θp 迴圈、每圈耗能
+  (對 OpenSeesPy 驗證到機器精度)。範例: `PYTHONPATH=. python examples/cyclic_portal_demo.py`
+- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、反應譜/時程(遲滯迴圈目前是準靜態反覆載重,
+  還沒接到時程分析)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -48,6 +52,7 @@ frame2d/
   assembly.py      — assemble_K(): 公開的全域勁度矩陣組裝入口(動力分析用)
   mass.py          — assemble_M(): 集中/一致質量矩陣、影響向量、總質量(動力分析用)
   modal.py         — eigen(): 模態分析(靜力凝縮無質量DOF、模態性質)
+  cyclic.py        — CyclicHingeState + run_cyclic(): 循環塑鉸與反覆載重(遲滯迴圈)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

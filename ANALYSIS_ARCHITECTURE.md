@@ -60,6 +60,7 @@ pushover 的線性 P-Delta 求解函式(`solve_pdelta()`),目前**還沒**
 | `run_pushover_converged()` | frame2d/pushover.py | 塑鉸 | 同上(`use_pdelta`、`geometry_update`一樣互相獨立) | Picard疊代(疊代到幾何/軸力自洽) | **驗證過**: 關掉`use_pdelta`跟`geometry_update`時, 結果跟`run_pushover()`逐位元一致(相對誤差0.0)——因為疊代的對象(幾何/軸力)根本沒有東西在變, 疊代等於沒疊代 |
 | `run_pushover_newton()` | frame2d/newton.py | 塑鉸 | Co-rotational(內建, 不能關)+ Local P-Delta(`use_pdelta`, 獨立開關) | Newton-Raphson疊代 | 目前**不支援**release端; 支援重力預載(內部先疊代解一次純重力平衡, 不是天真假設u=0) |
 | `run_pushover_corotational_oneshot()` | frame2d/newton.py | 塑鉸 | Co-rotational(內建)+ Local P-Delta(`use_pdelta`) | 直接單次解(event-to-event式) | **驗證性函式**(見「規劃中」第1點), 不修改corotational.py; 重用newton.py既有函式; 已驗證跟run_pushover_newton()同步長收斂到一致結果(誤差隨步長縮小) |
+| `run_cyclic()` | frame2d/cyclic.py | 循環塑鉸(`CyclicHingeState`, 雙線性運動硬化) | 線性(小位移) | 位移控制反覆載重, event-to-event + 卸載符號一致性疊代 | **驗證過**: 對獨立回歸映射、解析頂點、穩態迴圈能量守恆、單調時與`run_pushover`逐點一致、對OpenSeesPy(zeroLength+Steel01)到機器精度。**不含**劣化/捏縮/P-Delta |
 
 ## 已經做到的「分層」證據(不是理想化的說法, 有程式碼可以查)
 

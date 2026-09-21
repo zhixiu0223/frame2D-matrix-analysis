@@ -199,3 +199,5 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_modal_shape.py` | 模態形狀曲線: 剛體位移場精確、端點連續、對精確懸臂模態形狀、release 端斜率、JSON 序列化(動力 D2b) |
 | `test_web_modal_api.py` | 網頁後端 `/modal`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、各種錯誤訊息 |
 | `test_web_modal_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 真實後端 + 真實 index.html, 節點質量輸入→模態 Solve→結果表→振型→單位切換→錯誤訊息 |
+| `test_cyclic.py` | 循環塑鉸: 對獨立回歸映射、解析頂點(包辛格型)、迴圈面積=塑性耗能、單調時與 pushover 逐點一致、6塑鉸反覆載重、突變檢查(動力 D7) |
+| `test_cyclic_vs_openseespy.py` | 循環塑鉸 vs OpenSeesPy zeroLength+Steel01(選用): 4 案例力-位移逐點差 1.5e-13 |

@@ -103,6 +103,23 @@ async function waitFor(fn, what, ms = 8000) {
   assert(!cellTexts.some(t => /e-(1\d|[2-9]\d)/.test(t)), '結果表不應出現 e-10 以下的數值雜訊(應顯示成 0): ' + cellTexts.filter(t => /e-\d\d/.test(t)).join(','));
   console.log('結果表 3 列、振型曲線 3 條、標題與狀態列、無數值雜訊 OK');
 
+  // ---- 「◀ ▶」切換鈕(不用捲到結果表) ----
+  assert($('modalNav').style.display !== 'none', '模態視圖應顯示 ◀ ▶ 切換鈕');
+  assert($('modalNavLabel').textContent === `模態 1/${r.n_modes}`, '標籤應顯示 模態 1/N: ' + $('modalNavLabel').textContent);
+  assert($('btnModePrev').disabled && !$('btnModeNext').disabled, '第1個模態時「◀」停用、「▶」可用');
+  $('btnModeNext').click(); await sleep(30);
+  assert(ev(`modalModeIndex`) === 1 && $('overlay').textContent.includes('第 2 模態'), '按 ▶ 應切到第 2 模態');
+  $('btnModeNext').click(); await sleep(30);
+  assert(ev(`modalModeIndex`) === r.n_modes - 1 && $('overlay').textContent.includes(`第 ${r.n_modes} 模態`), '再按 ▶ 應切到最後一個模態');
+  assert($('btnModeNext').disabled, '最後一個模態時「▶」停用');
+  $('btnModeNext').click(); await sleep(30);
+  assert(ev(`modalModeIndex`) === r.n_modes - 1, '最後一個時再按 ▶ 不應越界');
+  $('btnModePrev').click(); await sleep(30);
+  assert(ev(`modalModeIndex`) === r.n_modes - 2 && $('modalNavLabel').textContent === `模態 ${r.n_modes - 1}/${r.n_modes}`, '按 ◀ 應回上一個, 標籤同步');
+  $('btnModePrev').click(); await sleep(30);
+  assert(ev(`modalModeIndex`) === 0 && $('btnModePrev').disabled, '回到第 1 個, ◀ 停用');
+  console.log('◀ ▶ 切換鈕(邊界停用、標籤同步、振型跟著換) OK');
+
   // ---- 點第2列切換振型 ----
   rows[1].click();
   await sleep(50);
@@ -144,6 +161,7 @@ async function waitFor(fn, what, ms = 8000) {
   assert(ev(`modalResult`) === null && $('btnViewModal').style.display === 'none' && $('modalConfigBar').style.display === 'none',
          '新建/載入檔案時應清掉模態結果與按鈕');
   assert(ev(`viewMode`) === 'structure' && $('analysisType').value === 'linear', '應回到結構視圖與線性分析');
+  assert($('modalNav').style.display === 'none', '離開模態視圖後 ◀ ▶ 應隱藏');
   console.log('新建/載入重置 OK');
 
   // ---- 節點質量標記 ----

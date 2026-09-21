@@ -167,8 +167,8 @@ M_A=-3EIΔ/L²(跟使用者自己的sd_framework同一種方法)。過程中因�
 
 - 斜張橋以外的其他特殊橋型/結構型式: frame+truss+cable已經證明夠通用,
   不需要再做專屬功能證明
-- 循環/遲滯塑鉸: 目前 `HingeState` 是單向(pushover專用), 等動力路線的 D7 才做,
-  而且會是新類別, 不改現有的 `HingeState`
+- 勁度/強度劣化、捏縮(pinching)、等向硬化: 循環塑鉸(D7)目前只有雙線性運動硬化(等同 Steel01 預設),
+  這幾項還沒做
 - 動力分析初期(D1~D5)不做: 多支承激振、顯式時間積分、非古典阻尼、cable
   參與動力分析、EqualDOF 參與動力分析(見下方「既有限制」表格)
 - 3D、土-結構互制: 不在範疇內
@@ -229,13 +229,13 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | 5 | EqualDOF 是懲罰法 | `dofmanager._apply_equal_dof`(1e6 倍最大對角項) | D1~D5: 有 `equal_dofs` 就明確報錯; 之後改成精確的 master-slave 消去。懲罰彈簧會造成虛假高頻模態與條件數惡化 | D1 / 之後 |
 | 6 | Cable 鬆弛迭代是狀態相依的 | `dofmanager` 的鬆弛迭代 | D1~D5: 有 cable 就明確報錯。模態分析要先定義基準狀態(例如重力下拉緊); 時程中鬆弛需要事件處理 | D6 之後 |
 | 7 | 非零指定位移 | `Support` 指定值 | 動力分析只接受 `None` / `0.0`; 地震輸入一律用等效力 `−M r a_g`, 不用支承位移 | D1 |
-| 8 | 塑鉸單向 | `hinge.HingeState.check_yield` | 新增循環塑鉸類別, 不改 `HingeState` | D7 |
+| 8 | 塑鉸單向 | `hinge.HingeState.check_yield` | 新增循環塑鉸類別 `CyclicHingeState`(`cyclic.py`), 不改 `HingeState` | D7 ✅ |
 | 9 | Newton 路徑是 pushover 驅動且不支援 release | `newton.py`(`_check_no_releases`) | 新增時間積分外層迴圈, 重用 `corotational.py` 與 `_assemble_global`; 是否補 release 支援在 D6 決定 | D6 |
 | 10 | 文件落後 | README「尚未支援」段落、`BENCHMARK_SUITE.md` 的測試數量 | 同步更新 | D0 |
 
 ### 階段規劃
 
-依賴關係: `D0 → D1 → D2 → {D3, D4 → D5} → D6 → D7 → D8`。D3(反應譜)與 D4(線性
+依賴關係: `D0 → D1 → D2 → {D3, D4 → D5} → D6 → D8`; **D7(循環塑鉸)只需要靜力求解器, 不依賴 D3~D6, 已提前完成**, D6/D8 直接使用它。D3(反應譜)與 D4(線性
 時程)彼此獨立, 可以互換順序。
 
 | Stage | 內容 | 預計新檔 | 狀態 |
@@ -248,7 +248,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D4 | 線性時程 (Newmark) + 諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ⬜ |
 | D5 | Rayleigh 阻尼 + 地面加速度輸入 | `damping.py` | ⬜ |
 | D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
-| D7 | 循環塑鉸(遲滯) | 併入 `hinge.py` 或新檔 | ⬜ |
+| D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
 | D8 | 非線性地震時程 + 能量平衡 | — | ⬜ |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
@@ -419,14 +419,46 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   自由振動的週期伸長對照 OpenSeesPy corotational
 - 不收斂時如實回報(沿用 pushover 一貫作法), 可選擇性支援時間步長細分
 
-#### D7 循環塑鉸
+#### D7 循環塑鉸與準靜態反覆載重 ✅ 已完成(提前)
 
-- 新增循環塑鉸類別(雙線性、運動硬化、卸載與反向載入), **不修改**現有的
-  `HingeState`
-- 單調載入時, 新類別必須與 `HingeState` 結果一致(既有 pushover 測試當回歸)
-- 驗證: 單鉸單自由度準靜態循環, M–θ 迴圈對照雙線性解析, 每圈耗能 = 迴圈面積;
-  對 OpenSeesPy `zeroLength` 轉角彈簧 + `Steel01`(硬化比 b)——`hinge.py` 的單調版
-  已經用同一組合驗證過
+- **為什麼提前**: 遲滯迴圈來自構件的**組成律**(塑鉸的彎矩-轉角關係)在反覆變形下的行為, 不是
+  「動力」本身產生的; 時程分析只是提供一條隨時間變化的位移歷程, 餵進同一個非線性構件, 構件
+  畫出來的就是遲滯迴圈。所以先用準靜態反覆載重把構件模型做對、對得上解析解與 OpenSeesPy,
+  D6/D8 的非線性時程才有可靠的構件可用。這個步驟只需要靜力求解器, 不必等 D3~D6
+- 新增 `frame2d/cyclic.py`(**不修改** `HingeState` 與任何既有求解器):
+  - `CyclicHingeState`: 雙線性**運動硬化**塑鉸(彈性→降伏→卸載→反向降伏; 包辛格型, 反向降伏在
+    `M = M_max − 2Mp` 而不是 `−Mp`), 等同 OpenSees Steel01(雙線性、`b = R_post/K_e`、不開等向硬化);
+    `R_post_yield = 0` 就是彈塑性。狀態: `yielded / direction / alpha(背應力) / theta_p_signed /
+    theta_p(∑|Δθp|) / work(累積塑性功)`; `CyclicHingeState.from_hinge_states()` 由既有的
+    `initial_hinge_states()` 轉換
+  - `run_cyclic(frame, hinge_states, prescribed_dofs, direction, protocol, d_nominal, base_reaction_dofs)`:
+    位移控制反覆載重, `protocol` 是控制點的位移目標序列, `make_protocol([幅值...], n_cycles)` 產生標準的
+    「幅值遞增、每級 n 圈」歷程。回傳 `CyclicResult`(力-位移、外力功、各鉸的 M / θp / 塑性功歷程、
+    降伏與卸載事件)
+  - 演算法: 沿用 pushover 的元件與 event-to-event。一段增量內勁度固定 ⇒ 反應對增量線性 ⇒ 降伏事件
+    可用線性外插定位, **卸載只會發生在一段的開頭**(符號在段內不變): 用目前塑性勁度試解, 某塑性端的
+    彈簧轉角增量與降伏方向相反就切回彈性、重新試解; 一個鉸卸載會改變其他鉸的增量, 所以這個
+    符號一致性要疊代到穩定(同接觸問題的 active-set), 不收斂就明確報錯
+- 驗證:
+  - `tests/test_cyclic.py`: (1) 對獨立的 1D 雙線性運動硬化**回歸映射**參考實作, 每個記錄點比對力-位移
+    (等幅多圈、幅值遞增(背應力累積)、不對稱與部分卸載、完全塑性 R=0、不同步長), 最大誤差 5.6e-8(來自
+    K_e 有限); (2) 解析頂點: 反向降伏在 `F_a − 2F_y`; (3) 穩態迴圈面積: 解析鞋帶公式 = 數值 ∮F du =
+    塑鉸累積塑性功(14.285714); (4) 單調載重與 `run_pushover(HingeState)` 逐點一致(1.4e-14, 6 個塑鉸);
+    (5) 塑性狀態下 `M − R·θp` 恆在降伏面上(彎矩記帳與轉角記帳獨立算出來必須一致); (6) 6 塑鉸門型剛架
+    反覆載重: 正反向峰值反對稱、穩態迴圈外力功 = 全部塑鉸塑性功; (7) 明確拒絕。**突變檢查 5/5 被抓到**
+    (背應力不凍結、不偵測卸載、塑性功用端點值、θp 符號、降伏事件比例)
+  - `tests/test_cyclic_vs_openseespy.py`(選用): 對 OpenSeesPy `zeroLength` 旋轉彈簧 + `Steel01`, 4 個案例
+    (懸臂柱 2 種歷程、6 塑鉸門型剛架 2 種歷程, 共 54 次降伏/49 次卸載, 各鉸容量與硬化剛度都不同):
+    力-位移逐點最大差 **1.5e-13(相對 2e-15)**、轉折點各鉸彎矩差 2e-13
+  - 範例 `examples/cyclic_portal_demo.py`: 門型鋼架反覆載重, 印降伏順序、每圈耗能與等效黏性阻尼比,
+    存遲滯迴圈圖。塑性崩塌載重 4Mp/h = 100 kN, 模擬平台值 102.5 kN(含硬化), 吻合
+- **OpenSeesPy 交叉驗證的實務細節**: Newton 在「近剛接彈簧 + 極小的降伏後剛度」(b = R/K_e ~ 1e-5)下,
+  多個塑鉸同時改變狀態會來回震盪、100 次疊代不收斂(K_e ≥ 1000·EI/L 就會; ModifiedNewton、
+  NewtonLineSearch、KrylovNewton 都一樣)。比對時兩邊用**同一個**有限的 K_e(把 `hinge.RIGID_FACTOR`
+  暫時設成 50), 模型仍然完全相同。另外 OpenSees 的底剪力不能讀 `nodeReaction`(equalDOF 的約束力不在
+  該節點上), 要用載重係數
+- 限制(誠實): 準靜態、小位移(沒有 P-Delta / 幾何更新); 沒有劣化、捏縮、等向硬化; 只有位移控制;
+  網頁尚未接上(D7b)
 
 #### D8 非線性地震時程
 

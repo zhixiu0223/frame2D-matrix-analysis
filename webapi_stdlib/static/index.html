@@ -413,6 +413,11 @@
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
       <button data-view="modal" class="viewBtn" id="btnViewModal" style="display:none;">模態形狀</button>
+      <span id="modalNav" style="display:none;white-space:nowrap;">
+        <button id="btnModePrev" title="上一個模態" style="width:auto;">◀</button>
+        <span id="modalNavLabel" style="font-size:0.85rem;font-weight:bold;color:#7c3aed;">模態 1/1</span>
+        <button id="btnModeNext" title="下一個模態" style="width:auto;">▶</button>
+      </span>
       <button data-view="combined" class="viewBtn">組合顯示</button>
       <span class="sep-v"></span>
       <label class="snapLabel"><input type="checkbox" id="overlayLoadsToggle" checked>疊加原始結構外力</label>
@@ -917,7 +922,14 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
-  document.getElementById('modalPanel').style.display = (viewMode === 'modal' && modalResult) ? 'block' : 'none';
+  const modalOn = viewMode === 'modal' && modalResult;
+  document.getElementById('modalPanel').style.display = modalOn ? 'block' : 'none';
+  document.getElementById('modalNav').style.display = modalOn ? 'inline-block' : 'none';
+  if (modalOn) {
+    document.getElementById('modalNavLabel').textContent = `模態 ${modalModeIndex + 1}/${modalResult.n_modes}`;
+    document.getElementById('btnModePrev').disabled = modalModeIndex <= 0;
+    document.getElementById('btnModeNext').disabled = modalModeIndex >= modalResult.n_modes - 1;
+  }
   // 容量曲線是固定螢幕座標的overlay圖層, camera平移/縮放對它完全沒有
   // 視覺效果——但svg元素原本用CSS寫死touch-action:none(為了讓結構視圖
   // 的自訂雙指縮放/拖曳平移生效, 見下面svg.addEventListener('wheel'...)
@@ -4501,6 +4513,7 @@ function resetViewToStructure() {
   document.getElementById('pushoverConfigBar').style.display = 'none';
   document.getElementById('modalConfigBar').style.display = 'none';
   document.getElementById('btnViewModal').style.display = 'none';
+  document.getElementById('modalNav').style.display = 'none';
   modalResult = null;
   modalModeIndex = 0;
   document.getElementById('btnViewPushover').style.display = 'none';
@@ -4683,6 +4696,18 @@ function drawModeShape(t) {
     put(el('polyline', {points: pts.trim(), class: 'mode-line'}));
   }
 }
+
+// 振型視圖旁邊的「◀ ▶」: 不用捲到下面的結果表, 直接切換上一個/下一個模態
+function stepMode(delta) {
+  if (!modalResult) return;
+  const next = Math.max(0, Math.min(modalResult.n_modes - 1, modalModeIndex + delta));
+  if (next === modalModeIndex) return;
+  modalModeIndex = next;
+  renderModalTable();
+  render();
+}
+document.getElementById('btnModePrev').addEventListener('click', () => stepMode(-1));
+document.getElementById('btnModeNext').addEventListener('click', () => stepMode(+1));
 
 async function runModalAnalysis() {
   const nModes = parseInt(document.getElementById('md_nmodes').value, 10);
