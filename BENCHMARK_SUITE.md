@@ -1,11 +1,12 @@
 # Benchmark Suite 索引
 
 frame2d 的正確性不是靠單一權威來源背書,是靠多種互相獨立的驗證方式
-交叉確認。這份文件把 `tests/` 底下 36 個驗證案例依「驗證對象」分類整理,
+交叉確認。這份文件把 `tests/` 底下編號 1-36 的驗證案例依「驗證對象」分類整理(之後新增的非線性與動力
+測試見文末「未編號測試」),
 方便快速找到「某個功能是用什麼方法驗證過的」,不用逐一打開每個檔案的
 docstring。
 
-跑法: `PYTHONPATH=. pytest tests/ -q`(全部 40 個測試, 含
+跑法: `PYTHONPATH=. pytest tests/ -q`(全部測試, 含
 `test_zz_all_script_style_tests.py` 用 subprocess 執行的 script 風格
 測試), 或直接 `PYTHONPATH=. python tests/test_xxx.py` 單獨執行某一個
 (會印出詳細比對數值方便人眼檢查)。
@@ -164,3 +165,29 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 局部段載重需要跟角度換算組合時, 同樣不要依賴SW FEA的Start/End Distance
 局部段輸入, 改用插入真實節點的做法。
 
+## 未編號測試(非線性靜力、載重擴充、動力前置)
+
+案例 1-36 之後新增的測試, 還沒有依「驗證對象」編入上面的分類索引。先列檔名與驗證重點,
+之後整理成編號案例時再移進去。
+
+| 測試檔 | 驗證重點 |
+|---|---|
+| `test_geometric_stiffness.py` | 幾何勁度矩陣 `local_geometric_stiffness()` 與 P-Delta 疊加 |
+| `test_pdelta.py` | `solve_pdelta()`: 無軸力時與主求解器逐位元一致、獨立 sympy 縮減系統、物理合理性 |
+| `test_hinge_condensation.py` | 含鉸樑元素勁度的封閉式公式(三項極限自我檢核) |
+| `test_hinge_wiring.py` | 塑鉸容量接進 `Frame2D` 與 `solve_with_hinges()` |
+| `test_pushover.py` | 遞增側推(位移控制 + event-to-event) |
+| `test_pushover_force_control.py` | 力控制側推 |
+| `test_pushover_geometry_update.py` | 幾何更新模式 |
+| `test_pushover_converged.py` | `run_pushover_converged()` 幾何/軸力 Picard 疊代 |
+| `test_pushover_mechanism.py` | 多鉸情境的機構偵測 `check_mechanism()` |
+| `test_pushover_snapshots.py` | 逐步回放用快照 |
+| `test_theta_p_tracking.py` | 累積塑性轉角 `theta_p` 追蹤 |
+| `test_newton_corotational.py` | co-rotational 大轉角 + Newton-Raphson 平衡疊代 |
+| `test_analyze_pushover.py` | `analyze_pushover()` 是純 dispatch, 每種組合與底層函式逐位元一致 |
+| `test_settlement_newton.py` | 支座沉陷、溫度效應在 Newton / corotational_oneshot 也正確生效 |
+| `test_thermal_load.py` | 溫度效應載重(軸向 + 彎曲梯度) |
+| `test_distributed_moment.py` | 分佈彎矩 |
+| `test_equal_dof.py` | equalDOF 懲罰法 |
+| `test_point_load_angle.py` | 集中力的角度便利介面 |
+| `test_assembly.py` | `assemble_K()`: 剛體運動檢核 + 與既有求解器交叉比對(動力 D0) |

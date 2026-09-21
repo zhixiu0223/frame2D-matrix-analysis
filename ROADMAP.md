@@ -201,7 +201,8 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 ### 設計原則
 
 1. **只加不改。** 沿用 `analyze_pushover()` 的作法: 新增函式、新增檔案, 不修改
-   既有求解器。唯一例外是 D0 抽取 `assemble_K`, 而且必須用逐位元回歸保護。
+   既有求解器。(D0 原本規劃要重構 `_solve_once_dofmanager`, 實際檢查後發現不需要,
+   改成公開薄包裝, 所以目前沒有任何例外。)
 2. **明確拒絕, 不靜默退化。** 動力分析遇到尚未支援的組合(cable、EqualDOF、
    非零指定位移等)一律 `raise ValueError`, 跟現有風格一致。
 3. **每個階段三件套:** (a) 解析解或手算基準 (b) 跟 OpenSeesPy 交叉驗證
@@ -217,7 +218,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 
 | # | 問題 | 現況位置 | 處理方式 | 何時 |
 |---|---|---|---|---|
-| 1 | K 沒有獨立的組裝函式 | `dofmanager._solve_once_dofmanager` 內嵌; `pushover._assemble_stiffness_with_hinges`、`newton._assemble_global` 是另外兩套 | 抽出 `assemble_K(frame, ...)`, 純重構, 逐位元回歸 | D0 |
+| 1 | K 沒有**公開**的組裝入口 | `pushover._assemble_stiffness_with_hinges` 已經是純組裝函式(不含載重/邊界條件), 但是私有、名字綁 pushover; `dofmanager._solve_once_dofmanager` 內嵌另一份; `newton._assemble_global` 是 corotational 版 | 新增 `assembly.assemble_K` 薄包裝, **不改任何既有求解器**; 測試守住兩份組裝不分歧 | D0 ✅ |
 | 2 | Section 沒有質量 | `model.Section` 只有 E, I, A | 加 `rho`(或單位長度質量, 命名待定)與 `add_mass(node, mx, my, Iz)`, 預設 None 不影響既有行為 | D1 |
 | 3 | 單位制 | — | 決定 kN-m-ton-s(質量單位 ton = kN·s²/m), 寫進 README。質量單位錯誤不會報錯, 只會讓頻率整體差一個常數倍 | D1 開工前 |
 | 4 | 無質量自由度 | `build_dof_map` 的 release 專屬轉角 DOF; 集中質量沒有轉動慣量; truss 節點轉角 | 靜力凝縮 `K_eff = K_dd − K_dm K_mm⁻¹ K_md`(對無質量 DOF 是精確的) | D1~D2 |
@@ -235,7 +236,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 
 | Stage | 內容 | 預計新檔 | 狀態 |
 |---|---|---|---|
-| D0 | 前置重構: 抽出 `assemble_K`, 同步文件 | `assembly.py` | ⬜ |
+| D0 | 前置: 公開 `assemble_K`(薄包裝), 同步文件 | `assembly.py` | ✅ |
 | D1 | 質量矩陣(集中 → 一致) | `mass.py` | ⬜ |
 | D2 | 特徵值/模態分析 + 模態性質 | `modal.py` | ⬜ |
 | D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ⬜ |
@@ -245,15 +246,29 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D7 | 循環塑鉸(遲滯) | 併入 `hinge.py` 或新檔 | ⬜ |
 | D8 | 非線性地震時程 + 能量平衡 | — | ⬜ |
 
-#### D0 前置重構
+#### D0 前置: 公開 assemble_K ✅ 已完成
 
-- 新增 `assemble_K(frame, ...)`, 回傳 `K`、`member_dofs`、`member_T`、`member_L`,
-  讓 `_solve_once_dofmanager` 改呼叫它
-- 重構前後對數個代表性模型(含 release、truss、P-Delta、hinge)用
-  `np.array_equal` 逐位元比對位移與反力, baseline 用 `v1.1-nonlinear-static`
-  tag 跑出來存檔
-- 這個 commit **不含任何新物理**
-- 同步更新 README 的「尚未支援」段落與 `BENCHMARK_SUITE.md` 的測試數量
+- 新增 `frame2d/assembly.py`: `assemble_K(frame, hinge_states=None, axial_forces=None)`
+  回傳 `Assembly(K, member_dofs, member_T, member_L, n_node_dof, n_extra_dof)`
+  (NamedTuple, 可用欄位名稱或直接拆包)。內部只是呼叫
+  `pushover._assemble_stiffness_with_hinges()` 加 `build_dof_map()`, 沒有新的組裝邏輯
+- **規劃更正**: 原本寫「K 沒有獨立的組裝函式, 要重構 `_solve_once_dofmanager`」,
+  這個說法太重。`_assemble_stiffness_with_hinges` 早就是純組裝函式, 缺的只是公開入口。
+  所以改成薄包裝, 沒有動任何既有求解器, 也就不需要逐位元回歸 baseline
+- 代價: 專案裡有兩份獨立寫的 K 組裝(`assemble_K` 呼叫的那份, 跟
+  `_solve_once_dofmanager` 內嵌的那份)。分歧風險由 `tests/test_assembly.py` 守住
+- 驗證分兩層, **兩層都需要**:
+  - 層1(不依賴任何求解器): 無支承、無 release 的剛架, K 剛好 3 個零特徵值, 且
+    `K @ 剛體位移 = 0`
+  - 層2(對照既有求解器): 用 `assemble_K` 自己組 K、自己劃分邊界條件、自己解,
+    對照 `solve()`、`_solve_once_dofmanager(member_axial=)`、`solve_with_hinges()`;
+    涵蓋一般剛架、release(額外 DOF)、桁架、equalDOF、P-Delta 幾何勁度、含塑鉸勁度,
+    位移差為 0.0(逐位元一致)
+- 測試有效性(突變檢查): 故意讓 pushover 那份組裝的 A 偏 1%, 層2 抓到(位移相對差
+  1.5e-4), 層1 抓不到(剛體模態不受 A 影響)——所以兩層缺一不可
+- 已知範圍: 不處理鬆弛 cable(一律當 taut); equalDOF 仍是懲罰法。兩者在 D1~D5 由
+  動力分析入口明確拒絕
+- 文件同步: README 的範疇與結構、`BENCHMARK_SUITE.md` 的測試數量與未編號測試
 
 #### D1 質量矩陣
 

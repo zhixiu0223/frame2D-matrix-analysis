@@ -21,21 +21,32 @@
   (超過會嚴重外推、矩陣接近奇異);release端的幾何剛度疊加方式沿用
   portal-frame-pushover已用OpenSeesPy驗證過的簡化做法
   (不管端點release狀態一律疊加),沒有另外推導release專屬的Kg凝聚公式
-- **尚未支援**: 真正的大變形(corotational)幾何非線性、塑性鉸/材料非線性、
-  挫屈臨界載重偵測——這些等基本框架穩定後再視需求加入,不要為了還沒
-  出現的需求先付架構成本(詳細優先順序見ROADMAP.md)
+- **非線性靜力**: 塑性鉸(單向, 彈性→降伏)、遞增側推 pushover(位移/力控制,
+  event-to-event 降伏事件定位)、幾何更新、co-rotational 大轉角 + Newton-Raphson
+  平衡疊代; 統一入口 `analyze_pushover(geometry=, solver=)`, 各函式對照表見
+  [ANALYSIS_ARCHITECTURE.md](ANALYSIS_ARCHITECTURE.md)
+- 其他載重與約束: 分佈力矩、溫度效應(均勻+梯度)、任意角度均佈載重、equalDOF(懲罰法)
+- **尚未支援**: 循環/遲滯塑鉸(卸載與反向載入)、挫屈臨界載重偵測、任何動力分析
+  (質量/模態/反應譜/時程, 規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
 
 ```
 frame2d/
-  model.py    — Node / Section / Member / Support / PointLoad / DistributedLoad / Frame2D (建模API)
-  elements.py — 局部6x6勁度矩陣、座標轉換矩陣、均佈載重固定端反力公式
-  solve.py    — 組裝、邊界條件(partition method)、求解、桿端內力回代
-tests/
-  test_cantilever.py            — 懸臂梁點載重 vs 解析解 (機器精度)
-  test_simply_supported_udl.py  — 簡支梁均佈載重 vs 解析解 (機器精度, 驗證分佈載重公式)
-  test_case08_vs_swfea.py       — 兩層兩跨鋼架 vs SW FEA第三方工具報告 (rel_err<0.2%)
+  model.py         — Node / Section / Member / Support / EqualDOF / 各種載重 / Frame2D (建模API)
+  elements.py      — 局部6x6勁度矩陣、幾何勁度、座標轉換矩陣、各種載重的固定端反力公式
+  dofmanager.py    — DOF編號(含release專屬DOF)、主要求解器solve()、solve_pdelta()、solve_with_hinges()
+  solve.py         — 靜力凝縮版求解器 solve_condensation()(參考/回歸用)
+  assembly.py      — assemble_K(): 公開的全域勁度矩陣組裝入口(動力分析用)
+  hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
+  pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
+  corotational.py  — co-rotational 桿件運動學與內力
+  newton.py        — Newton-Raphson + co-rotational 側推求解器
+  analyze.py       — analyze_pushover() 統一入口(純 dispatch)
+  postprocess.py / plotting.py / query.py / result.py — 後處理、繪圖、查詢、結果物件
+tests/             — 見 BENCHMARK_SUITE.md(驗證方法分類與案例索引)
+  test_zz_all_script_style_tests.py — 讓 pytest 一併執行腳本風格的驗證檔
+webapi/ webapi_stdlib/ — Web GUI(FastAPI 版 / 純標準庫版)
 ```
 
 ## 使用範例
