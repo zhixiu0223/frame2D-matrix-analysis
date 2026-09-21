@@ -99,7 +99,9 @@ async function waitFor(fn, what, ms = 8000) {
   assert(lines.length === 3, `振型曲線應有 3 條(3根桿件), 實際 ${lines.length}`);
   assert($('overlay').textContent.includes('第 1 模態'), '標題應顯示第 1 模態');
   assert($('status').textContent.includes('模態分析完成'), '狀態列應顯示完成');
-  console.log('結果表 3 列、振型曲線 3 條、標題與狀態列 OK');
+  const cellTexts = [...d.querySelectorAll('#modalTable tbody td')].map(td => td.textContent);
+  assert(!cellTexts.some(t => /e-(1\d|[2-9]\d)/.test(t)), '結果表不應出現 e-10 以下的數值雜訊(應顯示成 0): ' + cellTexts.filter(t => /e-\d\d/.test(t)).join(','));
+  console.log('結果表 3 列、振型曲線 3 條、標題與狀態列、無數值雜訊 OK');
 
   // ---- 點第2列切換振型 ----
   rows[1].click();

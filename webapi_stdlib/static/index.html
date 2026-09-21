@@ -4641,7 +4641,10 @@ function fmtPct(v) { return (v === null || v === undefined) ? '—' : (v * 100).
 function renderModalTable() {
   if (!modalResult) return;
   const r = modalResult, mu = unitOf('mass');
-  const massStr = v => (v === null || v === undefined) ? '—' : Number(fromSI('mass', v).toPrecision(5)).toString();
+  // 數值上的零(例如 2.7e-32)一律顯示成 0, 不要讓使用者看到一堆 e-30 的雜訊
+  const tiny = 1e-9 * Math.max(r.mass_total.x || 0, r.mass_total.y || 0);
+  const massStr = v => (v === null || v === undefined) ? '—'
+    : (Math.abs(v) < tiny ? '0' : Number(fromSI('mass', v).toPrecision(5)).toString());
   document.getElementById('md_summary').textContent =
     `(${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}; 總質量 x向 ${massStr(r.mass_total.x)} / y向 ${massStr(r.mass_total.y)} ${mu}; `
     + `可動質量 x向 ${massStr(r.mass_free.x)} / y向 ${massStr(r.mass_free.y)} ${mu})`;
