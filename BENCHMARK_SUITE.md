@@ -205,3 +205,6 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_web_cyclic_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「循環」→Solve→遲滯迴圈圖/M-θp 圖/結果表→單位切換→錯誤訊息 |
 | `test_spectrum.py` | 反應譜分析: SDOF解析解、兩質量懸臂獨立柔度矩陣參考、反力恆等式、獨立K解交叉驗證、CQC對手算數值(動力 D3) |
 | `test_spectrum_vs_openseespy.py` | 反應譜分析 vs OpenSeesPy(選用, 只比單一模態): 位移/反力相對差 1e-13 |
+| `test_spectrum_web.py` | 網頁反應譜核心: taiwan_code_spectrum形狀、custom_spectrum內插、spectrum_analysis與rsa_to_dict跟核心邏輯逐項一致(動力 D3b) |
+| `test_web_rsa_api.py` | 網頁後端 `/rsa`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、各種錯誤訊息 |
+| `test_web_rsa_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「反應譜」→Solve→曲線圖/結果表(含渲染文字檢查)→單位切換→自訂反應譜→錯誤訊息 |

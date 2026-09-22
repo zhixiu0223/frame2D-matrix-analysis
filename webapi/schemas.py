@@ -178,6 +178,21 @@ class FrameIn(BaseModel):
     cyclic_n_cycles: int = 2
     cyclic_step: Optional[float] = None
     """位移步長上限(SI, m); 降伏事件會自動在事件點切開, 不用為了抓事件調小。"""
+
+    rsa_direction: Literal['x', 'y'] = 'x'
+    rsa_damping: float = 0.05
+    rsa_combine: Literal['SRSS', 'CQC'] = 'SRSS'
+    rsa_n_modes: Optional[int] = None
+    rsa_mass_kind: Literal['lumped', 'consistent'] = 'lumped'
+    rsa_spectrum_type: Literal['code', 'custom'] = 'code'
+    rsa_code_sds: Optional[float] = None
+    """規範反應譜用: 無單位係數(g的倍數)。"""
+    rsa_code_sd1: Optional[float] = None
+    rsa_code_tl: Optional[float] = 6.0
+    """規範反應譜用: 長週期轉角週期(s)。"""
+    rsa_custom_points: Optional[List[List[float]]] = None
+    """自訂反應譜用: [[T(s), Sa(SI加速度單位, m/s²)], ...], 至少2點。"""
+
     modal_n_modes: Optional[int] = None
     """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""
     modal_mass_kind: Literal['lumped', 'consistent'] = 'lumped'

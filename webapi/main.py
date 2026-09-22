@@ -20,6 +20,7 @@ from frame2d.newton import run_pushover_newton, run_pushover_corotational_onesho
 from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from frame2d.modal import eigen, modal_to_dict
 from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
+from frame2d.spectrum import spectrum_analysis, rsa_to_dict
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -436,6 +437,27 @@ def cyclic_endpoint(payload: FrameIn):
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return cyclic_to_dict(res, payload.cyclic_control_nodes, payload.cyclic_direction, payload.cyclic_n_cycles)
+
+
+@app.post("/rsa")
+def rsa_endpoint(payload: FrameIn):
+    """反應譜分析(frame2d.spectrum): 建立在模態分析上, 規範反應譜(簡化四段式形狀, 使用者提供
+    SDS/SD1/TL)或自訂反應譜(週期-Sa資料點, 分段線性內插)。回傳每個模態的週期/Sa/參與係數/
+    有效質量比、組合後的基底剪力/節點位移/桿件內力、反應譜曲線取樣點(給前端畫圖)。"""
+    f = _build_frame(payload)
+    try:
+        pkg = spectrum_analysis(
+            f, direction=payload.rsa_direction, damping=payload.rsa_damping, combine=payload.rsa_combine,
+            n_modes=payload.rsa_n_modes, mass_kind=payload.rsa_mass_kind, spectrum_type=payload.rsa_spectrum_type,
+            code_sds=payload.rsa_code_sds, code_sd1=payload.rsa_code_sd1, code_tl=payload.rsa_code_tl,
+            custom_points=payload.rsa_custom_points)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return rsa_to_dict(pkg)
 
 
 @app.post("/pushover_step_diagrams")

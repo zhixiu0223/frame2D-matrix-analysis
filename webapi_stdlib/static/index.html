@@ -122,6 +122,9 @@
   .cyclicHingeLine { stroke: #ea580c; stroke-width: 1.8; fill: none; stroke-linejoin: round; }
   .cyclicYieldDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
   .cyclicChartBox { fill: white; stroke: #cbd5e1; stroke-width: 1; }
+  .rsaCurveLine { stroke: #0891b2; stroke-width: 2; fill: none; }
+  .rsaModeDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
+  .rsaPointRow input { width: 4.5rem; }
   tr.modalRow { cursor: pointer; }
   tr.modalRow:hover { background: #f5f3ff; }
   tr.modalRow.active { background: #ede9fe; font-weight: bold; }
@@ -186,6 +189,7 @@
         <option value="pushover">Pushover</option>
         <option value="modal">模態</option>
         <option value="cyclic">循環</option>
+        <option value="rsa">反應譜</option>
       </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
@@ -340,6 +344,38 @@
          內容太長而把畫面吃光。 -->
     <div id="topbarRest">
 
+    <div id="rsaConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel">方向<select id="rsa_dir" style="width:4rem;">
+        <option value="x">水平(x)</option>
+        <option value="y">垂直(y)</option>
+      </select></label>
+      <label class="snapLabel">組合<select id="rsa_combine" style="width:5rem;">
+        <option value="SRSS">SRSS</option>
+        <option value="CQC">CQC</option>
+      </select></label>
+      <label class="snapLabel">阻尼比<input id="rsa_damping" type="number" min="0" max="0.99" step="any" value="0.05" style="width:4rem;"></label>
+      <label class="snapLabel">模態數(留空=全部)<input id="rsa_nmodes" type="number" min="1" step="1" style="width:4rem;"></label>
+      <label class="snapLabel">質量矩陣<select id="rsa_kind" style="width:8rem;">
+        <option value="lumped">集中質量</option>
+        <option value="consistent">一致質量</option>
+      </select></label>
+      <label class="snapLabel">反應譜來源<select id="rsa_spec_type" style="width:6rem;">
+        <option value="code">規範(簡化)</option>
+        <option value="custom">自訂</option>
+      </select></label>
+      <div id="rsa_code_panel">
+        <label class="snapLabel">S<sub>DS</sub>(g倍數)<input id="rsa_sds" type="number" min="0" step="any" value="0.6" style="width:4.5rem;"></label>
+        <label class="snapLabel">S<sub>D1</sub>(g倍數)<input id="rsa_sd1" type="number" min="0" step="any" value="0.35" style="width:4.5rem;"></label>
+        <label class="snapLabel">T<sub>L</sub>(s)<input id="rsa_tl" type="number" min="0" step="any" value="6.0" style="width:4rem;"></label>
+        <p class="hint" style="margin:0.3rem 0 0;">簡化的四段式設計反應譜形狀(建築物耐震設計規範等值靜力法常見形狀), <b>不是精確的工址查表版本</b> —— S<sub>DS</sub>/S<sub>D1</sub> 要依你工址的位置與地盤分類查表或另外算出來, 這裡只負責把算好的值代入標準形狀公式。</p>
+      </div>
+      <div id="rsa_custom_panel" style="display:none;">
+        <p class="hint" style="margin:0.3rem 0;">週期-S<sub>a</sub> 資料點(至少2點, 分段線性內插; 範圍外夾在端點值, 不外插)。順序不拘, 會自動依週期排序。</p>
+        <table id="rsa_points_table" style="width:auto;"><thead><tr><th>週期 T(s)</th><th>S<sub>a</sub>(<span id="rsa_pt_unit"></span>)</th><th></th></tr></thead><tbody></tbody></table>
+        <button id="rsa_pt_add" type="button" style="margin-top:0.3rem;">➕ 新增一點</button>
+      </div>
+      <p class="hint" style="margin:0.4rem 0 0;">反應譜分析建立在模態分析上, 需要跟模態分析一樣的質量設定(斷面密度 ρ、節點質量)。線性彈性, 不含塑鉸/P-Delta。組合後的位移/桿件內力/反力都是非負的峰值估計(SRSS/CQC 組合會丟失正負號, 這是反應譜法的本質限制)。</p>
+    </div>
     <div id="cyclicConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
       <label class="snapLabel">控制節點(逗號分隔)<input id="cy_nodes" type="text" style="width:6rem;" placeholder="例如1"></label>
       <label class="snapLabel">權重(逗號分隔)<input id="cy_weights" type="text" style="width:6rem;" placeholder="留空=全部1.0"></label>
@@ -429,6 +465,7 @@
       <button data-view="M" class="viewBtn">M 圖(彎矩)</button>
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
+      <button data-view="rsa" class="viewBtn" id="btnViewRsa" style="display:none;">反應譜</button>
       <button data-view="cyclic_loop" class="viewBtn" id="btnViewCyclic" style="display:none;">遲滯迴圈</button>
       <button data-view="cyclic_hinge" class="viewBtn" id="btnViewCyclicHinge" style="display:none;">塑鉸 M-θp</button>
       <button data-view="modal" class="viewBtn" id="btnViewModal" style="display:none;">模態形狀</button>
@@ -459,6 +496,17 @@
       <g id="camera"><g id="content"></g></g>
       <g id="overlay"></g>
     </svg>
+  </div>
+
+  <div id="rsaPanel" style="display:none;margin:0.5rem 0;">
+    <h3 style="font-size:0.9rem;margin:0.3rem 0;">反應譜分析結果 <span id="rsa_summary" class="hint"></span></h3>
+    <h4 style="font-size:0.82rem;margin:0.4rem 0 0;">各模態</h4>
+    <div style="overflow-x:auto;"><table id="rsaModalTable"><thead></thead><tbody></tbody></table></div>
+    <h4 style="font-size:0.82rem;margin:0.6rem 0 0;">節點位移(組合後, 非負)</h4>
+    <div style="overflow-x:auto;"><table id="rsaNodeTable"><thead></thead><tbody></tbody></table></div>
+    <h4 style="font-size:0.82rem;margin:0.6rem 0 0;">桿件端點內力(組合後, 非負)</h4>
+    <div style="overflow-x:auto;"><table id="rsaMemberTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint" style="margin:0.3rem 0 0;">質量比 = 該模態有效質量 ÷ 可動質量; 累積(總) = 到該模態為止的有效質量 ÷ 總質量, 規範檢核「累積 ≥ 90%」看這一欄(結果摘要裡的總累積也是這個定義)。</p>
   </div>
 
   <div id="cyclicPanel" style="display:none;margin:0.5rem 0;">
@@ -588,6 +636,8 @@ let viewMode = 'structure';
 let modalResult = null;     // /modal 的回傳(模態分析結果), 跟靜力的lastResult分開存
 let modalModeIndex = 0;     // 目前顯示振型的模態(0起算)
 let cyclicResult = null;    // /cyclic 的回傳(反覆載重/遲滯分析結果)
+let rsaResult = null;       // /rsa 的回傳(反應譜分析結果)
+let rsaCustomPoints = [[0.1, 9.80665], [0.5, 9.80665]];   // 自訂反應譜的(T,Sa)點, T=s, Sa=SI(m/s²); 初始值=1g, 不能在這裡呼叫toSI()(UNIT_FACTORS還沒定義)
 let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
 let pushoverStepCache = {};  // 索引(數字) -> /pushover_step_diagrams的回應, 避免同一步重複打API
 let pushoverStepFetchInFlight = null;  // 目前正在抓的步驟索引(避免同一步驟重複同時發出好幾個請求)
@@ -713,7 +763,7 @@ function computeTransformForRect(pad, sx, sy, availW, availH) {
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
-const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, cyclic_loop: 0.14, cyclic_hinge: 0.14, N: 0.14, V: 0.14, M: 0.14};
+const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, cyclic_loop: 0.14, cyclic_hinge: 0.14, rsa: 0.14, N: 0.14, V: 0.14, M: 0.14};
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
@@ -951,6 +1001,8 @@ let panState = null;
 function render() {
   contentG.innerHTML = '';
   overlayG.innerHTML = '';
+  const rsaOn = viewMode === 'rsa' && rsaResult;
+  document.getElementById('rsaPanel').style.display = rsaOn ? 'block' : 'none';
   const cyclicOn = (viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') && cyclicResult;
   document.getElementById('cyclicPanel').style.display = cyclicOn ? 'block' : 'none';
   const modalOn = viewMode === 'modal' && modalResult;
@@ -977,9 +1029,10 @@ function render() {
   // 讓瀏覽器原生捲動生效; 要縮放結構還是可以用🔍+/-/原大小這幾個按鈕,
   // 沒有被這個改動影響。
   svg.style.touchAction = (viewMode === 'pushover_curve' || viewMode === 'pushover_playback'
-                           || viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') ? 'auto' : 'none';
+                           || viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge' || viewMode === 'rsa') ? 'auto' : 'none';
   if (viewMode === 'cyclic_loop') { drawCyclicLoop(); return; }     // 固定螢幕座標的圖表, 不套用結構視圖的 camera
   if (viewMode === 'cyclic_hinge') { drawCyclicHinges(); return; }
+  if (viewMode === 'rsa') { drawRsaCurve(); return; }
   if (viewMode === 'pushover_curve') {
     // 容量曲線是完全不同性質的圖(u vs F的歷程, 不是空間座標), 不套用
     // 結構視圖那一套camera平移縮放/格線, 直接畫在固定的overlay圖層上。
@@ -4355,6 +4408,12 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
     if (lastResult) renderTables();  // 底下的詳細數值表格也要跟著換算重畫
     if (modalResult) renderModalTable();   // 模態結果表的質量單位也要跟著換
     updateCyclicUnitLabels();               // 反覆載重設定列的幅值/步長單位標籤
+    updateRsaUnitLabels();                  // 反應譜設定列的自訂點 S_a 單位標籤
+    renderRsaPointsTable();                 // 自訂反應譜資料點的顯示數值也要跟著換算重畫
+    if (rsaResult) {                        // 反應譜結果表與圖(位移/力/彎矩/加速度單位)也要跟著換算重畫
+      renderRsaPanel();
+      if (viewMode === 'rsa') render();
+    }
     if (cyclicResult) {                     // 遲滯結果表與圖(位移/力/彎矩/能量單位)也要跟著換算重畫
       renderCyclicPanel();
       if (viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') render();
@@ -4552,6 +4611,10 @@ function resetViewToStructure() {
   document.getElementById('pushoverConfigBar').style.display = 'none';
   document.getElementById('modalConfigBar').style.display = 'none';
   document.getElementById('cyclicConfigBar').style.display = 'none';
+  document.getElementById('rsaConfigBar').style.display = 'none';
+  document.getElementById('btnViewRsa').style.display = 'none';
+  document.getElementById('rsaPanel').style.display = 'none';
+  rsaResult = null;
   document.getElementById('btnViewCyclic').style.display = 'none';
   document.getElementById('btnViewCyclicHinge').style.display = 'none';
   document.getElementById('cyclicPanel').style.display = 'none';
@@ -4679,6 +4742,7 @@ document.getElementById('analysisType').addEventListener('change', (e) => {
   document.getElementById('pushoverConfigBar').style.display = isPushover ? 'block' : 'none';
   document.getElementById('modalConfigBar').style.display = e.target.value === 'modal' ? 'block' : 'none';
   document.getElementById('cyclicConfigBar').style.display = e.target.value === 'cyclic' ? 'block' : 'none';
+  document.getElementById('rsaConfigBar').style.display = e.target.value === 'rsa' ? 'block' : 'none';
 });
 
 // 後端錯誤訊息: FastAPI回{detail: 字串或驗證錯誤陣列}, stdlib後端回{error: 字串}, 統一轉成一行文字
@@ -4930,6 +4994,167 @@ function drawCyclicHinges() {
   });
 }
 
+// ================= 反應譜分析 =================
+function updateRsaUnitLabels() {
+  document.getElementById('rsa_pt_unit').textContent = unitOf('accel');
+}
+updateRsaUnitLabels();
+
+function renderRsaPointsTable() {
+  const tb = document.querySelector('#rsa_points_table tbody');
+  tb.innerHTML = '';
+  rsaCustomPoints.forEach((pt, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'rsaPointRow';
+    const tdT = document.createElement('td');
+    const inT = document.createElement('input');
+    inT.type = 'number'; inT.step = 'any'; inT.min = '0'; inT.value = pt[0];
+    inT.addEventListener('input', () => { rsaCustomPoints[i][0] = parseFloat(inT.value); });
+    tdT.appendChild(inT);
+    const tdA = document.createElement('td');
+    const inA = document.createElement('input');
+    inA.type = 'number'; inA.step = 'any'; inA.min = '0'; inA.value = fromSI('accel', pt[1]);
+    inA.addEventListener('input', () => { rsaCustomPoints[i][1] = toSI('accel', parseFloat(inA.value) || 0); });
+    tdA.appendChild(inA);
+    const tdX = document.createElement('td');
+    const btnX = document.createElement('button');
+    btnX.type = 'button'; btnX.textContent = '✕'; btnX.style.width = 'auto';
+    btnX.disabled = rsaCustomPoints.length <= 2;
+    btnX.addEventListener('click', () => { rsaCustomPoints.splice(i, 1); renderRsaPointsTable(); });
+    tdX.appendChild(btnX);
+    tr.appendChild(tdT); tr.appendChild(tdA); tr.appendChild(tdX);
+    tb.appendChild(tr);
+  });
+}
+document.getElementById('rsa_pt_add').addEventListener('click', () => {
+  const last = rsaCustomPoints[rsaCustomPoints.length - 1];
+  rsaCustomPoints.push([Number((last[0] + 0.1).toFixed(3)), last[1]]);
+  renderRsaPointsTable();
+});
+renderRsaPointsTable();
+document.getElementById('rsa_spec_type').addEventListener('change', (e) => {
+  const isCode = e.target.value === 'code';
+  document.getElementById('rsa_code_panel').style.display = isCode ? 'block' : 'none';
+  document.getElementById('rsa_custom_panel').style.display = isCode ? 'none' : 'block';
+});
+
+function buildRsaPayload() {
+  const damping = parseFloat(document.getElementById('rsa_damping').value);
+  if (!Number.isFinite(damping) || damping < 0 || damping >= 1) { setStatus('阻尼比必須在 0(含)到 1(不含)之間'); return null; }
+  const nModesRaw = document.getElementById('rsa_nmodes').value.trim();
+  let nModes = null;
+  if (nModesRaw !== '') {
+    nModes = parseInt(nModesRaw, 10);
+    if (!Number.isFinite(nModes) || nModes < 1) { setStatus('模態數必須是不小於 1 的整數, 或留空使用全部'); return null; }
+  }
+  const specType = document.getElementById('rsa_spec_type').value;
+  const body = {
+    ...model, rsa_direction: document.getElementById('rsa_dir').value,
+    rsa_combine: document.getElementById('rsa_combine').value, rsa_damping: damping,
+    rsa_n_modes: nModes, rsa_mass_kind: document.getElementById('rsa_kind').value,
+    rsa_spectrum_type: specType,
+  };
+  if (specType === 'code') {
+    const sds = parseFloat(document.getElementById('rsa_sds').value);
+    const sd1 = parseFloat(document.getElementById('rsa_sd1').value);
+    const tl = parseFloat(document.getElementById('rsa_tl').value);
+    if (!(sds > 0)) { setStatus('S_DS 必須是正數'); return null; }
+    if (!(sd1 > 0)) { setStatus('S_D1 必須是正數'); return null; }
+    if (!(tl > 0)) { setStatus('T_L 必須是正數'); return null; }
+    body.rsa_code_sds = sds; body.rsa_code_sd1 = sd1; body.rsa_code_tl = tl;
+  } else {
+    if (rsaCustomPoints.length < 2) { setStatus('自訂反應譜至少需要 2 個資料點'); return null; }
+    if (rsaCustomPoints.some(pt => !Number.isFinite(pt[0]) || pt[0] <= 0 || !Number.isFinite(pt[1]) || pt[1] < 0)) {
+      setStatus('自訂反應譜的週期必須是正數、S_a 必須是不小於 0 的數字'); return null;
+    }
+    body.rsa_custom_points = rsaCustomPoints;
+  }
+  return body;
+}
+
+function fmtNum(v, kind, dig) { return (v === null || v === undefined) ? '—' : Number(fromSI(kind, v).toPrecision(dig)).toString(); }
+
+function renderRsaPanel() {
+  if (!rsaResult) return;
+  const r = rsaResult, du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment'), au = unitOf('accel');
+  document.getElementById('rsa_summary').textContent =
+    `(${r.combine}, ${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}, ${r.direction === 'x' ? '水平' : '垂直'}向, `
+    + `阻尼比${(r.damping * 100).toFixed(1)}%; 基底剪力 ${fmtNum(r.base_shear, 'force', 5)} ${fu}; `
+    + `累積質量比(總) ${fmtPct(r.cum_ratio_total)}${r.cum_ratio_total < 0.9 ? ' ⚠低於常見90%門檻, 建議增加模態數' : ''})`;
+  document.querySelector('#rsaModalTable thead').innerHTML =
+    `<tr><th>模態</th><th>T(s)</th><th>f(Hz)</th><th>S_a(${au})</th><th>Γ</th><th>質量比</th><th>累積(總)</th><th>模態基底剪力(${fu})</th></tr>`;
+  const mb = document.querySelector('#rsaModalTable tbody');
+  mb.innerHTML = '';
+  r.modes.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${m.index}</td><td>${m.period.toFixed(5)}</td><td>${m.frequency.toFixed(4)}</td>`
+      + `<td>${fmtNum(m.sa, 'accel', 5)}</td><td>${m.gamma.toFixed(4)}</td><td>${fmtPct(m.eff_ratio)}</td>`
+      + `<td>${fmtPct(m.cum_ratio_total)}</td><td>${fmtNum(m.modal_base_shear, 'force', 5)}</td>`;
+    mb.appendChild(tr);
+  });
+  document.querySelector('#rsaNodeTable thead').innerHTML = `<tr><th>節點</th><th>u<sub>x</sub>(${du})</th><th>u<sub>y</sub>(${du})</th></tr>`;
+  const nb = document.querySelector('#rsaNodeTable tbody');
+  nb.innerHTML = '';
+  Object.keys(r.nodes).sort((a, b) => Number(a) - Number(b)).forEach(nid => {
+    const n = r.nodes[nid];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${nid}</td><td>${fmtNum(n.ux, 'disp', 5)}</td><td>${fmtNum(n.uy, 'disp', 5)}</td>`;
+    nb.appendChild(tr);
+  });
+  document.querySelector('#rsaMemberTable thead').innerHTML =
+    `<tr><th>桿件</th><th>N<sub>i</sub>(${fu})</th><th>V<sub>i</sub>(${fu})</th><th>M<sub>i</sub>(${mu})</th>`
+    + `<th>N<sub>j</sub>(${fu})</th><th>V<sub>j</sub>(${fu})</th><th>M<sub>j</sub>(${mu})</th></tr>`;
+  const mtb = document.querySelector('#rsaMemberTable tbody');
+  mtb.innerHTML = '';
+  Object.keys(r.members).sort((a, b) => Number(a) - Number(b)).forEach(mid => {
+    const m = r.members[mid];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${mid}</td><td>${fmtNum(m.Fx_i, 'force', 5)}</td><td>${fmtNum(m.Fy_i, 'force', 5)}</td>`
+      + `<td>${fmtNum(m.M_i, 'moment', 5)}</td><td>${fmtNum(m.Fx_j, 'force', 5)}</td>`
+      + `<td>${fmtNum(m.Fy_j, 'force', 5)}</td><td>${fmtNum(m.M_j, 'moment', 5)}</td>`;
+    mtb.appendChild(tr);
+  });
+}
+
+function drawRsaCurve() {
+  if (!rsaResult) { drawNeedSolveMsg(); return; }
+  const r = rsaResult, au = unitOf('accel');
+  const xs = r.curve.T, ys = r.curve.Sa.map(v => fromSI('accel', v));
+  const dots = r.modes.map(m => ({x: m.period, y: fromSI('accel', m.sa), tip: `模態${m.index}: T=${m.period.toFixed(4)}s`}));
+  drawXYChart(20, 20, VB_W - 40, 820, xs, ys, {
+    cls: 'rsaCurveLine', dots, mL: 96, mB: 64,
+    title: `反應譜曲線(${r.direction === 'x' ? '水平' : '垂直'}向; 紅點 = 模態落點)`,
+    xTitle: '週期 T (s)', yTitle: `S_a (${au})`, tickFont: 20, axisFont: 20, titleFont: 20, dotR: 6});
+}
+
+async function runRsaAnalysis() {
+  const body = buildRsaPayload();
+  if (!body) return;
+  setStatus('反應譜分析中...');
+  try {
+    const res = await fetch('/rsa', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    if (!res.ok) { setStatus('反應譜分析失敗: ' + await apiErrorMessage(res)); return; }
+    rsaResult = await res.json();
+    document.getElementById('btnViewRsa').style.display = '';
+    const bar = document.getElementById('viewBar');
+    if (!bar.classList.contains('open')) {
+      bar.classList.add('open');
+      document.getElementById('btnTogglePostProcess').textContent = '▾ 後處理';
+    }
+    document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btnViewRsa').classList.add('active');
+    viewMode = 'rsa';
+    document.getElementById('playbackBar').style.display = 'none';
+    document.getElementById('combinedConfigBar').style.display = 'none';
+    renderRsaPanel();
+    setStatus(`反應譜分析完成: ${rsaResult.n_modes} 個模態, 基底剪力 ${fmtNum(rsaResult.base_shear, 'force', 5)} ${unitOf('force')}, `
+      + `累積質量比(總) ${fmtPct(rsaResult.cum_ratio_total)}`);
+    render();
+  } catch (e) { setStatus('連線失敗: ' + e.message); }
+}
+
 async function runCyclicAnalysis() {
   const body = buildCyclicPayload();
   if (!body) return;
@@ -5008,6 +5233,7 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
   const analysisType = document.getElementById('analysisType').value;
   if (analysisType === 'modal') { await runModalAnalysis(); return; }
   if (analysisType === 'cyclic') { await runCyclicAnalysis(); return; }
+  if (analysisType === 'rsa') { await runRsaAnalysis(); return; }
   const isPushover = analysisType === 'pushover';
 
   let body;

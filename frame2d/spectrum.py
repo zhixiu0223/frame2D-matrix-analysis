@@ -220,3 +220,152 @@ def response_spectrum(modal: Modal, spectrum, direction: str = 'x', damping: flo
         base_shear=base_shear_c, modal_displacements=modal_disp, modal_member_forces=modal_forces,
         modal_reactions=modal_reactions, modal_base_shear=modal_base_shear,
         cum_ratio_total=float(modal.cum_ratio_total[direction][nm - 1]), frame=frame)
+
+
+# ============================================================================
+# 網頁 /rsa 端點用的一站式入口與反應譜 adapter (動力分析 D3b)
+# ============================================================================
+
+G_STANDARD = 9.80665     # 標準重力加速度(跟 mass.py 動力單位表的 'g' 用同一個值), 規範譜的
+                          # SDS/SD1/係數都是「g 的倍數」這種無單位係數, 乘上這個常數才是 Sa(m/s²)
+
+
+def taiwan_code_spectrum(SDS: float, SD1: float, TL: float = 6.0):
+    """簡化的設計水平加速度反應譜 S_aD(T)(單位: 跟模型一致的加速度單位, 通常是 m/s²), 依「建築物
+    耐震設計規範及解說」等值靜力法常見的四段式形狀:
+        T <= 0.2·T0:  (0.4 + 0.6·T/(0.2·T0))·SDS·g   (短週期上升段)
+        0.2·T0 < T <= T0:  SDS·g                        (平台段)
+        T0 < T <= TL:  SD1·g/T                           (中長週期下降段, ∝1/T)
+        T > TL:  SD1·TL·g/T²                             (長週期段, ∝1/T², 只在 T>TL 才出現)
+    T0 = SD1/SDS(平台段下界)。
+
+    **這是簡化的標準形狀, 不是「建築物耐震設計規範及解說」的精確工址查表版本** —— 真正的
+    SDS、SD1 要依工址位置、地盤分類查表(或用等值靜力法算)才能得到, 這裡只負責把使用者已經
+    算好/查到的 SDS、SD1、TL 代入標準形狀公式, 不做查表。exam ples/response_spectrum_portal_demo.py
+    有同一個公式的獨立版本(給不想透過網頁的人直接在 Python 用); 想要精確查表版本, 接
+    taiwan-seismic-code-calc 那類專門算法規的工具, 把它的輸出包成一個 callable 餵給
+    `response_spectrum()`(不必用這個函式)。
+
+    SDS, SD1: 無單位的係數(g 的倍數), 必須 > 0。TL: 長週期轉角週期(s), 必須 > 0。
+    """
+    if not (SDS > 0 and np.isfinite(SDS)):
+        raise ValueError(f"SDS必須是正數, 收到{SDS}")
+    if not (SD1 > 0 and np.isfinite(SD1)):
+        raise ValueError(f"SD1必須是正數, 收到{SD1}")
+    if not (TL > 0 and np.isfinite(TL)):
+        raise ValueError(f"TL必須是正數, 收到{TL}")
+    T0 = SD1 / SDS
+
+    def spectrum(T):
+        if T <= 0.2 * T0:
+            return (0.4 + 0.6 * T / (0.2 * T0)) * SDS * G_STANDARD
+        if T <= T0:
+            return SDS * G_STANDARD
+        if T <= TL:
+            return SD1 * G_STANDARD / T
+        return SD1 * TL * G_STANDARD / T**2
+    return spectrum
+
+
+def custom_spectrum(points):
+    """由一組 (T, S_a) 資料點做分段線性內插的反應譜 callable。points: [(T0,Sa0), (T1,Sa1), ...],
+    T 嚴格遞增、至少 2 點、T>0、Sa>=0。範圍外(T < T0 或 T > 最後一點)夾在邊界值(不外插),
+    避免使用者沒填到的週期範圍得到荒謬的推算值。"""
+    pts = sorted((float(t), float(a)) for t, a in points)
+    if len(pts) < 2:
+        raise ValueError(f"自訂反應譜至少需要 2 個資料點, 收到 {len(pts)} 個")
+    Ts = np.array([p[0] for p in pts])
+    Sas = np.array([p[1] for p in pts])
+    if np.any(Ts <= 0):
+        raise ValueError("自訂反應譜的週期 T 必須都是正數")
+    if np.any(np.diff(Ts) <= 0):
+        raise ValueError("自訂反應譜的週期 T 必須嚴格遞增(不能有重複或反向的點)")
+    if np.any(Sas < 0) or np.any(~np.isfinite(Sas)):
+        raise ValueError("自訂反應譜的 S_a 必須都是不小於 0 的有限數字")
+
+    def spectrum(T):
+        return float(np.interp(T, Ts, Sas))         # np.interp 本身就會夾在邊界值, 符合上面說明
+    return spectrum
+
+
+@dataclass
+class RSAWebResult:
+    """spectrum_analysis() 的回傳值: 反應譜分析結果 + 給網頁畫反應譜曲線用的取樣點。"""
+    rsa: RSAResult
+    modal: Modal
+    curve_T: np.ndarray
+    curve_Sa: np.ndarray
+
+
+def spectrum_analysis(frame, direction='x', damping=0.05, combine='SRSS', n_modes=None,
+                      mass_kind='lumped', spectrum_type='code', code_sds=None, code_sd1=None,
+                      code_tl=6.0, custom_points=None, n_curve=300) -> RSAWebResult:
+    """網頁 /rsa 端點用的一站式入口(兩個後端共用): 建反應譜 callable、做模態分析、做反應譜分析、
+    取樣反應譜曲線(給前端畫圖, 不用在 JS 重新實作反應譜公式)。錯誤一律是有清楚訊息的 ValueError
+    (模型相關的錯誤, 例如沒有支承/沒有質量/機構, 直接沿用 `modal.eigen()` 的訊息)。
+
+    spectrum_type: 'code'(用 `taiwan_code_spectrum(code_sds, code_sd1, code_tl)`)或
+        'custom'(用 `custom_spectrum(custom_points)`)。
+    n_modes: 模態分析要算幾個模態(也就是反應譜疊加用到的模態數); None = 全部(動力DOF數)。
+    """
+    if spectrum_type == 'code':
+        if code_sds is None or code_sd1 is None:
+            raise ValueError("spectrum_type='code' 需要指定 code_sds 與 code_sd1")
+        spectrum = taiwan_code_spectrum(code_sds, code_sd1, code_tl if code_tl is not None else 6.0)
+    elif spectrum_type == 'custom':
+        if not custom_points:
+            raise ValueError("spectrum_type='custom' 需要指定 custom_points(至少2個(T, Sa)點)")
+        spectrum = custom_spectrum(custom_points)
+    else:
+        raise ValueError(f"spectrum_type必須是'code'或'custom', 收到'{spectrum_type}'")
+
+    from .modal import eigen
+    md = eigen(frame, n_modes=n_modes, mass=mass_kind)
+    res = response_spectrum(md, spectrum, direction=direction, damping=damping, combine=combine)
+
+    t_hi = max(3.0 * md.period[0], code_tl if spectrum_type == 'code' and code_tl else 0.0)
+    if spectrum_type == 'custom':
+        t_hi = max(t_hi, max(p[0] for p in custom_points))
+    t_hi = max(t_hi, 2.0)
+    curve_T = np.linspace(max(t_hi / n_curve, 1e-4), t_hi, n_curve)
+    curve_Sa = np.array([spectrum(T) for T in curve_T])
+
+    return RSAWebResult(rsa=res, modal=md, curve_T=curve_T, curve_Sa=curve_Sa)
+
+
+def _finite(x):
+    x = float(x)
+    return x if np.isfinite(x) else None
+
+
+def rsa_to_dict(pkg: RSAWebResult) -> dict:
+    """把 spectrum_analysis() 的結果轉成可直接 json.dumps 的 dict。單位跟輸入一致(網頁後端
+    固定 SI): 位移 m、力 N、彎矩 N·m、加速度 m/s²、週期 s、頻率 Hz。"""
+    res, md = pkg.rsa, pkg.modal
+    frame = md.frame
+    modes = []
+    for i in range(md.n_modes):
+        modes.append({
+            'index': i + 1, 'period': _finite(res.periods[i]), 'frequency': _finite(1.0 / res.periods[i]),
+            'sa': _finite(res.sa[i]), 'gamma': _finite(md.gamma[res.direction][i]),
+            'eff_ratio': _finite(md.eff_mass[res.direction][i] / md.mass_free[res.direction])
+                        if md.mass_free[res.direction] > 0 else None,
+            'cum_ratio_total': _finite(md.cum_ratio_total[res.direction][i])
+                              if md.mass_total[res.direction] > 0 else None,
+            'modal_base_shear': _finite(res.modal_base_shear[i]),
+        })
+    nodes = {}
+    for nid in frame.nodes:
+        ux, uy, rot = frame.dofs_of(nid)
+        nodes[str(nid)] = {'ux': _finite(res.displacements[ux]), 'uy': _finite(res.displacements[uy]),
+                           'rot': _finite(res.displacements[rot])}
+    members = {}
+    for mid, v in res.member_forces.items():
+        members[str(mid)] = {'Fx_i': _finite(v[0]), 'Fy_i': _finite(v[1]), 'M_i': _finite(v[2]),
+                             'Fx_j': _finite(v[3]), 'Fy_j': _finite(v[4]), 'M_j': _finite(v[5])}
+    return {
+        'analysis_type': 'rsa', 'direction': res.direction, 'combine': res.combine, 'damping': res.damping,
+        'mass_kind': md.kind, 'n_modes': md.n_modes, 'base_shear': _finite(res.base_shear),
+        'cum_ratio_total': _finite(res.cum_ratio_total), 'modes': modes, 'nodes': nodes, 'members': members,
+        'curve': {'T': [float(v) for v in pkg.curve_T], 'Sa': [float(v) for v in pkg.curve_Sa]},
+    }

@@ -245,6 +245,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D2 | 特徵值/模態分析 + 模態性質 | `modal.py` | ✅ |
 | D2b | 網頁: 節點質量輸入、模態分析端點、結果表與振型顯示 | webapi | ✅ |
 | D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ✅ |
+| D3b | 網頁: 「反應譜」分析、規範/自訂反應譜、反應譜曲線圖、模態/位移/桿件內力結果表 | webapi | ✅ |
 | D4 | 線性時程 (Newmark) + 諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ⬜ |
 | D5 | Rayleigh 阻尼 + 地面加速度輸入 | `damping.py` | ⬜ |
 | D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
@@ -418,6 +419,47 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   限制(參與係數定義跟 OpenSees `modalProperties` 不完全一致), 這裡的比對用集中質量
 - 限制(誠實): `spectrum` 是純量函式(單一方向、單一譜), 沒有多方向組合(例如 30% 法則)、
   沒有考慮扭轉耦合以外的三維效應(本來就是 2D 框架); CQC 的阻尼比是全模態同一個純量
+
+#### D3b 網頁反應譜分析 ✅ 已完成
+
+- **使用方式**: 斷面填密度 ρ、節點填質量(跟模態分析一樣)→ 上方「分析」選「**反應譜**」→ 設定
+  方向、組合方法(SRSS/CQC)、阻尼比、模態數(留空=全部)、質量矩陣 → 選反應譜來源:
+  「規範(簡化)」填 S<sub>DS</sub>/S<sub>D1</sub>/T<sub>L</sub>(四段式標準形狀, **不是**精確
+  工址查表版本), 或「自訂」用可增減列的週期-S<sub>a</sub> 表格(分段線性內插, 順序不拘會自動
+  排序)→ Solve。結果: 反應譜曲線圖(紅點標模態落點)+ 結果面板(每模態的 T/f/S<sub>a</sub>/Γ/
+  質量比/累積(總)/模態基底剪力、節點位移、桿件端點內力), 單位跟「單位設定」一致
+- 核心新增(`frame2d/spectrum.py`): `taiwan_code_spectrum(SDS, SD1, TL)`(簡化四段式形狀,
+  明確標注不是精確查表版)、`custom_spectrum(points)`(分段線性內插, 自動排序, 範圍外夾在端點
+  值不外插)、`spectrum_analysis()`(網頁一站式入口: 建反應譜 callable → eigen() → 
+  response_spectrum() → 取樣反應譜曲線給前端畫圖, 不用在 JS 重新實作反應譜公式)、
+  `rsa_to_dict()`(JSON)
+- 後端: FastAPI 與 stdlib 各一個 `POST /rsa`(`FrameIn` 新增 rsa_direction / rsa_damping /
+  rsa_combine / rsa_n_modes / rsa_mass_kind / rsa_spectrum_type / rsa_code_sds / rsa_code_sd1 /
+  rsa_code_tl / rsa_custom_points); 錯誤都是清楚的 400(缺 SDS/SD1、缺自訂點、沒有支承等, 後者
+  直接沿用 `eigen()` 的訊息)
+- 驗證:
+  - `tests/test_spectrum_web.py`: `taiwan_code_spectrum` 四段式形狀(三個轉角週期連續、平台段
+    恆等 S<sub>DS</sub>·g、長週期段 ∝1/T²)、`custom_spectrum` 對 `np.interp` 逐點比對與邊界外
+    夾住(不外插)、`spectrum_analysis`+`rsa_to_dict` 跟直接呼叫 `eigen()+response_spectrum()`
+    逐項相同、curve 取樣範圍涵蓋 T<sub>L</sub> 與模態週期、明確拒絕。突變檢查 4 個全部被抓到
+  - `tests/test_web_rsa_api.py`: stdlib 後端對核心逐項相同(規範與自訂反應譜都測); FastAPI 與
+    stdlib 回傳完全相同; 各種錯誤訊息
+  - `tests/test_web_rsa_e2e.py`(選用, 需要 node + jsdom): 走「匯入JSON」載入
+    `examples/portal_rsa_demo.json` → 選「反應譜」→ 輸入驗證(負 SDS、阻尼比超出範圍)→ Solve →
+    網頁結果與核心逐項一致(含每個模態的參與係數 Γ)→ 曲線圖(300 點取樣、無 NaN)→ 結果表(**檢查
+    渲染出來的表格文字, 不是只比對底層 JS 資料物件**——見下面的踩坑記錄)→ 單位切換 → 自訂反應譜
+    的新增/編輯/刪除(含最少 2 點的前端即時檢查, 不用等後端回應)→ 拿掉支承得到清楚的機構訊息且
+    不破壞舊結果 → 重置。突變檢查 4/4 被抓到
+  - **踩坑記錄**: 第一版的 e2e 測試只比對 `rsaResult`(前端存的 JSON 資料)有沒有跟核心一致,
+    沒有檢查表格實際渲染出來的文字。結果一個「Γ 欄位畫錯成模態編號」的突變沒被抓到——因為
+    底層資料物件本身沒錯, 只有渲染那一步把欄位對錯了。加上「比對渲染出來的 `<td>` 文字」之後
+    才抓到。這件事本身也提醒: 純粹比對資料物件不能取代檢查畫面上實際顯示的內容
+  - 另外一次修測試檔時因為文字替換操作沒對齊, 把整個 `rsa_e2e.js` 意外清空成 0 bytes, 靠重新
+    整份寫入救回來——這是純粹的工具操作失誤, 不是程式邏輯問題, 但記錄下來提醒自己以後改大檔案
+    優先用鎖定唯一片段的小範圍替換, 而不是整段回填
+- **限制(誠實)**: jsdom 不是真的瀏覽器, 手機上的外觀請實際確認; 反應譜曲線的橫軸目前是均勻
+  線性取樣(不是對數), 密集短週期段可能不夠平滑; 沒有 PDF 匯出; `taiwan_code_spectrum` 只是
+  標準形狀, 精確查表要接 taiwan-seismic-code-calc 那類工具
 
 #### D4 線性時程
 

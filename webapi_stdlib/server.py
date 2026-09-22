@@ -25,6 +25,7 @@ from frame2d.newton import run_pushover_newton, run_pushover_corotational_onesho
 from frame2d.postprocess import member_internal_forces
 from frame2d.modal import eigen, modal_to_dict
 from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
+from frame2d.spectrum import spectrum_analysis, rsa_to_dict
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
@@ -345,6 +346,21 @@ def _modal_payload(payload: dict) -> dict:
     return modal_to_dict(md)
 
 
+def _rsa_payload(payload: dict) -> dict:
+    """反應譜分析(frame2d.spectrum), 跟 webapi/main.py 的 /rsa 端點同一個行為。"""
+    f = _build_frame(payload)
+    try:
+        pkg = spectrum_analysis(
+            f, direction=payload.get("rsa_direction", "x"), damping=payload.get("rsa_damping", 0.05),
+            combine=payload.get("rsa_combine", "SRSS"), n_modes=payload.get("rsa_n_modes"),
+            mass_kind=payload.get("rsa_mass_kind", "lumped"), spectrum_type=payload.get("rsa_spectrum_type", "code"),
+            code_sds=payload.get("rsa_code_sds"), code_sd1=payload.get("rsa_code_sd1"),
+            code_tl=payload.get("rsa_code_tl", 6.0), custom_points=payload.get("rsa_custom_points"))
+    except KeyError as e:
+        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    return rsa_to_dict(pkg)
+
+
 def _cyclic_payload(payload: dict) -> dict:
     """反覆載重(遲滯)分析(frame2d.cyclic), 跟 webapi/main.py 的 /cyclic 端點同一個行為。
     錯誤(缺欄位、沒有塑鉸容量、預載超過Mp、步數過多等)都是有清楚訊息的例外, do_POST 轉成 400。"""
@@ -474,6 +490,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json_body()
                 self._send_json(_solve_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/rsa":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_rsa_payload(payload))
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return
