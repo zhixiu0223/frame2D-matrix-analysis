@@ -208,3 +208,5 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_spectrum_web.py` | 網頁反應譜核心: taiwan_code_spectrum形狀、custom_spectrum內插、spectrum_analysis與rsa_to_dict跟核心邏輯逐項一致(動力 D3b) |
 | `test_web_rsa_api.py` | 網頁後端 `/rsa`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、各種錯誤訊息 |
 | `test_web_rsa_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「反應譜」→Solve→曲線圖/結果表(含渲染文字檢查)→單位切換→自訂反應譜→錯誤訊息 |
+| `test_newmark.py` | 線性時程(Newmark): SDOF解析解(自由振動/阻尼/諧和/階躍)、Δt收斂階數O(Δt²)、獨立Duhamel積分交叉驗證、無質量DOF回填殘差(動力 D4) |
+| `test_newmark_vs_openseespy.py` | 線性時程 vs OpenSeesPy(選用, 只比無阻尼從靜止受力): SDOF/MDOF諧和力到機器精度 |

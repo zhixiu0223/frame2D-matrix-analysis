@@ -246,7 +246,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D2b | 網頁: 節點質量輸入、模態分析端點、結果表與振型顯示 | webapi | ✅ |
 | D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ✅ |
 | D3b | 網頁: 「反應譜」分析、規範/自訂反應譜、反應譜曲線圖、模態/位移/桿件內力結果表 | webapi | ✅ |
-| D4 | 線性時程 (Newmark) + 諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ⬜ |
+| D4 | 線性時程(Newmark)+諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ✅ |
 | D5 | Rayleigh 阻尼 + 地面加速度輸入 | `damping.py` | ⬜ |
 | D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
 | D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
@@ -461,15 +461,47 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   線性取樣(不是對數), 密集短週期段可能不夠平滑; 沒有 PDF 匯出; `taiwan_code_spectrum` 只是
   標準形狀, 精確查表要接 taiwan-seismic-code-calc 那類工具
 
-#### D4 線性時程
+#### D4 線性時程(Newmark)✅ 已完成
 
-- Newmark-β, 預設平均加速度法 (β=1/4, γ=1/2, 無條件穩定、無數值阻尼),
-  有效勁度 `K̂ = K + γ/(βΔt) C + 1/(βΔt²) M`
-- 輸入: 諧和力、脈衝/階躍、任意時間序列力
-- 驗證: 單自由度自由振動(阻尼頻率、對數衰減率)、諧和穩態振幅對照動力放大係數
-  `1/√((1−r²)² + (2ζr)²)`、無阻尼階躍載重峰值為靜位移的 2 倍
-- 內部交叉驗證: 同一模型「Newmark 直接積分」對照「D2 模態疊加」
-- Δt 收斂測試, 記錄週期伸長誤差隨 `Δt/T` 的變化
+- 新增 `frame2d/newmark.py`: `newmark_integrate(frame, dt, n_steps, force=None, mass_kind='lumped',
+  damping_matrix=None, initial_disp=None, initial_vel=None, beta=0.25, gamma=0.5)` -> `NewmarkResult`
+  (`t/u/v/a` 時間序列、`dof_history()`、`member_force_history()`)。預設平均加速度法
+  (無條件穩定、無數值阻尼)
+- 新增 `frame2d/excitation.py`: `point_force_vector()`(建空間力型態)、`harmonic/step/pulse/ramp`
+  (純量時間函式)、`force_series_from_pattern()`(組成 `F(t)=p·f(t)` 給 `newmark_integrate` 用)
+- **無質量自由度一定要先靜力凝縮**(跟 `modal.eigen()` 同一個公式 `K_eff=K_dd-K_dm K_mm⁻¹K_md`),
+  Newmark 只在有質量的自由度上跑, 跑完用同一組線性關係回填無質量DOF的 u/v/a。**這是修正過的
+  設計**: 最早的版本沒有凝縮, 直接把完整系統丟進 Newmark 遞迴——K_hat 的 solve 本身沒問題, 但
+  使用者給的非零初始位移如果在無質量DOF(例如集中質量下的轉角)上不是靜力平衡一致的, 從第一步
+  就會錯; 在頂端質量懸臂柱的自由振動測試量到「誤差比訊號本身還大 6 倍」才抓到。詳見
+  `newmark.py` 模組開頭的完整說明
+- 目前限制(刻意, 見模組說明): 不支援力直接施加在無質量DOF上; 阻尼矩陣在無質量DOF上必須整列
+  整行是0(D5 的 Rayleigh 阻尼要建立在凝縮後的 K_eff 上, 不是原始 K, 才不會遇到 DAE 複雜度)
+- 驗證(`tests/test_newmark.py`, 只依賴 numpy):
+  - SDOF自由振動(無阻尼)解析解, Δt 減半時誤差比值 3.94~4.00(平均加速度法的 O(Δt²) 收斂階數)
+  - SDOF自由振動(有阻尼)解析解(誤差/振幅 3e-3), 對數遞減率反推 ζ=0.03999(給定0.04)
+  - SDOF諧和強迫振動穩態振幅對動力放大係數解析公式(相對差 3.3e-5)、相位對解析公式
+  - SDOF無阻尼階躍載重: 峰值=2倍靜位移(相對差2e-3)、峰值時刻=半週期(相對差1e-2)
+  - 兩質量懸臂對脈衝載重: 對獨立 Duhamel 積分(數值求積, 不呼叫 frame2d 任何模組)——第一版
+    參考解算錯了(誤用地震參與係數公式 ΓᵢᵀM 而不是點力該用的 φᵢᵀp, 差了整整2倍, 用「單位點力
+    靜位移」反推才抓到, 過程記在測試檔裡), 修正後相對峰值誤差5e-3
+  - 無質量DOF回填的獨立靜力平衡殘差檢查(K@u(t)在無質量DOF上應精確為0), 相對殘差6.3e-14
+  - 突變檢查 6 個(Δa公式加回錯誤係數、Δv係數搞錯、凝縮符號錯、有效力漏阻尼項、無質量DOF回填
+    符號錯、Khat漏質量項), 全部被抓到
+- **對 OpenSeesPy 交叉驗證**(`tests/test_newmark_vs_openseespy.py`, 選用, 沒裝就 SKIPPED):
+  SDOF 與 6元素懸臂梁(MDOF)在「從靜止開始、無阻尼、諧和力」情境下跟 OpenSeesPy 的 Newmark
+  遞迴一致到機器精度(SDOF 3e-13、MDOF 1e-11)。**範圍限制**(過程中踩到、記錄在測試檔開頭):
+  (1) 非零初始位移的自由振動不比——`ops.setNodeDisp(...,'-commit')` 設非零初始位移時, OpenSees
+  不會反解一個平衡一致的初始加速度 a0, 就是留在0(用 `ops.nodeAccel()` 直接驗證過), 這跟
+  frame2d 的作法(一定解 Ma0=F0-Cv0-Ku0)不同, 不是 frame2d 的 bug; (2) 有阻尼的情況不比——
+  兜了一個 zeroLength+Viscous 材料的等效阻尼元素, 結果跟 frame2d 差了 30% 量級, 沒能追出原因,
+  改用 test_newmark.py 的解析解驗證阻尼部分; (3) 步階載重不比——`Constant` timeSeries 加步階力
+  一開始差 0.5%(Δt減半只降到0.1%, 收斂速率只有O(Δt)), 換成諧和力(`Trig` timeSeries)後立刻對到
+  機器精度, 判斷是 OpenSees 對「力在t=0是否已完全作用」的慣例跟 frame2d 不同, 沒有追出 OpenSees
+  端確切的機制, 改用 test_newmark.py 層4 的解析解(峰值=2倍靜位移)驗證
+- 範例 `examples/newmark_portal_demo.py`: 門型鋼架分別受接近共振的諧和力(看到無阻尼的典型
+  「拍音(beating)」振幅包絡)與矩形脈衝力(脈衝結束後在自然週期做無阻尼自由振動), 存位移
+  時間歷程圖
 
 #### D5 阻尼與地震輸入
 
