@@ -53,8 +53,13 @@
   ground_motion_force(frame, direction, ag)`(等效地震力)、`absolute_acceleration()`(重建
   絕對加速度)。對 OpenSeesPy 驗證過(SDOF, 到機器精度); MDOF 用獨立模態投影驗證。範例:
   `PYTHONPATH=. python examples/damping_ground_motion_portal_demo.py`
-- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、非線性時程(遲滯塑鉸目前只接到準靜態
-  反覆載重, 還沒接到 Newmark)
+- **非線性時程分析**: `frame2d.nonlinear_newmark.nonlinear_newmark_integrate(frame,
+  hinge_states, dt, n_steps, force=..., damping_matrix=...)`, 把 D7 的循環塑鉸接上 Newmark
+  積分(event-to-event, 對分段線性系統是精確解, 不是Newton-Raphson近似)。對 OpenSeesPy 驗證
+  過(SDOF, 到機器精度); MDOF 用能量平衡與 D7 `run_pushover` 比對驗證。範例:
+  `PYTHONPATH=. python examples/nonlinear_seismic_portal_demo.py`
+- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、P-Delta/corotational 幾何非線性下的
+  時程分析(D6 是小位移)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -76,6 +81,8 @@ frame2d/
   excitation.py    — 外力時間歷程小工具: 空間力型態 × 時間函式(諧和/階躍/脈衝/斜坡); 
                      ground_motion_force()/absolute_acceleration(): 地震輸入
   damping.py       — rayleigh_damping_matrix(): Rayleigh阻尼(建立在凝縮後的K_eff上)
+  nonlinear_newmark.py — nonlinear_newmark_integrate(): 非線性時程(Newmark+D7循環塑鉸,
+                     event-to-event, 不對無質量DOF凝縮, 動態擾動一律從靜止開始)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

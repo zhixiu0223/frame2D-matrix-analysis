@@ -64,6 +64,7 @@ pushover 的線性 P-Delta 求解函式(`solve_pdelta()`),目前**還沒**
 | `response_spectrum()` | frame2d/spectrum.py | 彈性 | 線性(小位移) | 模態疊加 + SRSS/CQC 組合 | **驗證過**: SDOF解析解、獨立柔度矩陣參考、反力恆等式、獨立K解、CQC對手算數值、對OpenSeesPy單一模態到機器精度。多模態SRSS/CQC組合對OpenSeesPy的比對受限(API語法不明確) |
 | `newmark_integrate()` | frame2d/newmark.py | 彈性 | 線性(小位移) | Newmark-β直接積分(平均加速度法預設), 無質量DOF靜力凝縮 | **驗證過**: SDOF/MDOF解析解(自由振動、阻尼、諧和、階躍)、獨立Duhamel積分、無質量DOF回填殘差、對OpenSeesPy(無阻尼從靜止受力)到機器精度 |
 | `rayleigh_damping_matrix()` | frame2d/damping.py | 彈性 | 線性 | Rayleigh阻尼C=αM+βK_eff(建立在凝縮後系統上) | **驗證過**: 解析係數反解、SDOF代數恆等式、MDOF模態投影(6模態逐一比對)、對OpenSeesPy(SDOF)到機器精度; MDOF跟OpenSees內建rayleigh()有預期中的方法論差異(50%, 因為OpenSees不做凝縮), 已記錄 |
+| `nonlinear_newmark_integrate()` | frame2d/nonlinear_newmark.py | 塑鉸(雙線性運動硬化) | 線性(小位移) | Newmark-β + event-to-event(力控制, 精確解不是Newton疊代) | **驗證過**: 彈性極限對線性Newmark、能量平衡、對D7 run_pushover(第一個降伏事件)、對OpenSeesPy(SDOF)到機器精度; MDOF對OpenSeesPy未完全對上(已記錄), 改用能量平衡+run_pushover撐住 |
 
 ## 已經做到的「分層」證據(不是理想化的說法, 有程式碼可以查)
 

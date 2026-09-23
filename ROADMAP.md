@@ -248,7 +248,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D3b | 網頁: 「反應譜」分析、規範/自訂反應譜、反應譜曲線圖、模態/位移/桿件內力結果表 | webapi | ✅ |
 | D4 | 線性時程(Newmark)+諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ✅ |
 | D5 | Rayleigh阻尼 + 地面加速度輸入 | `damping.py`, `excitation.py`(擴充) | ✅ |
-| D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
+| D6 | 非線性時程(Newmark + 循環塑鉸, event-to-event) | `nonlinear_newmark.py` | ✅ |
 | D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
 | D7b | 網頁: 「循環」分析、遲滯迴圈圖、塑鉸 M-θp 圖、每級耗能與等效阻尼比 | webapi | ✅ |
 | D8 | 非線性地震時程 + 能量平衡 | — | ⬜ |
@@ -546,15 +546,59 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   控制頻率)+ 虛構的衰減正弦波地震脈衝(**不是真實地震紀錄**, 只是示範), 印各模態實際阻尼比、
   存地面輸入/屋頂相對位移/屋頂絕對加速度三張時間歷程圖
 
-#### D6 非線性時程框架
+#### D6 非線性時程(Newmark + 循環塑鉸)✅ 已完成
 
-- Newmark + Newton-Raphson, 殘餘力
-  `R = P_eff − M a − C v − f_int(u)`, 切線勁度 `K̂_T`
-- 狀態機制: trial / commit, 迭代不收斂時能還原; 重力預載重用 `newton.py` 既有作法
-- **第一版材料為彈性**, 只開 corotational 幾何非線性, 用來把時間迴圈本身驗證乾淨
-- 驗證: 小振幅時必須重現 D4 線性結果(振幅趨近 0 時相對誤差趨近 0); 大振幅懸臂
-  自由振動的週期伸長對照 OpenSeesPy corotational
-- 不收斂時如實回報(沿用 pushover 一貫作法), 可選擇性支援時間步長細分
+- **規劃更正**: 原本寫「先用彈性corotational把時間迴圈本身驗證乾淨」。實際做的時候發現不需要
+  這個過渡階段: D7 的雙線性運動硬化塑鉸(`CyclicHingeState`)已經用解析解跟 OpenSeesPy 驗證到
+  機器精度, 而且 event-to-event 對分段線性系統是**精確解**, 不需要 Newton-Raphson 收斂——
+  直接把它接上 Newmark 比另外做一個「先驗證迴圈本身」的過渡階段更省工、風險更低, 也是這次
+  真正做的事: 把 D5 的 Newmark 遞迴改成「力控制」, 每個時間步都是一次 event-to-event 增量分析
+  (D7 的 `run_cyclic()` 是位移控制; Newmark 每步的有效力增量是已知的, 反過來是力控制, 結構上
+  更簡單), 最大化重用 D7 的元件(`_assemble_stiffness_with_hinges`、`_member_force_increments`、
+  `_yield_events`、`_spring_rotation_increment`), 新增的部分只有「怎麼跟 Newmark 時間積分接
+  起來」
+- 新增 `frame2d/nonlinear_newmark.py`: `nonlinear_newmark_integrate(frame, hinge_states, dt,
+  n_steps, force=None, mass_kind='lumped', damping_matrix=None, initial_cum_forces=None,
+  beta=0.25, gamma=0.5)` -> `NonlinearNewmarkResult`(`t/u/v/a`、`hinge_M`/`hinge_theta_p`/
+  `hinge_work`、`member_force_history`(直接從逐步累積的內力記錄, 對降伏後的桿件也正確,
+  跟線性引擎不同不能用 k_local@u 反推)、`events`)
+- **一個關鍵簡化(跟D4/D5不同)**: 不對無質量DOF做靜力凝縮——為了避免塑鉸狀態改變時必須
+  重新凝縮的複雜度, 直接在完整系統上解, 但這要求動態擾動一律從 u=v=a=0 開始(相對於用
+  `initial_cum_forces` 代入的重力預載狀態, 跟 D7 同一個用法), 不接受非零初始位移/速度
+  (D4 已經踩過這個坑, 這裡乾脆不開放這個選項)
+- 驗證(`tests/test_nonlinear_newmark.py`, 只依賴 numpy):
+  - **彈性極限**(SDOF, Mp=∞永不降伏): 對照一個獨立手刻的線性 Newmark 迴圈, 用**同一份**塑鉸
+    基礎的近剛接勁度矩陣(不是標準樑元素——兩者本來就不會完全相同, hinge.py 的「未降伏」彈簧用
+    RIGID_FACTOR·EI/L=1e8·EI/L 這個很大但有限的數字近似剛接, 不是真的無限剛。第一次比對用了
+    錯誤的參照物件, 誤差 1.4e-7 一度以為是bug, 換成同一份近似基準後對到 1.9e-13)
+  - **能量平衡**(SDOF, 有阻尼、會降伏): 外力作功 = 動能 + 阻尼耗能 + 桿件內力作功(用桿件局部
+    節點力對局部節點位移做功算, 這個定義同時涵蓋彈性儲能與塑性耗能, 不需要另外拆開算, 對任何
+    非線性材料模型都成立), 殘差 4.4e-13
+  - **單調(準靜態等效)載重下的第一個降伏事件**跟 D7 `run_pushover`(同一個 6 塑鉸門型剛架)
+    一致: 位移相對差 5e-5, 力相對差 5e-4。原本想比對整條非線性路徑的最終狀態, 但對「多慢才算
+    夠慢」很敏感(降伏後結構軟化, 有效週期變長, 斜坡相對「原始彈性週期」很慢, 仍可能在降伏後
+    的路徑上有動態超越/暫時卸載, 最終停留狀態對不上), 改成只比對「第一個降伏事件」(這一段
+    路徑上結構還是線性彈性, 單一明確的自然週期, 斜坡夠慢就不會有這個問題, 穩健得多)
+  - 突變檢查 6 個(Δa公式、remaining更新比例、θp累積少取絕對值、卸載偵測符號、Khat漏阻尼項、
+    member_force_history沒有累積), 全部被抓到; 其中「θp累積少取絕對值」一開始沒被其他層
+    抓到(累積淨值仍然對, 只有「絕對值總量」錯), 額外加了一個反覆降伏案例的 θp(絕對值)對
+    θp_signed(帶號淨值)比較(有反覆降伏時前者應該明顯更大)才抓到
+- **對 OpenSeesPy 交叉驗證**(`tests/test_nonlinear_newmark_vs_openseespy.py`, 選用, 沒裝就
+  SKIPPED): SDOF(單一塑鉸懸臂柱, 含降伏與卸載)對到機器精度(7.6e-13)。**範圍限制**: MDOF
+  (6塑鉸門型剛架)沒有完全對上——純彈性階段抓到並修正了一個真實問題(OpenSees模型裡內部
+  duplicate節點的平移約束設錯: 對支承節點的dup可以直接固定, 但對一般節點的dup只能靠
+  equalDOF跟隨、不能額外固定, 修正後彈性階段對到1e-8), 但降伏後仍有成長中的偏差, 沒有找到
+  根本原因就沒有繼續追。**這不代表 frame2d 的 MDOF 結果是錯的**——MDOF 規模已經有另外兩種
+  跟 OpenSeesPy 無關的獨立驗證撐著(上面提到的能量平衡與 run_pushover 比對), 只是沒有再加上
+  OpenSeesPy 這第三種
+- 範例 `examples/nonlinear_seismic_portal_demo.py`: 門型鋼架(塑鉸容量刻意設得比彈性需求低)
+  受一段虛構的衰減正弦波地震脈衝, 同一個模型分別跑 D5(彈性)跟 D6(非線性)對照, 印尖峰位移、
+  降伏次數、殘餘塑性轉角, 存屋頂位移時間歷程(彈性vs非線性疊圖)、整體遲滯迴圈、塑鉸M-θp迴圈
+  三張圖
+- **限制(誠實)**: 準靜態、小位移(不含 P-Delta/corotational 幾何非線性), 跟 D7 一致; 沒有
+  勁度/強度劣化、沒有捏縮; 阻尼矩陣是常數, 不隨塑鉸降伏而改變(業界另一種做法是降伏後改用
+  切線剛度比例阻尼, 這裡沒有實作那個選項); 不支援非零初始位移/速度(只能從相對於某個平衡
+  狀態的靜止開始)
 
 #### D7 循環塑鉸與準靜態反覆載重 ✅ 已完成(提前)
 
