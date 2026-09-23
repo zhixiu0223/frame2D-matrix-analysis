@@ -252,6 +252,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
 | D7b | 網頁: 「循環」分析、遲滯迴圈圖、塑鉸 M-θp 圖、每級耗能與等效阻尼比 | webapi | ✅ |
 | D8 | 非線性地震反應一站式入口 + 能量平衡診斷 | `seismic.py` | ✅ |
+| D6b | 網頁: 非線性地震反應(選地震歷程、地震動畫播放、時程/遲滯迴圈/塑鉸M-θp圖) | webapi | ✅ |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
 
@@ -709,4 +710,55 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   擾動只能從相對靜止開始); `energy_balance()` 的 `Wext`/`Wint` 個別不保證單調(可能因為彈性
   能量的可逆振盪而暫時下降), 只有它們的**組合**保證平衡, 用時間上的最大值(而不是終值)當
   比例尺度時要留意這一點
+
+#### D6b 網頁非線性地震反應 ✅ 已完成
+
+- **使用方式**: 桿件填塑鉸容量 Mp(跟Pushover/循環一樣)、斷面填密度 ρ 或節點填質量 → 上方
+  「分析」選「**非線性地震**」→ 設定控制節點、方向、阻尼比、Rayleigh控制模態(1起算, 例如
+  1,3)、質量矩陣、是否先做重力預載、Δt/總步數(留空=自動) → 選地震歷程來源: 「衰減脈衝」
+  (填峰值加速度/頻率/衰減係數, **不是真實地震紀錄**, 示範用)或「自訂」(週期-加速度資料表,
+  單位g, 可增減列)→ Solve。結果有 4 個視圖: **地震動畫**(結構隨時間變形, 有播放/暫停/滑桿,
+  直線畫法不是精確Hermite曲線——動畫幀多時逐幀重算曲線太貴, 跟D2b模態視圖同一種取捨)、
+  **地震時程**(地面加速度+控制節點位移雙圖, 紅點標目前播放位置)、**遲滯迴圈**(控制節點位移
+  vs「有效慣性力合力」, 用完整時間序列畫、不是動畫抽稀後的幀, 紅點標目前位置)、**塑鉸
+  M-θp**(降伏過的塑鉸各一張小圖)。單位跟「單位設定」一致
+- 核心新增(`frame2d/seismic.py`): `sine_pulse_ground_motion(amplitude_g, freq_hz, decay)`
+  (簡化衰減正弦波)、`custom_ground_motion(points_g)`(分段線性內插, 自動排序)、
+  `nonlinear_seismic_web_analysis()`(網頁一站式入口: 建地震歷程 callable → `seismic_analysis()`
+  → 動畫影格抽稀, 均勻取樣到 `max_frames`, 首尾保留, 不超過就不抽稀)、`seismic_to_dict()`
+  (JSON; 塑鉸M-θp/時程/遲滯迴圈用完整未抽稀的時間序列, 只有「每個時間步存全部節點位移」這件
+  事——動畫要用的——才抽稀, 因為那個資料量遠大於其他曲線)
+- 後端: FastAPI 與 stdlib 各一個 `POST /nonlinear_seismic`(`FrameIn` 新增 seismic_control_node/
+  seismic_direction/seismic_zeta/seismic_damping_modes/seismic_mass_kind/
+  seismic_apply_gravity_loads/seismic_dt/seismic_n_steps/seismic_ground_motion_type/
+  seismic_pulse_amplitude_g/seismic_pulse_freq_hz/seismic_pulse_decay/
+  seismic_custom_points_g); 步數上限 4000(沿用 `nonlinear_seismic_web_analysis` 的
+  `MAX_WEB_STEPS`), 超過時明確錯誤訊息建議加大Δt
+- 驗證:
+  - `tests/test_seismic_web.py`: `sine_pulse_ground_motion`/`custom_ground_motion` 公式逐點
+    比對(含自動排序、邊界外夾住)、`nonlinear_seismic_web_analysis`+`seismic_to_dict` 跟直接
+    呼叫 `seismic_analysis()` 逐項相同(含JSON化後能量平衡仍然成立)、動畫抽稀正確(首尾保留、
+    小案例不抽稀)、明確拒絕。突變檢查 5 個, 一開始只抓到 3 個——「有效慣性力合力算錯(用M而非
+    M@r)」跟「hinges降伏次數篩選條件顛倒」兩個測試沒抓到, 各自補上獨立算出的期望值比對
+    (前者對照獨立算的「總質量×地面加速度」、後者直接檢查hinges清單內容跟n_yield>0)才抓到
+  - `tests/test_web_seismic_api.py`: stdlib 後端對核心逐項相同(脈衝與自訂地震歷程都測);
+    FastAPI 與 stdlib 回傳完全相同; 各種錯誤訊息
+  - `tests/test_web_seismic_e2e.py`(選用, 需要 node + jsdom): 匯入範例模型 → 選「非線性地震」
+    → 輸入驗證 → Solve → 網頁結果與核心逐項一致(含能量平衡最終值)→ 地震動畫(播放/暫停/
+    滑桿都測過, 含**變形放大倍率對照獨立算出的期望值**——這個檢查是補測出來的, 見下面的
+    踩坑記錄)→ 地震時程圖(雙圖+紅點)→ 遲滯迴圈(確認用完整時間序列、不是抽稀後的動畫幀)→
+    塑鉸M-θp小圖網格 → 結果表 → 單位切換 → 自訂地震歷程編輯 → 拿掉塑鉸容量得到清楚訊息且
+    不破壞舊結果 → 重置。突變檢查 5/5 被抓到(播放不前進、滑桿拖動不更新影格、遲滯迴圈誤用
+    抽稀後的資料、重置沒清乾淨、變形放大倍率算錯)
+  - **踩坑記錄**: 第一版的 e2e 測試沒有檢查「變形放大倍率」的實際數值, 只檢查畫面上有沒有畫出
+    線、線的端點座標有沒有 NaN——結果一個「忘記除以 maxDisp」的突變(倍率變成只有正確值的
+    1/45, 動畫看起來幾乎不會動, 但仍然是個有效數字, 線也確實畫出來了)沒被抓到。加上「獨立
+    重算倍率該有的值, 逐一比對」之後才抓到。這是這個檔案在 D3b/D7b 之後第三次遇到「畫面上有
+    東西、座標也不是NaN, 但數值本身錯」這種只有比對實際數字才抓得到的錯誤類型
+  - 另外把頁面實際的 SVG 轉成圖片肉眼檢查過全部 4 個視圖(動畫變形形狀、時程雙圖+紅點、
+    衰減螺旋狀遲滯迴圈+紅點、塑鉸M-θp), 版面跟數值都正常
+- **限制(誠實)**: jsdom 不是真的瀏覽器, 手機上的外觀請實際確認; 動畫用直線畫變形形狀
+  (不是精確的Hermite三次曲線); 沒有動畫匯出(GIF/影片)、沒有PDF匯出; 繼承 D6/D8 的所有限制
+  (準靜態小位移、無勁度/強度劣化、常數阻尼矩陣); 「有效慣性力合力」不是嚴格的基底反力
+  (nonlinear_newmark沒有算反力), 前端文案已經明確標註這件事, 不叫「基底剪力」
 

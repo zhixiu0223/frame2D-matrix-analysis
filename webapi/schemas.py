@@ -193,6 +193,23 @@ class FrameIn(BaseModel):
     rsa_custom_points: Optional[List[List[float]]] = None
     """自訂反應譜用: [[T(s), Sa(SI加速度單位, m/s²)], ...], 至少2點。"""
 
+    seismic_control_node: Optional[int] = None
+    """只有/nonlinear_seismic端點用: 動畫/時間歷程圖表要追蹤的節點(通常是頂層節點)。"""
+    seismic_direction: Literal['x', 'y'] = 'x'
+    seismic_dt: Optional[float] = None
+    seismic_n_steps: Optional[int] = None
+    seismic_zeta: float = 0.05
+    seismic_damping_modes: List[int] = [0, 2]
+    """Rayleigh阻尼的兩個控制模態(0起算的模態編號), 預設[0,2]=第1、第3模態。"""
+    seismic_mass_kind: Literal['lumped', 'consistent'] = 'lumped'
+    seismic_apply_gravity_loads: bool = True
+    seismic_ground_motion_type: Literal['pulse', 'custom'] = 'pulse'
+    seismic_pulse_amplitude_g: Optional[float] = None
+    seismic_pulse_freq_hz: Optional[float] = None
+    seismic_pulse_decay: float = 0.0
+    seismic_custom_points_g: Optional[List[List[float]]] = None
+    """自訂地震歷程用: [[t(s), ag(g的倍數)], ...], 至少2點。"""
+
     modal_n_modes: Optional[int] = None
     """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""
     modal_mass_kind: Literal['lumped', 'consistent'] = 'lumped'

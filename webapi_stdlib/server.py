@@ -26,6 +26,7 @@ from frame2d.postprocess import member_internal_forces
 from frame2d.modal import eigen, modal_to_dict
 from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
 from frame2d.spectrum import spectrum_analysis, rsa_to_dict
+from frame2d.seismic import nonlinear_seismic_web_analysis, seismic_to_dict
 
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
@@ -361,6 +362,29 @@ def _rsa_payload(payload: dict) -> dict:
     return rsa_to_dict(pkg)
 
 
+def _nonlinear_seismic_payload(payload: dict) -> dict:
+    """非線性地震反應分析(frame2d.seismic), 跟 webapi/main.py 的 /nonlinear_seismic 端點同一個
+    行為。"""
+    control_node = payload.get("seismic_control_node")
+    if control_node is None:
+        raise ValueError("非線性地震分析需要指定 seismic_control_node(控制節點)")
+    f = _build_frame(payload)
+    try:
+        pkg = nonlinear_seismic_web_analysis(
+            f, control_node, direction=payload.get("seismic_direction", "x"),
+            dt=payload.get("seismic_dt"), n_steps=payload.get("seismic_n_steps"),
+            zeta=payload.get("seismic_zeta", 0.05), damping_modes=tuple(payload.get("seismic_damping_modes", [0, 2])),
+            mass_kind=payload.get("seismic_mass_kind", "lumped"),
+            apply_gravity_loads=payload.get("seismic_apply_gravity_loads", True),
+            ground_motion_type=payload.get("seismic_ground_motion_type", "pulse"),
+            pulse_amplitude_g=payload.get("seismic_pulse_amplitude_g"),
+            pulse_freq_hz=payload.get("seismic_pulse_freq_hz"), pulse_decay=payload.get("seismic_pulse_decay", 0.0),
+            custom_points_g=payload.get("seismic_custom_points_g"))
+    except KeyError as e:
+        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    return seismic_to_dict(pkg)
+
+
 def _cyclic_payload(payload: dict) -> dict:
     """反覆載重(遲滯)分析(frame2d.cyclic), 跟 webapi/main.py 的 /cyclic 端點同一個行為。
     錯誤(缺欄位、沒有塑鉸容量、預載超過Mp、步數過多等)都是有清楚訊息的例外, do_POST 轉成 400。"""
@@ -497,6 +521,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json_body()
                 self._send_json(_rsa_payload(payload))
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=400)
+            return
+        if self.path == "/nonlinear_seismic":
+            try:
+                payload = self._read_json_body()
+                self._send_json(_nonlinear_seismic_payload(payload))
             except Exception as e:
                 self._send_json({"error": str(e)}, status=400)
             return

@@ -21,6 +21,7 @@ from frame2d.postprocess import member_internal_forces, member_deformed_shape
 from frame2d.modal import eigen, modal_to_dict
 from frame2d.cyclic import cyclic_analysis, cyclic_to_dict
 from frame2d.spectrum import spectrum_analysis, rsa_to_dict
+from frame2d.seismic import nonlinear_seismic_web_analysis, seismic_to_dict
 
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
@@ -458,6 +459,32 @@ def rsa_endpoint(payload: FrameIn):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return rsa_to_dict(pkg)
+
+
+@app.post("/nonlinear_seismic")
+def nonlinear_seismic_endpoint(payload: FrameIn):
+    """非線性地震反應分析(frame2d.seismic): 把模態/Rayleigh阻尼/地震輸入/非線性時程(D7循環
+    塑鉸)/選用的重力預載串成一次呼叫。回傳地面加速度與控制節點位移時間歷程、能量平衡、塑鉸
+    M-θp曲線、動畫用的抽稀節點位移幀。需要至少一根桿件設定塑鉸容量 Mp。"""
+    if payload.seismic_control_node is None:
+        raise HTTPException(status_code=400, detail="非線性地震分析需要指定 seismic_control_node(控制節點)")
+    f = _build_frame(payload)
+    try:
+        pkg = nonlinear_seismic_web_analysis(
+            f, payload.seismic_control_node, direction=payload.seismic_direction, dt=payload.seismic_dt,
+            n_steps=payload.seismic_n_steps, zeta=payload.seismic_zeta,
+            damping_modes=tuple(payload.seismic_damping_modes), mass_kind=payload.seismic_mass_kind,
+            apply_gravity_loads=payload.seismic_apply_gravity_loads,
+            ground_motion_type=payload.seismic_ground_motion_type,
+            pulse_amplitude_g=payload.seismic_pulse_amplitude_g, pulse_freq_hz=payload.seismic_pulse_freq_hz,
+            pulse_decay=payload.seismic_pulse_decay, custom_points_g=payload.seismic_custom_points_g)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return seismic_to_dict(pkg)
 
 
 @app.post("/pushover_step_diagrams")

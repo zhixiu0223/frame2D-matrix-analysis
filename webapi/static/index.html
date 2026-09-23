@@ -125,6 +125,16 @@
   .rsaCurveLine { stroke: #0891b2; stroke-width: 2; fill: none; }
   .rsaModeDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
   .rsaPointRow input { width: 4.5rem; }
+  .seisGroundLine { stroke: #64748b; stroke-width: 1.6; fill: none; }
+  .seisDispLine { stroke: #0891b2; stroke-width: 1.8; fill: none; }
+  .seisHystLine { stroke: #7c3aed; stroke-width: 1.8; fill: none; }
+  .seisEnergyKE { stroke: #0891b2; stroke-width: 1.6; fill: none; }
+  .seisEnergyWdamp { stroke: #64748b; stroke-width: 1.6; fill: none; }
+  .seisEnergyWint { stroke: #ea580c; stroke-width: 1.6; fill: none; }
+  .seisEnergyWext { stroke: #111827; stroke-width: 1.6; stroke-dasharray: 5 3; fill: none; }
+  .seisNowLine { stroke: #dc2626; stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .seisNowDot { fill: #dc2626; stroke: white; stroke-width: 1.5; }
+  .seisPointRow input { width: 4.5rem; }
   tr.modalRow { cursor: pointer; }
   tr.modalRow:hover { background: #f5f3ff; }
   tr.modalRow.active { background: #ede9fe; font-weight: bold; }
@@ -190,6 +200,7 @@
         <option value="modal">模態</option>
         <option value="cyclic">循環</option>
         <option value="rsa">反應譜</option>
+        <option value="seismic">非線性地震</option>
       </select></label>
       <button id="btnSolve" style="background:#16a34a;color:white;">▶ Solve</button>
       <button id="btnTogglePostProcess">▸ 後處理</button>
@@ -344,6 +355,38 @@
          內容太長而把畫面吃光。 -->
     <div id="topbarRest">
 
+    <div id="seismicConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
+      <label class="snapLabel">控制節點<input id="sm_node" type="number" step="1" style="width:4rem;" placeholder="例如1"></label>
+      <label class="snapLabel">方向<select id="sm_dir" style="width:4rem;">
+        <option value="x">水平(x)</option>
+        <option value="y">垂直(y)</option>
+      </select></label>
+      <label class="snapLabel">阻尼比<input id="sm_zeta" type="number" min="0" max="0.99" step="any" value="0.05" style="width:4rem;"></label>
+      <label class="snapLabel">Rayleigh控制模態(1起算)<input id="sm_modes" type="text" value="1,3" style="width:4rem;"></label>
+      <label class="snapLabel">質量矩陣<select id="sm_kind" style="width:8rem;">
+        <option value="lumped">集中質量</option>
+        <option value="consistent">一致質量</option>
+      </select></label>
+      <label class="snapLabel"><input id="sm_gravity" type="checkbox" checked style="width:auto;">先做重力預載</label>
+      <label class="snapLabel">Δt(s, 留空=自動)<input id="sm_dt" type="number" min="0" step="any" style="width:5rem;"></label>
+      <label class="snapLabel">總步數(留空=自動)<input id="sm_nsteps" type="number" min="1" step="1" style="width:5rem;"></label>
+      <label class="snapLabel">地震歷程來源<select id="sm_gm_type" style="width:6rem;">
+        <option value="pulse">衰減脈衝</option>
+        <option value="custom">自訂</option>
+      </select></label>
+      <div id="sm_pulse_panel">
+        <label class="snapLabel">峰值加速度(g)<input id="sm_pulse_amp" type="number" min="0" step="any" value="0.5" style="width:4.5rem;"></label>
+        <label class="snapLabel">頻率(Hz)<input id="sm_pulse_freq" type="number" min="0" step="any" value="1.5" style="width:4.5rem;"></label>
+        <label class="snapLabel">衰減係數<input id="sm_pulse_decay" type="number" min="0" step="any" value="0.25" style="width:4.5rem;"></label>
+        <p class="hint" style="margin:0.3rem 0 0;">簡化的衰減正弦波脈衝: a<sub>g</sub>(t) = 峰值加速度·g·sin(2πft)·e<sup>-decay·t</sup>, <b>不是真實地震紀錄</b>, 只是示範/教學用。</p>
+      </div>
+      <div id="sm_custom_panel" style="display:none;">
+        <p class="hint" style="margin:0.3rem 0;">時間-地面加速度資料點(至少2點, 單位 g, 分段線性內插, 順序不拘會自動排序)。</p>
+        <table id="sm_points_table" style="width:auto;"><thead><tr><th>時間 t(s)</th><th>a<sub>g</sub>(g)</th><th></th></tr></thead><tbody></tbody></table>
+        <button id="sm_pt_add" type="button" style="margin-top:0.3rem;">➕ 新增一點</button>
+      </div>
+      <p class="hint" style="margin:0.4rem 0 0;">非線性地震反應分析建立在 D6(Newmark+循環塑鉸)上, 需要桿件設定塑鉸容量 Mp(跟Pushover/循環一樣)與質量(斷面密度ρ、節點質量)。準靜態小位移, 不含P-Delta。動態擾動一律從靜止開始(相對重力預載後的平衡狀態); Rayleigh阻尼矩陣是常數, 不隨降伏改變。步數上限4000, 太多請加大Δt或縮短總時間。</p>
+    </div>
     <div id="rsaConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
       <label class="snapLabel">方向<select id="rsa_dir" style="width:4rem;">
         <option value="x">水平(x)</option>
@@ -441,6 +484,11 @@
          (JS用insertBefore把playbackBar放回這裡, 不是憑感覺塞回原本
          那一段HTML附近而已)。 -->
     <div id="playbackBarAnchor"></div>
+    <div id="seisPlaybackBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+      <button id="sm_play" type="button" style="width:auto;">▶ 播放</button>
+      <input id="sm_slider" type="range" min="0" max="0" value="0" step="1" style="flex:1;min-width:8rem;">
+      <span id="sm_frame_label" class="hint" style="white-space:nowrap;">t=0.000s (0/0)</span>
+    </div>
 
     <div id="combinedConfigBar" style="display:none;padding:0.4rem 0.6rem;border-top:1px solid #e2e8f0;">
       <label class="snapLabel"><input type="checkbox" id="cc_N" checked> N圖(軸力)</label>
@@ -466,6 +514,10 @@
       <button data-view="pushover_curve" class="viewBtn" id="btnViewPushover" style="display:none;">容量曲線</button>
       <button data-view="pushover_playback" class="viewBtn" id="btnViewPlayback" style="display:none;">Pushover回放</button>
       <button data-view="rsa" class="viewBtn" id="btnViewRsa" style="display:none;">反應譜</button>
+      <button data-view="seismic_anim" class="viewBtn" id="btnViewSeisAnim" style="display:none;">地震動畫</button>
+      <button data-view="seismic_history" class="viewBtn" id="btnViewSeisHistory" style="display:none;">地震時程</button>
+      <button data-view="seismic_hyst" class="viewBtn" id="btnViewSeisHyst" style="display:none;">遲滯迴圈</button>
+      <button data-view="seismic_hinge" class="viewBtn" id="btnViewSeisHinge" style="display:none;">塑鉸M-θp</button>
       <button data-view="cyclic_loop" class="viewBtn" id="btnViewCyclic" style="display:none;">遲滯迴圈</button>
       <button data-view="cyclic_hinge" class="viewBtn" id="btnViewCyclicHinge" style="display:none;">塑鉸 M-θp</button>
       <button data-view="modal" class="viewBtn" id="btnViewModal" style="display:none;">模態形狀</button>
@@ -496,6 +548,13 @@
       <g id="camera"><g id="content"></g></g>
       <g id="overlay"></g>
     </svg>
+  </div>
+
+  <div id="seismicPanel" style="display:none;margin:0.5rem 0;">
+    <h3 style="font-size:0.9rem;margin:0.3rem 0;">非線性地震反應結果 <span id="sm_summary" class="hint"></span></h3>
+    <h4 style="font-size:0.82rem;margin:0.4rem 0 0;">降伏的塑鉸</h4>
+    <div style="overflow-x:auto;"><table id="seismicHingeTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint" style="margin:0.3rem 0 0;">「有效慣性力合力」是這個方向上全部質量的慣性力總和(=Σ質量×地面加速度), 不是嚴格意義的支承反力(這裡沒有算反力), 對單層結構約等於基底剪力需求。動畫的影格數受限於傳輸量, 步數多時會自動抽稀(不影響時程/遲滯迴圈曲線本身, 那些用完整的時間序列畫)。</p>
   </div>
 
   <div id="rsaPanel" style="display:none;margin:0.5rem 0;">
@@ -638,6 +697,11 @@ let modalModeIndex = 0;     // 目前顯示振型的模態(0起算)
 let cyclicResult = null;    // /cyclic 的回傳(反覆載重/遲滯分析結果)
 let rsaResult = null;       // /rsa 的回傳(反應譜分析結果)
 let rsaCustomPoints = [[0.1, 9.80665], [0.5, 9.80665]];   // 自訂反應譜的(T,Sa)點, T=s, Sa=SI(m/s²); 初始值=1g, 不能在這裡呼叫toSI()(UNIT_FACTORS還沒定義)
+let seismicResult = null;       // /nonlinear_seismic 的回傳(非線性地震反應結果)
+let seismicCustomPoints = [[0.0, 0.0], [0.5, 0.3]];   // 自訂地震歷程的(t,ag)點, t=s, ag=g的倍數
+let seismicFrameIndex = 0;      // 目前播放到第幾個動畫影格(索引到 seismicResult.frames)
+let seismicPlaying = false;
+let seismicPlayTimer = null;
 let pushoverStepIndex = 0;   // Pushover逐步回放目前看第幾步(對應history_snapshots的索引)
 let pushoverStepCache = {};  // 索引(數字) -> /pushover_step_diagrams的回應, 避免同一步重複打API
 let pushoverStepFetchInFlight = null;  // 目前正在抓的步驟索引(避免同一步驟重複同時發出好幾個請求)
@@ -763,7 +827,7 @@ function computeTransformForRect(pad, sx, sy, availW, availH) {
 // 不同視圖需要的留白不一樣: 結構圖貼緊邊框比較好看; 內力圖/變形圖
 // 的圖形會往垂直於桿件的方向鼓出去(最多到對角線15%)還要留數值標籤
 // 的空間, 貼太緊字會被切掉。
-const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, cyclic_loop: 0.14, cyclic_hinge: 0.14, rsa: 0.14, N: 0.14, V: 0.14, M: 0.14};
+const PAD_BY_VIEW = {structure: 0.14, deformed: 0.20, modal: 0.20, cyclic_loop: 0.14, cyclic_hinge: 0.14, rsa: 0.14, seismic_anim: 0.20, seismic_history: 0.14, seismic_hyst: 0.14, seismic_hinge: 0.14, N: 0.14, V: 0.14, M: 0.14};
 function toScreen(x, y, t) {
   return [t.sx + (x - t.cx) * t.scale, t.sy - (y - t.cy) * t.scale];
 }
@@ -1003,6 +1067,9 @@ function render() {
   overlayG.innerHTML = '';
   const rsaOn = viewMode === 'rsa' && rsaResult;
   document.getElementById('rsaPanel').style.display = rsaOn ? 'block' : 'none';
+  const seisOn = viewMode.startsWith('seismic_') && seismicResult;
+  document.getElementById('seismicPanel').style.display = seisOn ? 'block' : 'none';
+  document.getElementById('seisPlaybackBar').style.display = (viewMode === 'seismic_anim' && seismicResult) ? 'flex' : 'none';
   const cyclicOn = (viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge') && cyclicResult;
   document.getElementById('cyclicPanel').style.display = cyclicOn ? 'block' : 'none';
   const modalOn = viewMode === 'modal' && modalResult;
@@ -1029,10 +1096,23 @@ function render() {
   // 讓瀏覽器原生捲動生效; 要縮放結構還是可以用🔍+/-/原大小這幾個按鈕,
   // 沒有被這個改動影響。
   svg.style.touchAction = (viewMode === 'pushover_curve' || viewMode === 'pushover_playback'
-                           || viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge' || viewMode === 'rsa') ? 'auto' : 'none';
+                           || viewMode === 'cyclic_loop' || viewMode === 'cyclic_hinge' || viewMode === 'rsa'
+                           || viewMode.startsWith('seismic_')) ? 'auto' : 'none';
   if (viewMode === 'cyclic_loop') { drawCyclicLoop(); return; }     // 固定螢幕座標的圖表, 不套用結構視圖的 camera
   if (viewMode === 'cyclic_hinge') { drawCyclicHinges(); return; }
   if (viewMode === 'rsa') { drawRsaCurve(); return; }
+  if (viewMode === 'seismic_history') { drawSeismicHistory(); return; }
+  if (viewMode === 'seismic_hyst') { drawSeismicHyst(); return; }
+  if (viewMode === 'seismic_hinge') { drawSeismicHinges(); return; }
+  if (viewMode === 'seismic_anim') {
+    const t = getTransform(PAD_BY_VIEW.seismic_anim);
+    if (document.getElementById('showGridToggle').checked) drawGrid(t);
+    drawMembers(t, true);
+    drawSupports(t);
+    if (!seismicResult) drawNeedSolveMsg();
+    else drawSeismicFrame(t);
+    return;
+  }
   if (viewMode === 'pushover_curve') {
     // 容量曲線是完全不同性質的圖(u vs F的歷程, 不是空間座標), 不套用
     // 結構視圖那一套camera平移縮放/格線, 直接畫在固定的overlay圖層上。
@@ -4409,6 +4489,10 @@ document.getElementById('valueLabelFontSize').addEventListener('change', render)
     if (modalResult) renderModalTable();   // 模態結果表的質量單位也要跟著換
     updateCyclicUnitLabels();               // 反覆載重設定列的幅值/步長單位標籤
     updateRsaUnitLabels();                  // 反應譜設定列的自訂點 S_a 單位標籤
+    if (seismicResult) {                    // 非線性地震結果表與圖(位移/力/彎矩單位)也要跟著換算重畫
+      renderSeismicPanel();
+      if (viewMode.startsWith('seismic_')) render();
+    }
     renderRsaPointsTable();                 // 自訂反應譜資料點的顯示數值也要跟著換算重畫
     if (rsaResult) {                        // 反應譜結果表與圖(位移/力/彎矩/加速度單位)也要跟著換算重畫
       renderRsaPanel();
@@ -4615,6 +4699,13 @@ function resetViewToStructure() {
   document.getElementById('btnViewRsa').style.display = 'none';
   document.getElementById('rsaPanel').style.display = 'none';
   rsaResult = null;
+  document.getElementById('seismicConfigBar').style.display = 'none';
+  ['btnViewSeisAnim', 'btnViewSeisHistory', 'btnViewSeisHyst', 'btnViewSeisHinge'].forEach(id => document.getElementById(id).style.display = 'none');
+  document.getElementById('seismicPanel').style.display = 'none';
+  document.getElementById('seisPlaybackBar').style.display = 'none';
+  stopSeismicPlayback();
+  seismicResult = null;
+  seismicFrameIndex = 0;
   document.getElementById('btnViewCyclic').style.display = 'none';
   document.getElementById('btnViewCyclicHinge').style.display = 'none';
   document.getElementById('cyclicPanel').style.display = 'none';
@@ -4743,6 +4834,7 @@ document.getElementById('analysisType').addEventListener('change', (e) => {
   document.getElementById('modalConfigBar').style.display = e.target.value === 'modal' ? 'block' : 'none';
   document.getElementById('cyclicConfigBar').style.display = e.target.value === 'cyclic' ? 'block' : 'none';
   document.getElementById('rsaConfigBar').style.display = e.target.value === 'rsa' ? 'block' : 'none';
+  document.getElementById('seismicConfigBar').style.display = e.target.value === 'seismic' ? 'block' : 'none';
 });
 
 // 後端錯誤訊息: FastAPI回{detail: 字串或驗證錯誤陣列}, stdlib後端回{error: 字串}, 統一轉成一行文字
@@ -5155,6 +5247,273 @@ async function runRsaAnalysis() {
   } catch (e) { setStatus('連線失敗: ' + e.message); }
 }
 
+// ================= 非線性地震反應分析 =================
+function renderSeismicPointsTable() {
+  const tb = document.querySelector('#sm_points_table tbody');
+  tb.innerHTML = '';
+  seismicCustomPoints.forEach((pt, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'seisPointRow';
+    const tdT = document.createElement('td');
+    const inT = document.createElement('input');
+    inT.type = 'number'; inT.step = 'any'; inT.min = '0'; inT.value = pt[0];
+    inT.addEventListener('input', () => { seismicCustomPoints[i][0] = parseFloat(inT.value); });
+    tdT.appendChild(inT);
+    const tdA = document.createElement('td');
+    const inA = document.createElement('input');
+    inA.type = 'number'; inA.step = 'any'; inA.value = pt[1];
+    inA.addEventListener('input', () => { seismicCustomPoints[i][1] = parseFloat(inA.value) || 0; });
+    tdA.appendChild(inA);
+    const tdX = document.createElement('td');
+    const btnX = document.createElement('button');
+    btnX.type = 'button'; btnX.textContent = '✕'; btnX.style.width = 'auto';
+    btnX.disabled = seismicCustomPoints.length <= 2;
+    btnX.addEventListener('click', () => { seismicCustomPoints.splice(i, 1); renderSeismicPointsTable(); });
+    tdX.appendChild(btnX);
+    tr.appendChild(tdT); tr.appendChild(tdA); tr.appendChild(tdX);
+    tb.appendChild(tr);
+  });
+}
+document.getElementById('sm_pt_add').addEventListener('click', () => {
+  const last = seismicCustomPoints[seismicCustomPoints.length - 1];
+  seismicCustomPoints.push([Number((last[0] + 0.2).toFixed(3)), last[1]]);
+  renderSeismicPointsTable();
+});
+renderSeismicPointsTable();
+document.getElementById('sm_gm_type').addEventListener('change', (e) => {
+  const isPulse = e.target.value === 'pulse';
+  document.getElementById('sm_pulse_panel').style.display = isPulse ? 'block' : 'none';
+  document.getElementById('sm_custom_panel').style.display = isPulse ? 'none' : 'block';
+});
+
+function buildSeismicPayload() {
+  const nodeRaw = document.getElementById('sm_node').value.trim();
+  if (nodeRaw === '') { setStatus('請填控制節點'); return null; }
+  const node = parseInt(nodeRaw, 10);
+  if (!Number.isFinite(node)) { setStatus('控制節點格式錯誤, 應該是節點編號(數字)'); return null; }
+  const zeta = parseFloat(document.getElementById('sm_zeta').value);
+  if (!Number.isFinite(zeta) || zeta < 0 || zeta >= 1) { setStatus('阻尼比必須在 0(含)到 1(不含)之間'); return null; }
+  const modesRaw = document.getElementById('sm_modes').value.split(',').map(t => t.trim()).filter(t => t !== '');
+  if (modesRaw.length !== 2 || modesRaw.some(v => !Number.isInteger(parseFloat(v)) || parseInt(v, 10) < 1)) {
+    setStatus('Rayleigh控制模態格式錯誤, 應該是兩個不小於1的整數(1起算), 例如 1,3'); return null;
+  }
+  const dampingModes = modesRaw.map(v => parseInt(v, 10) - 1);   // 前端1起算, 後端0起算
+  const dtRaw = document.getElementById('sm_dt').value.trim();
+  const nstepsRaw = document.getElementById('sm_nsteps').value.trim();
+  let dt = null, nSteps = null;
+  if (dtRaw !== '') {
+    dt = parseFloat(dtRaw);
+    if (!(dt > 0)) { setStatus('Δt必須是正數, 或留空使用自動值'); return null; }
+  }
+  if (nstepsRaw !== '') {
+    nSteps = parseInt(nstepsRaw, 10);
+    if (!Number.isFinite(nSteps) || nSteps < 1) { setStatus('總步數必須是不小於1的整數, 或留空使用自動值'); return null; }
+  }
+  const gmType = document.getElementById('sm_gm_type').value;
+  const body = {
+    ...model, seismic_control_node: node, seismic_direction: document.getElementById('sm_dir').value,
+    seismic_zeta: zeta, seismic_damping_modes: dampingModes,
+    seismic_mass_kind: document.getElementById('sm_kind').value,
+    seismic_apply_gravity_loads: document.getElementById('sm_gravity').checked,
+    seismic_dt: dt, seismic_n_steps: nSteps, seismic_ground_motion_type: gmType,
+  };
+  if (gmType === 'pulse') {
+    const amp = parseFloat(document.getElementById('sm_pulse_amp').value);
+    const freq = parseFloat(document.getElementById('sm_pulse_freq').value);
+    const decay = parseFloat(document.getElementById('sm_pulse_decay').value);
+    if (!(amp > 0)) { setStatus('峰值加速度必須是正數'); return null; }
+    if (!(freq > 0)) { setStatus('頻率必須是正數'); return null; }
+    if (!(decay >= 0)) { setStatus('衰減係數必須是不小於0的數字'); return null; }
+    body.seismic_pulse_amplitude_g = amp; body.seismic_pulse_freq_hz = freq; body.seismic_pulse_decay = decay;
+  } else {
+    if (seismicCustomPoints.length < 2) { setStatus('自訂地震歷程至少需要 2 個資料點'); return null; }
+    if (seismicCustomPoints.some(pt => !Number.isFinite(pt[0]) || pt[0] < 0 || !Number.isFinite(pt[1]))) {
+      setStatus('自訂地震歷程的時間必須是不小於0的數字、加速度必須是數字'); return null;
+    }
+    body.seismic_custom_points_g = seismicCustomPoints;
+  }
+  return body;
+}
+
+function renderSeismicPanel() {
+  if (!seismicResult) return;
+  const r = seismicResult, du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
+  document.getElementById('sm_summary').textContent =
+    `(控制節點${r.control_node}, ${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}, `
+    + `${r.direction === 'x' ? '水平' : '垂直'}向, 阻尼比目標${(r.zeta_target * 100).toFixed(1)}%, T1=${r.period1.toFixed(4)}s; `
+    + `尖峰位移 ${fmtNum(r.peak_displacement, 'disp', 5)} ${du}; ${r.n_steps} 步; `
+    + `${r.apply_gravity_loads ? '已做重力預載' : '未做重力預載'})`;
+  document.querySelector('#seismicHingeTable thead').innerHTML =
+    `<tr><th>塑鉸</th><th>降伏次數</th><th>累積塑性功(${mu})</th></tr>`;
+  const tb = document.querySelector('#seismicHingeTable tbody');
+  tb.innerHTML = '';
+  if (r.hinges.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="3" class="hint">全程彈性, 沒有任何塑鉸降伏</td>`;
+    tb.appendChild(tr);
+  }
+  r.hinges.forEach(h => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${h.label}</td><td>${h.n_yield}</td><td>${fmtNum(h.work_final, 'moment', 5)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+// 地震動畫: 用直線畫變形形狀(不是精確的Hermite三次曲線——那個要伺服器逐幀重算, 動畫幀數多時
+// 太貴; 直線畫法足夠看出結構在地震歷程中怎麼晃動, 跟drawModeShape()同一種取捨)
+function drawSeismicFrame(t) {
+  const r = seismicResult;
+  const frame = r.frames[seismicFrameIndex];
+  if (!frame) return;
+  for (const m of model.members) {
+    const ni = nodeById(m.node_i), nj = nodeById(m.node_j);
+    const di = frame.nodes[m.node_i], dj = frame.nodes[m.node_j];
+    if (!di || !dj) continue;
+    const [x1, y1] = toScreen(ni.x + di.ux * seismicDrawScale, ni.y + di.uy * seismicDrawScale, t);
+    const [x2, y2] = toScreen(nj.x + dj.ux * seismicDrawScale, nj.y + dj.uy * seismicDrawScale, t);
+    put(el('line', {x1, y1, x2, y2, class: 'deformed-line'}));
+  }
+  const lbl = el('text', {x: 42, y: 58, style: `font-size:${gridLabelSize + 1}px;font-weight:bold;fill:#ea580c;`});
+  lbl.textContent = `變形放大 ×${seismicDrawScale.toFixed(1)}(非真實比例), t = ${frame.t.toFixed(3)}s`;
+  putOverlay(lbl);
+}
+
+function drawSeismicHistory() {
+  if (!seismicResult) { drawNeedSolveMsg(); return; }
+  const r = seismicResult, du = unitOf('disp');
+  const boxH = (VB_H - 60) / 2;
+  const idx0 = nearestStepIndex(r, seismicFrameIndex);
+  const nowT = r.frames[seismicFrameIndex].t;
+  drawXYChart(20, 20, VB_W - 40, boxH, r.t, r.ground_motion.map(v => v / 9.80665), {
+    cls: 'seisGroundLine', mL: 90, mB: 56, mT: 30,
+    title: '地面加速度 ag(t)', xTitle: '時間 (s)', yTitle: 'ag (g)', tickFont: 16, axisFont: 16, titleFont: 18,
+    dots: [{x: nowT, y: r.ground_motion[idx0] / 9.80665}]});
+  drawXYChart(20, 40 + boxH, VB_W - 40, boxH, r.t, r.control_disp.map(v => fromSI('disp', v)), {
+    cls: 'seisDispLine', mL: 90, mB: 56, mT: 30,
+    title: `控制節點${r.control_node}相對位移`, xTitle: '時間 (s)', yTitle: `位移 (${du})`,
+    tickFont: 16, axisFont: 16, titleFont: 18,
+    dots: [{x: nowT, y: fromSI('disp', r.control_disp[idx0])}]});
+}
+
+function drawSeismicHyst() {
+  if (!seismicResult) { drawNeedSolveMsg(); return; }
+  const r = seismicResult, du = unitOf('disp'), fu = unitOf('force');
+  const idx = nearestStepIndex(r, seismicFrameIndex);
+  drawXYChart(20, 20, VB_W - 40, 820, r.control_disp.map(v => fromSI('disp', v)), r.equivalent_force.map(v => fromSI('force', v)), {
+    cls: 'seisHystLine', mL: 96, mB: 64,
+    title: `控制節點${r.control_node}位移 vs 有效慣性力合力(不是嚴格的基底反力)`,
+    xTitle: `位移 (${du})`, yTitle: `力 (${fu})`, tickFont: 20, axisFont: 20, titleFont: 18,
+    dots: [{x: fromSI('disp', r.control_disp[idx]), y: fromSI('force', r.equivalent_force[idx])}], dotR: 7});
+}
+
+function drawSeismicHinges() {
+  if (!seismicResult) { drawNeedSolveMsg(); return; }
+  const r = seismicResult, mu = unitOf('moment');
+  if (r.hinges.length === 0) {
+    const tx = el('text', {x: 30, y: 60, class: 'axisTitle'});
+    tx.textContent = '沒有任何塑鉸降伏(全程彈性)';
+    putOverlay(tx);
+    return;
+  }
+  const cols = 2, gap = 14, boxW = (VB_W - 40 - gap) / cols;
+  const rows = Math.ceil(r.hinges.length / cols);
+  const boxH = Math.min(340, (VB_H - 40 - gap * (rows - 1)) / rows);
+  r.hinges.forEach((h, i) => {
+    const cx = 20 + (i % cols) * (boxW + gap), cy = 20 + Math.floor(i / cols) * (boxH + gap);
+    const xs = h.theta_p.map(v => v * 1000), ys = h.M.map(v => fromSI('moment', v));
+    drawXYChart(cx, cy, boxW, boxH, xs, ys, {
+      cls: 'seisHystLine', mL: 66, mB: 42, mT: 32, tickFont: 13, axisFont: 13, titleFont: 15, xTicks: 4, yTicks: 4,
+      title: `${h.label}(降伏 ${h.n_yield} 次)`, xTitle: 'θp (mrad)', yTitle: `M (${mu})`});
+  });
+}
+
+// frame_idx(抽稀後的動畫影格)不是每個都對應完整時間序列裡的同一個索引, 這裡把「目前播放到第
+// seismicFrameIndex個動畫影格」換算成完整時間序列(r.t/r.ground_motion/r.control_disp/
+// r.equivalent_force, 這些沒有抽稀)裡最接近的索引, 給時程圖/遲滯圖的移動點用
+function nearestStepIndex(r, frameIdxPos) {
+  return r.frame_idx[frameIdxPos];   // frames跟frame_idx是同一組索引(seismic_to_dict保證一一對應)
+}
+
+let seismicDrawScale = 1.0;
+
+function computeSeismicDrawScale() {
+  const r = seismicResult;
+  let maxDisp = 1e-9;
+  for (const fr of r.frames) for (const nid in fr.nodes) maxDisp = Math.max(maxDisp, Math.hypot(fr.nodes[nid].ux, fr.nodes[nid].uy));
+  let xs = model.nodes.map(n => n.x), ys = model.nodes.map(n => n.y);
+  const diag = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) || 1;
+  seismicDrawScale = (0.15 * diag) / maxDisp;
+}
+
+function updateSeismicFrameLabel() {
+  const r = seismicResult;
+  if (!r) return;
+  const fr = r.frames[seismicFrameIndex];
+  document.getElementById('sm_frame_label').textContent = `t=${fr.t.toFixed(3)}s (${seismicFrameIndex}/${r.frames.length - 1})`;
+  document.getElementById('sm_slider').value = seismicFrameIndex;
+}
+
+document.getElementById('sm_slider').addEventListener('input', (e) => {
+  seismicFrameIndex = parseInt(e.target.value, 10);
+  updateSeismicFrameLabel();
+  render();
+});
+
+function stopSeismicPlayback() {
+  seismicPlaying = false;
+  if (seismicPlayTimer) { clearInterval(seismicPlayTimer); seismicPlayTimer = null; }
+  document.getElementById('sm_play').textContent = '▶ 播放';
+}
+
+document.getElementById('sm_play').addEventListener('click', () => {
+  if (!seismicResult) return;
+  if (seismicPlaying) { stopSeismicPlayback(); return; }
+  seismicPlaying = true;
+  document.getElementById('sm_play').textContent = '⏸ 暫停';
+  if (seismicFrameIndex >= seismicResult.frames.length - 1) seismicFrameIndex = 0;
+  seismicPlayTimer = setInterval(() => {
+    seismicFrameIndex++;
+    if (seismicFrameIndex >= seismicResult.frames.length) { stopSeismicPlayback(); seismicFrameIndex = seismicResult.frames.length - 1; }
+    updateSeismicFrameLabel();
+    render();
+  }, 60);
+});
+
+async function runSeismicAnalysis() {
+  const body = buildSeismicPayload();
+  if (!body) return;
+  setStatus('非線性地震反應分析中(可能需要幾秒到幾十秒)...');
+  try {
+    const res = await fetch('/nonlinear_seismic', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    if (!res.ok) { setStatus('非線性地震反應分析失敗: ' + await apiErrorMessage(res)); return; }
+    seismicResult = await res.json();
+    seismicFrameIndex = 0;
+    stopSeismicPlayback();
+    computeSeismicDrawScale();
+    document.getElementById('sm_slider').max = seismicResult.frames.length - 1;
+    updateSeismicFrameLabel();
+    ['btnViewSeisAnim', 'btnViewSeisHistory', 'btnViewSeisHyst', 'btnViewSeisHinge'].forEach(id =>
+      document.getElementById(id).style.display = '');
+    const bar = document.getElementById('viewBar');
+    if (!bar.classList.contains('open')) {
+      bar.classList.add('open');
+      document.getElementById('btnTogglePostProcess').textContent = '▾ 後處理';
+    }
+    document.querySelectorAll('.viewBtn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btnViewSeisAnim').classList.add('active');
+    viewMode = 'seismic_anim';
+    document.getElementById('playbackBar').style.display = 'none';
+    document.getElementById('combinedConfigBar').style.display = 'none';
+    renderSeismicPanel();
+    const nYield = seismicResult.events.filter(e => e.kind === 'yield').length;
+    setStatus(`非線性地震反應分析完成: ${seismicResult.n_steps} 步, 尖峰位移 `
+      + `${fmtNum(seismicResult.peak_displacement, 'disp', 5)} ${unitOf('disp')}, ${nYield} 次降伏事件`);
+    render();
+  } catch (e) { setStatus('連線失敗: ' + e.message); }
+}
+
 async function runCyclicAnalysis() {
   const body = buildCyclicPayload();
   if (!body) return;
@@ -5234,6 +5593,7 @@ document.getElementById('btnSolve').addEventListener('click', async () => {
   if (analysisType === 'modal') { await runModalAnalysis(); return; }
   if (analysisType === 'cyclic') { await runCyclicAnalysis(); return; }
   if (analysisType === 'rsa') { await runRsaAnalysis(); return; }
+  if (analysisType === 'seismic') { await runSeismicAnalysis(); return; }
   const isPushover = analysisType === 'pushover';
 
   let body;
