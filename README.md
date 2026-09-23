@@ -58,8 +58,12 @@
   積分(event-to-event, 對分段線性系統是精確解, 不是Newton-Raphson近似)。對 OpenSeesPy 驗證
   過(SDOF, 到機器精度); MDOF 用能量平衡與 D7 `run_pushover` 比對驗證。範例:
   `PYTHONPATH=. python examples/nonlinear_seismic_portal_demo.py`
+- **一站式非線性地震反應分析**: `frame2d.seismic.seismic_analysis(frame, ag, direction='x',
+  zeta=0.05)`, 把模態/Rayleigh阻尼/地震輸入/非線性時程/選用的重力預載串成一次呼叫, 附
+  `peak_displacement()`/`peak_drift_ratio()`/`absolute_acceleration()`/`energy_balance()`。
+  範例: `PYTHONPATH=. python examples/seismic_analysis_demo.py`
 - **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、P-Delta/corotational 幾何非線性下的
-  時程分析(D6 是小位移)
+  時程分析(D6/D8 都是小位移)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -83,6 +87,8 @@ frame2d/
   damping.py       — rayleigh_damping_matrix(): Rayleigh阻尼(建立在凝縮後的K_eff上)
   nonlinear_newmark.py — nonlinear_newmark_integrate(): 非線性時程(Newmark+D7循環塑鉸,
                      event-to-event, 不對無質量DOF凝縮, 動態擾動一律從靜止開始)
+  seismic.py       — seismic_analysis(): 一站式非線性地震反應分析(模態+Rayleigh阻尼+地震輸入
+                     +非線性時程+選用重力預載), 附能量平衡/峰值反應/絕對加速度便利方法
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

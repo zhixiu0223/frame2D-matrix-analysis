@@ -214,3 +214,4 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_damping_vs_openseespy.py` | Rayleigh阻尼+地震輸入 vs OpenSeesPy(選用, 只比SDOF): 到機器精度; MDOF差異原因已記錄 |
 | `test_nonlinear_newmark.py` | 非線性時程: 彈性極限對線性Newmark、能量平衡(外力功=動能+阻尼耗能+桿件內力功)、對D7 run_pushover第一個降伏事件(動力 D6) |
 | `test_nonlinear_newmark_vs_openseespy.py` | 非線性時程 vs OpenSeesPy(選用, 只比SDOF): 含降伏卸載, 到機器精度; MDOF差異已記錄 |
+| `test_seismic.py` | 一站式地震分析: 能量平衡(無/有重力預載)、對手動組裝D2/D5/D6逐項相同、Rayleigh阻尼比全模態投影、峰值反應helper(動力 D8) |

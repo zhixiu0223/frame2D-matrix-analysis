@@ -251,7 +251,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D6 | 非線性時程(Newmark + 循環塑鉸, event-to-event) | `nonlinear_newmark.py` | ✅ |
 | D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
 | D7b | 網頁: 「循環」分析、遲滯迴圈圖、塑鉸 M-θp 圖、每級耗能與等效阻尼比 | webapi | ✅ |
-| D8 | 非線性地震時程 + 能量平衡 | — | ⬜ |
+| D8 | 非線性地震反應一站式入口 + 能量平衡診斷 | `seismic.py` | ✅ |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
 
@@ -671,31 +671,42 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 - **限制(誠實)**: jsdom 不是真的瀏覽器——沒有版面/CSS 渲染與真實觸控, 手機上的外觀請實際確認; 目前沒有動畫、
   沒有 PDF 匯出; 準靜態、小位移、無劣化與捏縮(見 D7)
 
-#### D8 非線性地震時程
+#### D8 非線性地震反應一站式入口 ✅ 已完成
 
-- 整合 D5~D7, 加上能量平衡檢核: 輸入能 = 動能 + 阻尼耗能 + 應變能 + 遲滯耗能
-- pushover 與時程對照: 容量曲線 vs 時程峰值位移與塑鉸形成順序; P-Δ 效應開/關比較
-- 對 OpenSeesPy 完整模型(多層框架)比對, 可延伸現有 pushover 的比對案例
+- 新增 `frame2d/seismic.py`: `seismic_analysis(frame, ag, direction='x', dt=None, n_steps=None,
+  zeta=0.05, damping_modes=(0,2), mass_kind='lumped', apply_gravity_loads=True)` ->
+  `SeismicResult`。**這個檔案不新增任何求解邏輯**, 純粹是把 D2(模態)/D5(Rayleigh阻尼+地震
+  輸入)/D6(非線性時程)/D7(重力預載沿用 `pushover.apply_gravity()`)串成一次呼叫, 跟
+  `cyclic.cyclic_analysis()`(D7 給網頁用的一站式入口)是同一種角色
+- `SeismicResult` 提供的便利方法: `peak_displacement(node, direction)`、
+  `peak_drift_ratio(node_top, node_bottom, height, direction)`(層間位移角)、
+  `absolute_acceleration()`(轉發 D5 的 `excitation.absolute_acceleration()`)、
+  `energy_balance()`(算出 KE/阻尼耗能/桿件內力作功/外力作功四條時間序列)
+- **能量平衡**: 外力作功(等效地震力對相對位移做的功)= 動能 + 阻尼耗能 + 桿件內力作功(用
+  桿件局部節點力對局部節點位移做功算, 同時涵蓋彈性儲能與塑性耗能), 這條式子在地震輸入下
+  跟一般外力沒有本質差異, 一樣精確成立(見 `seismic.py` 模組說明); 有重力預載時驗證過預載
+  狀態不影響這條平衡式(重力在純相對動態運動下不作淨功)
+- 驗證(`tests/test_seismic.py`, 只依賴 numpy): 能量平衡(無/有重力預載, 殘差 1e-10~1e-12
+  量級)、`seismic_analysis()` 對照手動組裝 D2/D5/D6 逐項相同(位移完全相同, 加速度相對差
+  <1e-9)、Rayleigh 阻尼比對解析公式(含全部模態的模態投影檢核)、`peak_displacement`/
+  `peak_drift_ratio` 對照直接陣列索引、明確拒絕。突變檢查 5 個, 4 個被抓到, 1 個
+  (Rayleigh控制模態索引wi/wj寫反)在ζᵢ=ζⱼ時數學上就是等價的(不是bug, 兩個模態目標阻尼比
+  相同時交換順序對解無影響, 這個「突變」本來就該存活)
+  - **這一層抓到一個真實 bug**: `energy_balance()` 第一版把每根桿件的功增量累加後忘記對時間
+    做 `np.cumsum()`(Wext/Wdamp 都有 cumsum, Wint 少了), 導致殘差高達外力功尺度的 82%。
+    追查時先用單一構件(D6測試的SDOF)重跑一次確認底層公式沒問題, 才發現是這個檔案自己的
+    accumulate邏輯漏了一步——這也是為什麼即使底層元件都個別驗證過, 整合層本身還是需要
+    自己的測試
+- **沒有另外做 OpenSeesPy 交叉驗證**: `seismic_analysis()` 內部呼叫的
+  `nonlinear_newmark_integrate()` 已經在 D6 對 OpenSeesPy 驗證過, `ground_motion_force()`/
+  `rayleigh_damping_matrix()` 已經在 D5 驗證過; 這裡新增的只是「怎麼把它們接起來」, 用「手動
+  組裝結果逐項相同」這個測試(上面提到的那個)驗證組裝本身沒接錯, 比另外重跑一次 OpenSeesPy
+  更對症(能真正測到「這個檔案自己寫的代碼」, 而不是重複驗證已經驗證過的底層數學)
+- 範例 `examples/seismic_analysis_demo.py`: 跟 D6 demo 同一個模型跟同一段地震歷程, 改用一行
+  `seismic_analysis()` 呼叫, 畫出屋頂相對位移+絕對加速度雙軸圖、能量平衡堆疊圖(動能/阻尼
+  耗能/桿件內力作功疊加, 對照外力作功的虛線, 視覺確認平衡)
+- **限制(誠實)**: 繼承 D6 的所有限制(準靜態小位移、無勁度/強度劣化、常數阻尼矩陣、動態
+  擾動只能從相對靜止開始); `energy_balance()` 的 `Wext`/`Wint` 個別不保證單調(可能因為彈性
+  能量的可逆振盪而暫時下降), 只有它們的**組合**保證平衡, 用時間上的最大值(而不是終值)當
+  比例尺度時要留意這一點
 
-### 對 OpenSeesPy 交叉驗證的注意事項
-
-- **質量定義要一致。** `elasticBeamColumn` 有 `-mass`(集中)與 `-cMass`(一致)選項
-  (以你安裝版本的文件為準); 轉動慣量是否計入要兩邊明確指定, 否則頻率對不上
-- **特徵向量比 MAC**, 不比數值; 實測特徵值相對誤差 3e-13、MAC = 1.0, 門檻設 1e-9
-- **OpenSeesPy 的 `ops.eigen(n)`(預設 ARPACK)在有無質量DOF時會失敗**(集中質量下的
-  轉角自由度): `ArpackSolver::Error ... Could not build an Arnoldi factorization`。
-  要用 `ops.eigen('-fullGenLapack', n)`(很慢, 小模型夠用)
-- **OpenSees `modalProperties` 的參與係數**: 集中質量與 frame2d 逐項一致; 一致質量定義不同,
-  只比特徵值與 MAC
-- **阻尼要用同一組 (α, β)**, 不要各自從阻尼比反算
-- **時程要同 Δt、同 Newmark 參數、同輸入序列**; 注意 OpenSees `timeSeries` 的
-  因子與正負號慣例
-- **單位先統一**再比: 兩邊用同一套一致單位(例如 N-m-kg-s, 跟網頁後端一致), 質量單位 = 力單位·s²/長度單位
-
-### 分支與版本
-
-- 舊標記不動: `v1.0-linear-elastic`(線彈性)、`v1.1-nonlinear-static`(非線性靜力)
-- 動力分析在 `feature/dynamics` 進行, 每個 Stage 至少一個 commit; D0 的回歸測試
-  通過後才開始 D1
-- 每個 Stage 完成後可選擇打 tag(例如 D2 完成打 `v1.2-modal`), 並在此表把 ⬜ 改成 ✅,
-  補上實作記錄與遇到的 bug, 沿用上面 Phase 1~4b 的記錄風格
