@@ -247,7 +247,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D3 | 反應譜分析 (SRSS / CQC) | `spectrum.py` | ✅ |
 | D3b | 網頁: 「反應譜」分析、規範/自訂反應譜、反應譜曲線圖、模態/位移/桿件內力結果表 | webapi | ✅ |
 | D4 | 線性時程(Newmark)+諧和/脈衝/任意力輸入 | `newmark.py`, `excitation.py` | ✅ |
-| D5 | Rayleigh 阻尼 + 地面加速度輸入 | `damping.py` | ⬜ |
+| D5 | Rayleigh阻尼 + 地面加速度輸入 | `damping.py`, `excitation.py`(擴充) | ✅ |
 | D6 | 非線性時程框架 (Newmark + Newton, 先用彈性 corotational) | `transient.py` | ⬜ |
 | D7 | 循環塑鉸(遲滯) + 準靜態反覆載重(**提前**, 見下) | `cyclic.py` | ✅ |
 | D7b | 網頁: 「循環」分析、遲滯迴圈圖、塑鉸 M-θp 圖、每級耗能與等效阻尼比 | webapi | ✅ |
@@ -503,15 +503,48 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   「拍音(beating)」振幅包絡)與矩形脈衝力(脈衝結束後在自然週期做無阻尼自由振動), 存位移
   時間歷程圖
 
-#### D5 阻尼與地震輸入
+#### D5 Rayleigh阻尼 + 地震輸入 ✅ 已完成
 
-- Rayleigh 阻尼 `C = αM + βK`; 兩個模態取相同阻尼比 ζ 時
-  `α = 2ζω_iω_j / (ω_i+ω_j)`, `β = 2ζ / (ω_i+ω_j)`; 輸出其他模態的實際阻尼比
-  當檢核(Rayleigh 在兩個控制頻率之外會偏離)
-- 地面加速度輸入: `P_eff(t) = −M r a_g(t)`; 輸出同時提供相對位移與絕對加速度,
-  正負號慣例寫清楚
-- 驗證: 單自由度對地面加速度的反應對照 Duhamel 積分; 對很多個週期跑單自由度時程
-  取峰值, 得到的反應譜就是 D3 的基準
+- 新增 `frame2d/damping.py`: `rayleigh_coefficients(wi, wj, zeta_i, zeta_j=None)`(反解
+  α、β, `zeta_j=None`時退化成經典公式)、`rayleigh_damping_ratio(alpha, beta, omega)`(檢核
+  其他模態的實際阻尼比)、`rayleigh_damping_matrix(frame, wi, wj, zeta_i, zeta_j=None,
+  mass_kind='lumped')`(組出可以直接傳給 `newmark_integrate(damping_matrix=...)` 的全域矩陣)
+- **關鍵設計決定, D4 已經預告過**: `C_dd = α·M_dd + β·K_eff` 建立在**凝縮後**的系統上, 不是
+  原始 K。如果用原始 K, 無質量DOF那幾列因為 β·K 這一項不會是0(K在那裡有勁度貢獻, 只有 M 是
+  0), newmark_integrate() 的「無質量DOF是純代數約束、不含阻尼」假設就會被打破, 變成
+  DAE。`newmark.newmark_integrate` 因此重構出共用的 `condense_for_dynamics()`(`Condensation`
+  dataclass), `damping.py` 呼叫同一個函式, 兩邊的凝縮公式永遠是同一個實作, 不會各自算一次
+  導致以後改公式時漏改一邊
+- `frame2d/excitation.py` 新增: `ground_motion_force(frame, direction, ag, mass_kind)`(等效
+  地震力 `P_eff(t)=-M r ag(t)`; 這個力天生滿足「無質量DOF上必須是0」的要求, 因為半正定質量
+  矩陣對角線為0則整列/整行為0, 不需要額外檢查)、`absolute_acceleration(result, direction,
+  ag)`(重建絕對加速度 `a_abs=a_rel+r·ag(t)`, 給樓層加速度/設備需求用)
+- 驗證(`tests/test_damping.py`, 只依賴 numpy):
+  - `rayleigh_coefficients()` 解出的 α、β 代回 `rayleigh_damping_ratio()` 精確重現給定的
+    ζᵢ、ζⱼ(含 ζᵢ≠ζⱼ 的一般情況), `zeta_j=None` 精確等於經典公式
+  - SDOF: `rayleigh_damping_matrix()` 精確等於古典 c=2ζωm(代數恆等式)
+  - MDOF(6元素懸臂梁)**模態投影檢核**: 用 `modal.eigen()` 獨立算出的模態形狀, 把 Rayleigh
+    矩陣投影到全部 6 個模態(不只是拿來當控制頻率的那兩個), ζₙ=φₙᵀCφₙ/(2ωₙ) 對 `rayleigh_
+    damping_ratio()` 的解析公式逐一比對, 相對差 <2e-14, 同時驗證兩個控制頻率之間的阻尼比確實
+    低於目標值(Rayleigh 阻尼的已知特性)
+  - SDOF對諧和地震輸入的穩態反應對動力放大係數解析公式(相對差 4.8e-5), 跟 D4 的諧和強迫振動
+    用同一套公式, 只是這次的等效力是 `-m·ag(t)`
+  - 絕對加速度殘差 `m·a_abs+c·v_rel+k·u_rel≈0`(運動方程式本身的恆等式, 獨立於怎麼重建
+    a_abs), 相對殘差 1e-9
+  - 突變檢查 5 個(Rayleigh矩陣公式係數搞反、C用K而非Keff繞過凝縮、阻尼比公式漏1/2、地震力
+    少負號、絕對加速度重建誤用純量廣播), 全部被抓到——最後一個一開始沒抓到(SDOF模型只有
+    一個動態DOF, 廣播剛好跟正確答案一樣), 加了一個「轉角DOF不該被地面加速度影響」的獨立檢查
+    才抓到
+- **對 OpenSeesPy 交叉驗證**(`tests/test_damping_vs_openseespy.py`, 選用, 沒裝就 SKIPPED):
+  SDOF、有阻尼的諧和地震輸入, 對 `ops.rayleigh()+ops.pattern('UniformExcitation',...)` 到機器
+  精度(5e-15)。**範圍限制**: 只比 SDOF, 不比 MDOF——`ops.rayleigh(alphaM,betaK,...)` 的 βK
+  項是對每個元素自己的(未凝縮)勁度矩陣做比例阻尼, 不是對凝縮後的 K_eff, 這兩者在 SDOF(沒有
+  無質量DOF)時完全相同, 但在 6 元素懸臂梁(集中質量, 轉角無質量)實測差了 50%(不是數值誤差,
+  是方法論本身不同, 正好印證了上面「Rayleigh 阻尼要建立在 K_eff 上」的設計理由)。MDOF 的驗證
+  改用 test_damping.py 的獨立模態投影, 不依賴 OpenSees
+- 範例 `examples/damping_ground_motion_portal_demo.py`: 門型鋼架 + Rayleigh 阻尼(5%, 兩個
+  控制頻率)+ 虛構的衰減正弦波地震脈衝(**不是真實地震紀錄**, 只是示範), 印各模態實際阻尼比、
+  存地面輸入/屋頂相對位移/屋頂絕對加速度三張時間歷程圖
 
 #### D6 非線性時程框架
 

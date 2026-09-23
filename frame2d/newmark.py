@@ -40,7 +40,7 @@ import numpy as np
 from .assembly import assemble_K
 from .elements import member_stiffness_local, member_stiffness_local_truss
 from .mass import assemble_M
-from .pushover import _fixed_dof_set
+from .pushover import _fixed_dof_set  # noqa: F401  (保留給其他模組沿用同一個 import 路徑)
 
 
 @dataclass
@@ -102,6 +102,70 @@ def _fixed_mask(frame, n):
     return fixed
 
 
+@dataclass
+class Condensation:
+    """`condense_for_dynamics()` 的回傳值: 一次算好的 DOF 分類與靜力凝縮結果, 給
+    `newmark_integrate()` 跟 `damping.rayleigh_damping_matrix()` 共用(單一事實來源, 避免
+    兩邊各自重算、以後改公式時漏改一邊)。"""
+    K: np.ndarray
+    M: np.ndarray
+    Keff: np.ndarray          # (n_dyn, n_dyn) 凝縮後的有效勁度
+    Mdd: np.ndarray           # (n_dyn, n_dyn)
+    dyn: np.ndarray           # 有質量的自由DOF, 對應 assemble_K 的DOF編號
+    mless: np.ndarray         # 無質量的自由DOF
+    fixed: np.ndarray         # (n,) bool, 支承(固定)DOF
+    Kdm: np.ndarray           # (n_dyn, n_mless), 沒有無質量DOF時是 (n_dyn, 0)
+    Kmm_inv: np.ndarray       # (n_mless, n_mless), 沒有無質量DOF時是 None
+    G: np.ndarray             # Kmm_inv @ Kmd, u_m = -G u_d + Kmm_inv F_m; 沒有無質量DOF時是 (0, n_dyn)
+    n: int                    # 全部DOF數(跟 assemble_K 一致)
+    member_dofs: dict = field(repr=False, default=None)
+    member_T: dict = field(repr=False, default=None)
+    member_L: dict = field(repr=False, default=None)
+
+    @property
+    def n_dyn(self) -> int:
+        return len(self.dyn)
+
+
+def condense_for_dynamics(frame, mass_kind='lumped') -> Condensation:
+    """組 K、M, 分類 DOF(固定/有質量的自由/無質量的自由), 並對無質量DOF做靜力凝縮
+    (K_eff = K_dd − K_dm K_mm⁻¹ K_md), 見模組開頭的完整說明。`newmark_integrate()` 跟
+    `damping.rayleigh_damping_matrix()` 都呼叫這個函式, 確保兩邊的凝縮公式永遠一致。"""
+    asm = assemble_K(frame)
+    K = asm.K
+    M = assemble_M(frame, mass_kind)          # 同時做動力分析的模型檢查(cable/equal_dof/支承沉陷)
+    n = asm.n_dof
+
+    fixed = _fixed_mask(frame, n)
+    k_zero = np.abs(K).max(axis=1) == 0.0
+    m_zero = np.abs(M).max(axis=1) == 0.0
+    inactive = (~fixed) & k_zero & m_zero
+    free = (~fixed) & (~inactive)
+    dyn = np.where(free & (~m_zero))[0]
+    mless = np.where(free & m_zero)[0]
+    if len(dyn) == 0:
+        raise ValueError("沒有任何有質量的自由DOF: 請用 Section.rho 或 add_mass() 給結構質量, "
+                         "且質量不能全部落在被支承拘束的DOF上。")
+    if len(mless):
+        Kdd, Kdm, Kmd, Kmm = K[np.ix_(dyn, dyn)], K[np.ix_(dyn, mless)], K[np.ix_(mless, dyn)], K[np.ix_(mless, mless)]
+        try:
+            Kmm_inv = np.linalg.inv(Kmm)
+        except np.linalg.LinAlgError:
+            raise ValueError("無質量DOF的勁度矩陣奇異, 無法做靜力凝縮: 結構可能有機構"
+                             "(例如某個節點只靠release端連接、沒有任何勁度)。請檢查模型。")
+        G = Kmm_inv @ Kmd
+        Keff = Kdd - Kdm @ G
+    else:
+        Kdm = np.zeros((len(dyn), 0))
+        Kmm_inv = None
+        G = np.zeros((0, len(dyn)))
+        Keff = K[np.ix_(dyn, dyn)]
+
+    return Condensation(K=K, M=M, Keff=Keff, Mdd=M[np.ix_(dyn, dyn)], dyn=dyn, mless=mless,
+                        fixed=fixed, Kdm=Kdm, Kmm_inv=Kmm_inv, G=G, n=n,
+                        member_dofs=asm.member_dofs, member_T=asm.member_T, member_L=asm.member_L)
+
+
 def newmark_integrate(frame, dt, n_steps, force=None, mass_kind='lumped', damping_matrix=None,
                       initial_disp=None, initial_vel=None, beta=0.25, gamma=0.5) -> NewmarkResult:
     """線性時程分析(Newmark-β 直接積分)。無質量自由度會自動靜力凝縮(見模組開頭說明), 使用端
@@ -134,43 +198,20 @@ def newmark_integrate(frame, dt, n_steps, force=None, mass_kind='lumped', dampin
     if gamma < 0.5:
         raise ValueError(f"gamma必須 >= 0.5(Newmark法在gamma<0.5時會有負的數值阻尼, 不穩定), 收到{gamma}")
 
-    asm = assemble_K(frame)
-    K = asm.K
-    M = assemble_M(frame, mass_kind)          # 同時做動力分析的模型檢查(cable/equal_dof/支承沉陷)
-    n = asm.n_dof
+    cond = condense_for_dynamics(frame, mass_kind)
+    K, M, Keff, Mdd = cond.K, cond.M, cond.Keff, cond.Mdd
+    dyn, mless, fixed = cond.dyn, cond.mless, cond.fixed
+    Kdm, Kmm_inv, G = cond.Kdm, cond.Kmm_inv, cond.G
+    n = cond.n
     C_full = np.zeros((n, n)) if damping_matrix is None else np.asarray(damping_matrix, dtype=float)
     if C_full.shape != (n, n):
         raise ValueError(f"damping_matrix的形狀應該是({n},{n}), 收到{C_full.shape}")
-
-    # ---- DOF 分類與靜力凝縮(見模組開頭說明), 跟 modal.eigen() 用同一套邏輯 ----
-    fixed = _fixed_mask(frame, n)
-    k_zero = np.abs(K).max(axis=1) == 0.0
-    m_zero = np.abs(M).max(axis=1) == 0.0
-    inactive = (~fixed) & k_zero & m_zero
-    free = (~fixed) & (~inactive)
-    dyn = np.where(free & (~m_zero))[0]
-    mless = np.where(free & m_zero)[0]
-    if len(dyn) == 0:
-        raise ValueError("沒有任何有質量的自由DOF: 請用 Section.rho 或 add_mass() 給結構質量, "
-                         "且質量不能全部落在被支承拘束的DOF上。")
     if len(mless):
         if np.abs(C_full[np.ix_(mless, dyn)]).max() > 0 or np.abs(C_full[np.ix_(mless, mless)]).max() > 0 \
                 or np.abs(C_full[np.ix_(dyn, mless)]).max() > 0:
             raise ValueError("damping_matrix在無質量自由度上有非零項: 目前的靜力凝縮假設無質量"
                              "DOF是純代數約束(不含阻尼), 見 newmark.py 模組說明的 DAE 限制。")
-        Kdd, Kdm, Kmd, Kmm = K[np.ix_(dyn, dyn)], K[np.ix_(dyn, mless)], K[np.ix_(mless, dyn)], K[np.ix_(mless, mless)]
-        try:
-            Kmm_inv = np.linalg.inv(Kmm)
-        except np.linalg.LinAlgError:
-            raise ValueError("無質量DOF的勁度矩陣奇異, 無法做靜力凝縮: 結構可能有機構"
-                             "(例如某個節點只靠release端連接、沒有任何勁度)。請檢查模型。")
-        G = Kmm_inv @ Kmd                        # u_m = Kmm_inv @ (F_m - Kmd u_d) = -G u_d + Kmm_inv F_m
-        Keff = Kdd - Kdm @ G
-    else:
-        Keff = K[np.ix_(dyn, dyn)]
-        Kmm_inv = None
 
-    Mdd = M[np.ix_(dyn, dyn)]
     Cdd = C_full[np.ix_(dyn, dyn)]
 
     u0_full = np.zeros(n) if initial_disp is None else np.array(initial_disp, dtype=float)
@@ -245,5 +286,5 @@ def newmark_integrate(frame, dt, n_steps, force=None, mass_kind='lumped', dampin
         a[:, mless] = -ad @ G.T
 
     return NewmarkResult(t=t, u=u, v=v, a=a, beta=beta, gamma=gamma, mass_kind=mass_kind, dyn_dofs=dyn,
-                         frame=frame, K=K, M=M, C=C_full, member_dofs=asm.member_dofs,
-                         member_T=asm.member_T, member_L=asm.member_L)
+                         frame=frame, K=K, M=M, C=C_full, member_dofs=cond.member_dofs,
+                         member_T=cond.member_T, member_L=cond.member_L)

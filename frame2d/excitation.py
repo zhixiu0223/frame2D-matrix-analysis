@@ -81,3 +81,49 @@ def force_series_from_pattern(spatial_vector, time_function):
     """組出 `newmark_integrate` 要的 force callable: F(t) = spatial_vector * time_function(t)。"""
     spatial_vector = np.asarray(spatial_vector, dtype=float)
     return lambda t: spatial_vector * time_function(t)
+
+
+def ground_motion_force(frame, direction, ag, mass_kind='lumped'):
+    """地面加速度輸入(動力分析 D5), 回傳等效地震力 callable P_eff(t) = -M r ag(t), 可以直接
+    傳給 `newmark.newmark_integrate(force=...)`。
+
+    direction: 'x' 或 'y', 地面運動的方向。ag: callable, ag(t) -> 純量地面加速度(單位跟模型
+        的加速度一致, 例如 m/s²; 如果你的地震歷程是用 g 的倍數記錄的, 記得先乘上重力加速度
+        常數再傳進來)。mass_kind: 跟後面呼叫 `newmark_integrate()` 用的要一樣('lumped' 或
+        'consistent')。
+
+    這個力天生就滿足 `newmark_integrate()` 「力不能直接施加在無質量DOF上」的要求, 不需要
+    另外檢查: 質量矩陣是半正定的, 對角線是0的DOF整列/整行必為0(半正定矩陣的性質), 所以
+    M @ r 在無質量DOF上自動是0。
+
+    只回傳「相對」運動方程式的力(標準做法); 積分完的 `NewmarkResult.u/v/a` 都是相對於地面的
+    相對值。要重建絕對加速度(例如算樓層反應譜、或設備的加速度需求), 用
+    `absolute_acceleration()`。
+    """
+    if direction not in ('x', 'y'):
+        raise ValueError(f"direction必須是'x'或'y', 收到'{direction}'")
+    from .mass import assemble_M, influence_vector
+    M = assemble_M(frame, mass_kind)          # 同時做動力分析的模型檢查
+    r = influence_vector(frame, direction)
+    Mr = M @ r
+    return lambda t: -Mr * ag(t)
+
+
+def absolute_acceleration(result, direction, ag):
+    """把 `newmark_integrate()` 算出來的相對加速度轉成絕對加速度: a_abs(t) = a_rel(t) + r·ag(t)。
+    只有在做地震輸入(`ground_motion_force()`)時才有意義; 一般外力(諧和力、脈衝力等)不要用
+    這個函式, 因為那種情況下 a_rel 本來就是絕對加速度, 沒有「地面也在動」這件事。
+
+    result: `newmark.newmark_integrate()` 的回傳值。direction: 'x'或'y', 要跟算 result 時用
+    的 `ground_motion_force()` 方向一致。ag: 跟算 result 時用的同一個地面加速度函式。
+
+    回傳 (n_steps+1, n_dof) 陣列, 每個節點在該方向的分量是 a_rel + ag(t); 其他方向的分量
+    (跟輸入方向垂直的平動、轉角)不受地面運動影響, 直接等於相對加速度(因為影響向量 r 在那些
+    分量上是0)。
+    """
+    if direction not in ('x', 'y'):
+        raise ValueError(f"direction必須是'x'或'y', 收到'{direction}'")
+    from .mass import influence_vector
+    r = influence_vector(result.frame, direction)
+    ag_series = np.array([ag(tt) for tt in result.t])
+    return result.a + np.outer(ag_series, r)

@@ -48,8 +48,13 @@
   (Newmark-β, 預設平均加速度法), 搭配 `frame2d.excitation` 的諧和/階躍/脈衝/斜坡力時間函式。
   無質量自由度自動靜力凝縮。對 OpenSeesPy 驗證過(無阻尼、從靜止開始受力)到機器精度。範例:
   `PYTHONPATH=. python examples/newmark_portal_demo.py`
-- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、Rayleigh 阻尼(自訂阻尼矩陣要自己組)、
-  非線性時程(遲滯塑鉸目前只接到準靜態反覆載重, 還沒接到 Newmark)
+- **Rayleigh 阻尼 + 地震輸入**: `frame2d.damping.rayleigh_damping_matrix(frame, wi, wj, zeta)`
+  (建立在凝縮後的系統上, 直接可傳給 `newmark_integrate`)、`frame2d.excitation.
+  ground_motion_force(frame, direction, ag)`(等效地震力)、`absolute_acceleration()`(重建
+  絕對加速度)。對 OpenSeesPy 驗證過(SDOF, 到機器精度); MDOF 用獨立模態投影驗證。範例:
+  `PYTHONPATH=. python examples/damping_ground_motion_portal_demo.py`
+- **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、非線性時程(遲滯塑鉸目前只接到準靜態
+  反覆載重, 還沒接到 Newmark)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
 
 ## 結構
@@ -66,8 +71,11 @@ frame2d/
   cyclic.py        — CyclicHingeState + run_cyclic(): 循環塑鉸與反覆載重(遲滯迴圈)
   spectrum.py      — response_spectrum(): 反應譜分析(SRSS/CQC模態組合); taiwan_code_spectrum/
                      custom_spectrum/spectrum_analysis/rsa_to_dict(): 網頁用的反應譜adapter與入口
-  newmark.py       — newmark_integrate(): 線性時程分析(Newmark-β, 無質量DOF自動靜力凝縮)
-  excitation.py    — 外力時間歷程小工具: 空間力型態 × 時間函式(諧和/階躍/脈衝/斜坡)
+  newmark.py       — newmark_integrate(): 線性時程分析(Newmark-β, 無質量DOF自動靜力凝縮);
+                     condense_for_dynamics(): 共用的DOF分類與靜力凝縮(damping.py也用這個)
+  excitation.py    — 外力時間歷程小工具: 空間力型態 × 時間函式(諧和/階躍/脈衝/斜坡); 
+                     ground_motion_force()/absolute_acceleration(): 地震輸入
+  damping.py       — rayleigh_damping_matrix(): Rayleigh阻尼(建立在凝縮後的K_eff上)
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力
