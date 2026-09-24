@@ -373,6 +373,7 @@
       <label class="snapLabel">地震歷程來源<select id="sm_gm_type" style="width:6rem;">
         <option value="pulse">衰減脈衝</option>
         <option value="custom">自訂</option>
+        <option value="peer_nga">PEER NGA檔</option>
       </select></label>
       <div id="sm_pulse_panel">
         <label class="snapLabel">峰值加速度(g)<input id="sm_pulse_amp" type="number" min="0" step="any" value="0.5" style="width:4.5rem;"></label>
@@ -384,6 +385,13 @@
         <p class="hint" style="margin:0.3rem 0;">時間-地面加速度資料點(至少2點, 單位 g, 分段線性內插, 順序不拘會自動排序)。</p>
         <table id="sm_points_table" style="width:auto;"><thead><tr><th>時間 t(s)</th><th>a<sub>g</sub>(g)</th><th></th></tr></thead><tbody></tbody></table>
         <button id="sm_pt_add" type="button" style="margin-top:0.3rem;">➕ 新增一點</button>
+      </div>
+      <div id="sm_peer_nga_panel" style="display:none;">
+        <label class="snapLabel" style="cursor:pointer;background:#e2e8f0;padding:0.35rem 0.6rem;border-radius:0.3rem;">
+          📂 選擇 .AT2 檔案<input id="sm_peer_nga_file" type="file" accept=".at2,.AT2,text/plain" style="display:none;">
+        </label>
+        <span id="sm_peer_nga_status" class="hint" style="margin-left:0.5rem;">尚未選擇檔案</span>
+        <p class="hint" style="margin:0.3rem 0 0;">PEER NGA(太平洋地震工程研究中心強震資料庫)的 .AT2 格式真實強震紀錄。點數多時(常見上萬點)會先均勻抽稀到 2000 點以內再送出分析, 頭尾保留。</p>
       </div>
       <p class="hint" style="margin:0.4rem 0 0;">非線性地震反應分析建立在 D6(Newmark+循環塑鉸)上, 需要桿件設定塑鉸容量 Mp(跟Pushover/循環一樣)與質量(斷面密度ρ、節點質量)。準靜態小位移, 不含P-Delta。動態擾動一律從靜止開始(相對重力預載後的平衡狀態); Rayleigh阻尼矩陣是常數, 不隨降伏改變。步數上限4000, 太多請加大Δt或縮短總時間。</p>
     </div>
@@ -699,6 +707,7 @@ let rsaResult = null;       // /rsa 的回傳(反應譜分析結果)
 let rsaCustomPoints = [[0.1, 9.80665], [0.5, 9.80665]];   // 自訂反應譜的(T,Sa)點, T=s, Sa=SI(m/s²); 初始值=1g, 不能在這裡呼叫toSI()(UNIT_FACTORS還沒定義)
 let seismicResult = null;       // /nonlinear_seismic 的回傳(非線性地震反應結果)
 let seismicCustomPoints = [[0.0, 0.0], [0.5, 0.3]];   // 自訂地震歷程的(t,ag)點, t=s, ag=g的倍數
+let seismicPeerNgaText = null;   // 使用者上傳的 PEER NGA .AT2 檔案文字內容(尚未選檔時是null)
 let seismicFrameIndex = 0;      // 目前播放到第幾個動畫影格(索引到 seismicResult.frames)
 let seismicPlaying = false;
 let seismicPlayTimer = null;
@@ -5281,9 +5290,22 @@ document.getElementById('sm_pt_add').addEventListener('click', () => {
 });
 renderSeismicPointsTable();
 document.getElementById('sm_gm_type').addEventListener('change', (e) => {
-  const isPulse = e.target.value === 'pulse';
-  document.getElementById('sm_pulse_panel').style.display = isPulse ? 'block' : 'none';
-  document.getElementById('sm_custom_panel').style.display = isPulse ? 'none' : 'block';
+  const v = e.target.value;
+  document.getElementById('sm_pulse_panel').style.display = v === 'pulse' ? 'block' : 'none';
+  document.getElementById('sm_custom_panel').style.display = v === 'custom' ? 'block' : 'none';
+  document.getElementById('sm_peer_nga_panel').style.display = v === 'peer_nga' ? 'block' : 'none';
+});
+document.getElementById('sm_peer_nga_file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    seismicPeerNgaText = reader.result;
+    document.getElementById('sm_peer_nga_status').textContent = `已選擇 ${file.name}(${(file.size / 1024).toFixed(1)} KB)`;
+  };
+  reader.onerror = () => { setStatus('讀取檔案失敗: ' + reader.error.message); };
+  reader.readAsText(file);
+  e.target.value = '';
 });
 
 function buildSeismicPayload() {
@@ -5325,12 +5347,15 @@ function buildSeismicPayload() {
     if (!(freq > 0)) { setStatus('頻率必須是正數'); return null; }
     if (!(decay >= 0)) { setStatus('衰減係數必須是不小於0的數字'); return null; }
     body.seismic_pulse_amplitude_g = amp; body.seismic_pulse_freq_hz = freq; body.seismic_pulse_decay = decay;
-  } else {
+  } else if (gmType === 'custom') {
     if (seismicCustomPoints.length < 2) { setStatus('自訂地震歷程至少需要 2 個資料點'); return null; }
     if (seismicCustomPoints.some(pt => !Number.isFinite(pt[0]) || pt[0] < 0 || !Number.isFinite(pt[1]))) {
       setStatus('自訂地震歷程的時間必須是不小於0的數字、加速度必須是數字'); return null;
     }
     body.seismic_custom_points_g = seismicCustomPoints;
+  } else {
+    if (!seismicPeerNgaText) { setStatus('請先選擇一個 PEER NGA .AT2 檔案'); return null; }
+    body.seismic_peer_nga_text = seismicPeerNgaText;
   }
   return body;
 }

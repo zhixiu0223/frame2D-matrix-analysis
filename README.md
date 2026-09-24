@@ -62,9 +62,12 @@
   zeta=0.05)`, 把模態/Rayleigh阻尼/地震輸入/非線性時程/選用的重力預載串成一次呼叫, 附
   `peak_displacement()`/`peak_drift_ratio()`/`absolute_acceleration()`/`energy_balance()`。
   範例: `PYTHONPATH=. python examples/seismic_analysis_demo.py`
-  網頁版: 選「非線性地震」, 設定控制節點/阻尼比/Rayleigh模態, 選地震歷程(衰減脈衝或自訂),
-  Solve 後看地震動畫(播放/暫停/滑桿)、時程圖、遲滯迴圈、塑鉸M-θp圖; 範例模型
-  `examples/portal_seismic_demo.json`
+  網頁版: 選「非線性地震」, 設定控制節點/阻尼比/Rayleigh模態, 選地震歷程(衰減脈衝/自訂/
+  PEER NGA .AT2真實紀錄上傳), Solve 後看地震動畫(播放/暫停/滑桿)、時程圖、遲滯迴圈、
+  塑鉸M-θp圖; 範例模型 `examples/portal_seismic_demo.json`
+- **真實地震紀錄**: `frame2d.ground_motion_io.parse_peer_nga()`/`peer_nga_to_points()` 讀取
+  PEER NGA .AT2 格式(對排版差異有容錯), 接上 `custom_ground_motion()` 就能用在
+  `seismic_analysis()` 或網頁版
 - **尚未支援**: 勁度/強度劣化與捏縮、挫屈臨界載重偵測、P-Delta/corotational 幾何非線性下的
   時程分析(D6/D8 都是小位移)
   (規劃見 [ROADMAP.md](ROADMAP.md)「動力分析路線」)
@@ -94,6 +97,8 @@ frame2d/
                      +非線性時程+選用重力預載), 附能量平衡/峰值反應/絕對加速度便利方法;
                      sine_pulse_ground_motion/custom_ground_motion/nonlinear_seismic_web_
                      analysis/seismic_to_dict: 網頁用的地震歷程adapter與入口(含動畫抽稀)
+  ground_motion_io.py — parse_peer_nga()/peer_nga_to_points(): 讀取真實強震紀錄(PEER NGA
+                     .AT2格式, 對排版差異容錯), 接上custom_ground_motion()使用
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

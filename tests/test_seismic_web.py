@@ -136,6 +136,32 @@ assert len(d_small['frames']) == 21, "步數不多時不需要抽稀, 應該是�
 print(f"  小案例(21步): frame_idx 長度 = {len(d_small['frames'])}(不抽稀)")
 
 # ------------------------------------------------------------------
+print("=== 層3b: ground_motion_type='peer_nga' ===")
+from frame2d.ground_motion_io import peer_nga_to_points
+
+dt_gm, n_gm = 0.02, 250
+t_gm = np.arange(n_gm) * dt_gm
+vals_gm = (0.4 * np.sin(2 * np.pi * 1.2 * t_gm) * np.exp(-0.15 * t_gm)).round(6)
+lines = ["SYNTHETIC EQ", "STATION X", "ACCELERATION TIME HISTORY IN UNITS OF G", f"NPTS={n_gm}, DT={dt_gm} SEC"]
+for i in range(0, n_gm, 5):
+    lines.append(" ".join(f"{v:.6f}" for v in vals_gm[i:i + 5]))
+peer_text = "\n".join(lines) + "\n"
+
+pkg_p = nonlinear_seismic_web_analysis(portal(), control_node=1, direction='x', zeta=0.05,
+                                       ground_motion_type='peer_nga', peer_nga_text=peer_text, dt=0.01, n_steps=1200)
+d_p = json.loads(json.dumps(seismic_to_dict(pkg_p), allow_nan=False))
+
+f_pref = portal()
+from frame2d.seismic import custom_ground_motion
+ag_pref = custom_ground_motion(peer_nga_to_points(peer_text))
+res_pref = seismic_analysis(f_pref, ag_pref, direction='x', zeta=0.05, dt=0.01, n_steps=1200)
+assert abs(d_p['peak_displacement'] - res_pref.peak_displacement(1, 'x')) < 1e-9 * res_pref.peak_displacement(1, 'x')
+print(f"  peer_nga地震歷程: /nonlinear_seismic核心與獨立走custom_ground_motion(peer_nga_to_points(...))的路徑逐項相同")
+
+expect_err("peer_nga缺文字", lambda: nonlinear_seismic_web_analysis(portal(), 1, ground_motion_type='peer_nga', dt=0.01, n_steps=10))
+expect_err("peer_nga格式錯誤(找不到NPTS/DT)", lambda: nonlinear_seismic_web_analysis(
+    portal(), 1, ground_motion_type='peer_nga', peer_nga_text='no header here', dt=0.01, n_steps=10))
+
 print("=== 層4: 明確拒絕 ===")
 expect_err("ground_motion_type打錯", lambda: nonlinear_seismic_web_analysis(portal(), 1, ground_motion_type='bogus'))
 expect_err("pulse缺參數", lambda: nonlinear_seismic_web_analysis(portal(), 1, ground_motion_type='pulse'))

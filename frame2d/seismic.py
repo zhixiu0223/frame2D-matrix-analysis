@@ -222,12 +222,16 @@ def nonlinear_seismic_web_analysis(frame, control_node, direction='x', dt=None, 
                                    zeta=0.05, damping_modes=(0, 2), mass_kind='lumped',
                                    apply_gravity_loads=True, ground_motion_type='pulse',
                                    pulse_amplitude_g=None, pulse_freq_hz=None, pulse_decay=0.0,
-                                   custom_points_g=None, max_frames=400) -> SeismicWebResult:
+                                   custom_points_g=None, peer_nga_text=None,
+                                   peer_nga_max_points=2000, max_frames=400) -> SeismicWebResult:
     """網頁 /nonlinear_seismic 端點用的一站式入口: 建地震歷程 callable → `seismic_analysis()`
     → 取樣動畫用的時間索引(全部時間步太多時, 均勻抽稀到最多 max_frames 個, 首尾一定保留)。
 
     control_node: 動畫/時間歷程圖表要追蹤的節點(通常是頂層節點)。
-    ground_motion_type: 'pulse'(`sine_pulse_ground_motion`)或 'custom'(`custom_ground_motion`)。
+    ground_motion_type: 'pulse'(`sine_pulse_ground_motion`)、'custom'(`custom_ground_motion`)、
+        或 'peer_nga'(讀取 PEER NGA .AT2 格式的真實強震紀錄文字, 見
+        `ground_motion_io.peer_nga_to_points()`; `peer_nga_max_points` 是抽稀上限, 真實紀錄
+        常有上萬個取樣點, 直接全部塞進網頁傳輸不必要地肥大)。
     其餘參數見 `seismic_analysis()`。
     """
     if ground_motion_type == 'pulse':
@@ -238,8 +242,13 @@ def nonlinear_seismic_web_analysis(frame, control_node, direction='x', dt=None, 
         if not custom_points_g:
             raise ValueError("ground_motion_type='custom' 需要指定 custom_points_g(至少2個(t, ag)點)")
         ag = custom_ground_motion(custom_points_g)
+    elif ground_motion_type == 'peer_nga':
+        if not peer_nga_text:
+            raise ValueError("ground_motion_type='peer_nga' 需要指定 peer_nga_text(.AT2檔案的文字內容)")
+        from .ground_motion_io import peer_nga_to_points
+        ag = custom_ground_motion(peer_nga_to_points(peer_nga_text, max_points=peer_nga_max_points))
     else:
-        raise ValueError(f"ground_motion_type必須是'pulse'或'custom', 收到'{ground_motion_type}'")
+        raise ValueError(f"ground_motion_type必須是'pulse'、'custom'或'peer_nga', 收到'{ground_motion_type}'")
 
     if dt is not None and n_steps is not None and n_steps > MAX_WEB_STEPS:
         raise ValueError(f"n_steps={n_steps} 超過網頁上限 {MAX_WEB_STEPS}: 請加大 dt 或縮短總時間。")

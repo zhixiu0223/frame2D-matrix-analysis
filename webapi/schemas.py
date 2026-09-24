@@ -209,6 +209,10 @@ class FrameIn(BaseModel):
     seismic_pulse_decay: float = 0.0
     seismic_custom_points_g: Optional[List[List[float]]] = None
     """自訂地震歷程用: [[t(s), ag(g的倍數)], ...], 至少2點。"""
+    seismic_peer_nga_text: Optional[str] = None
+    """真實地震紀錄用: PEER NGA .AT2 格式的檔案完整文字內容。"""
+    seismic_peer_nga_max_points: int = 2000
+    """PEER NGA紀錄常有上萬個取樣點, 傳輸/內插用的抽稀上限(均勻抽稀, 頭尾保留)。"""
 
     modal_n_modes: Optional[int] = None
     """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""

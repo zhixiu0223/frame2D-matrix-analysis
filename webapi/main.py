@@ -477,7 +477,8 @@ def nonlinear_seismic_endpoint(payload: FrameIn):
             apply_gravity_loads=payload.seismic_apply_gravity_loads,
             ground_motion_type=payload.seismic_ground_motion_type,
             pulse_amplitude_g=payload.seismic_pulse_amplitude_g, pulse_freq_hz=payload.seismic_pulse_freq_hz,
-            pulse_decay=payload.seismic_pulse_decay, custom_points_g=payload.seismic_custom_points_g)
+            pulse_decay=payload.seismic_pulse_decay, custom_points_g=payload.seismic_custom_points_g,
+            peer_nga_text=payload.seismic_peer_nga_text, peer_nga_max_points=payload.seismic_peer_nga_max_points)
     except KeyError as e:
         raise HTTPException(
             status_code=400,

@@ -253,6 +253,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D7b | 網頁: 「循環」分析、遲滯迴圈圖、塑鉸 M-θp 圖、每級耗能與等效阻尼比 | webapi | ✅ |
 | D8 | 非線性地震反應一站式入口 + 能量平衡診斷 | `seismic.py` | ✅ |
 | D6b | 網頁: 非線性地震反應(選地震歷程、地震動畫播放、時程/遲滯迴圈/塑鉸M-θp圖) | webapi | ✅ |
+| D9 | 真實地震紀錄支援(PEER NGA .AT2格式) | `ground_motion_io.py` | ✅ |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
 
@@ -761,4 +762,48 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   (不是精確的Hermite三次曲線); 沒有動畫匯出(GIF/影片)、沒有PDF匯出; 繼承 D6/D8 的所有限制
   (準靜態小位移、無勁度/強度劣化、常數阻尼矩陣); 「有效慣性力合力」不是嚴格的基底反力
   (nonlinear_newmark沒有算反力), 前端文案已經明確標註這件事, 不叫「基底剪力」
+
+#### D9 真實地震紀錄支援(PEER NGA) ✅ 已完成
+
+- 新增 `frame2d/ground_motion_io.py`: `parse_peer_nga(text)` 解析 PEER NGA(太平洋地震工程
+  研究中心強震資料庫)的 .AT2 文字格式, 回傳 (dt, 加速度陣列[g])。**這個檔案只負責讀檔解析,
+  不含任何新的求解邏輯**——解析結果接上 D5 已經驗證過的 `custom_ground_motion()`, 就能餵進
+  D6/D8/D6b 整條非線性地震反應管線
+- **格式容錯設計**: 不同資料庫/工具匯出的 .AT2 檔案在「每行幾筆數值」「有沒有逗號分隔」
+  「NPTS/DT那行結尾有沒有"SEC"字樣」這些地方常有差異。解析器不假設固定的每行筆數或欄寬,
+  只用正規表示式找出 NPTS/DT 那一行, 之後把剩下所有文字直接依空白切開轉成浮點數, 取前 NPTS
+  個——對這類格式差異有容錯能力, 同一份測試套件驗證過 4 種排版變體都能正確解析
+  (`tests/test_ground_motion_io.py`)
+- `peer_nga_to_points(text, max_points=None)`: 轉成 `custom_ground_motion()` 要的
+  `[(t, ag_g), ...]` 點列表, `max_points` 選用抽稀(真實強震紀錄常有上萬個取樣點, 網頁
+  傳輸/內插不必要地肥大時用, 均勻覆蓋、頭尾保留)
+- `seismic.nonlinear_seismic_web_analysis()` 新增 `ground_motion_type='peer_nga'`
+  (`peer_nga_text`=檔案文字內容, `peer_nga_max_points`=抽稀上限預設2000), 網頁後端
+  `/nonlinear_seismic` 新增對應欄位(`seismic_peer_nga_text`/`seismic_peer_nga_max_points`)
+- 前端: D6b 的「非線性地震」設定列, 地震歷程來源多一個「PEER NGA檔」選項, 用瀏覽器檔案選取
+  (跟既有的「匯入JSON」同一種 FileReader 讀檔模式)讀取 .AT2 檔案文字內容, 送給後端解析
+  (不在前端重新實作解析邏輯, 維持解析只有 Python 這一份實作)
+- 驗證:
+  - `tests/test_ground_motion_io.py`(只依賴 numpy): 標準格式逐點比對; 4種格式變體(每行
+    8筆/沒有逗號/沒有SEC字樣/每行1筆)都能正確解析; `peer_nga_to_points()` 的 t=i·dt 逐點
+    驗證、抽稀頭尾保留、原始點數不夠時不抽稀; 明確拒絕(找不到NPTS/DT、NPTS或DT不是正數、
+    數值筆數不夠)。突變檢查 4 個, 一開始只抓到 3 個——「取數值時多取1個」這個 off-by-one
+    錯誤在乾淨的測試資料(檔案剛好只有NPTS個數值, 沒有多的可以誤取)下完全沒有影響, 加一個
+    「檔案末尾多一個數值」的案例才抓到
+  - `tests/test_seismic_web.py`/`tests/test_web_seismic_api.py`: `nonlinear_seismic_web_
+    analysis(ground_motion_type='peer_nga')` 對照「獨立呼叫 `custom_ground_motion(
+    peer_nga_to_points(...))` 再接 `seismic_analysis()`」的路徑逐項相同; stdlib/FastAPI
+    兩後端一致; 明確拒絕(缺文字、格式錯誤)
+  - `tests/web/seismic_e2e.js`(選用, 需要 node + jsdom): 上傳一個合成的 .AT2 檔案(用
+    `File`+`FileReader`, 跟「匯入JSON」同一套 jsdom 模擬方式), 確認讀到的內容跟原始文字
+    完全一致、送出分析成功。突變檢查 3 個(payload漏送文字、面板切換沒隱藏、沒選檔案時
+    驗證被拿掉)全部被抓到
+  - 另外把網頁實際跑出來的地震時程圖轉成圖片肉眼確認: 上傳的合成紀錄(8秒長)確實驅動了
+    結構反應, 分析時長(預設約10秒, 比紀錄本身長)超出紀錄範圍後正確夾在最後一個值(不是
+    外插到0或報錯), 這是 `custom_ground_motion()` 文件裡已經講清楚的行為, 不是bug
+- **限制(誠實)**: 只支援 PEER NGA .AT2 格式(業界最常見的公開格式之一, 但不是唯一格式,
+  例如日本 K-NET/KiK-net、歐洲 ESM 資料庫用不同格式, 目前不支援); 假設檔案裡的加速度單位
+  是 g(PEER NGA 慣例上就是, 但不會主動驗證檔案內容是否真的符合這個慣例); 沒有自動判斷
+  南北/東西分量或多分量檔案的邏輯(.AT2 檔案本身通常已經是單一分量, 這符合這裡的雙向水平
+  分析假設)
 

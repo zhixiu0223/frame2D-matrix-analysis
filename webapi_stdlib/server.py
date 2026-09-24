@@ -379,7 +379,9 @@ def _nonlinear_seismic_payload(payload: dict) -> dict:
             ground_motion_type=payload.get("seismic_ground_motion_type", "pulse"),
             pulse_amplitude_g=payload.get("seismic_pulse_amplitude_g"),
             pulse_freq_hz=payload.get("seismic_pulse_freq_hz"), pulse_decay=payload.get("seismic_pulse_decay", 0.0),
-            custom_points_g=payload.get("seismic_custom_points_g"))
+            custom_points_g=payload.get("seismic_custom_points_g"),
+            peer_nga_text=payload.get("seismic_peer_nga_text"),
+            peer_nga_max_points=payload.get("seismic_peer_nga_max_points", 2000))
     except KeyError as e:
         raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
     return seismic_to_dict(pkg)

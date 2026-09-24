@@ -169,6 +169,34 @@ async function waitFor(fn, what, ms = 20000) {
   assert(prows[0].querySelector('button').disabled, '只剩 2 點時刪除按鈕應該停用');
   console.log('自訂地震歷程: 新增/刪除資料點 OK(下限2點時刪除鈕停用)');
 
+  // ---- PEER NGA 檔案上傳 ----
+  $('sm_gm_type').value = 'peer_nga'; $('sm_gm_type').dispatchEvent(new w.Event('change'));
+  assert($('sm_peer_nga_panel').style.display !== 'none' && $('sm_custom_panel').style.display === 'none', '應切到PEER NGA面板');
+  assert($('sm_peer_nga_status').textContent.includes('尚未選擇'), '初始應顯示尚未選擇檔案');
+  $('btnSolve').click(); await sleep(50);
+  assert($('status').textContent.includes('請先選擇一個'), '沒選檔案時應該被前端擋下: ' + $('status').textContent);
+  const dtGm = 0.02, nGm = 150;
+  const linesGm = ['SYNTHETIC EQ FOR E2E TEST', 'STATION Y', 'ACCELERATION TIME HISTORY IN UNITS OF G', `NPTS=${nGm}, DT=${dtGm} SEC`];
+  for (let i = 0; i < nGm; i += 5) {
+    const row = [];
+    for (let k = i; k < Math.min(i + 5, nGm); k++) {
+      const t = k * dtGm;
+      row.push((0.3 * Math.sin(2 * Math.PI * 1.0 * t) * Math.exp(-0.1 * t)).toFixed(6));
+    }
+    linesGm.push(row.join(' '));
+  }
+  const at2Text = linesGm.join('\n') + '\n';
+  const at2File = new w.File([at2Text], 'synthetic.AT2', {type: 'text/plain'});
+  Object.defineProperty($('sm_peer_nga_file'), 'files', {value: [at2File], configurable: true});
+  $('sm_peer_nga_file').dispatchEvent(new w.Event('change'));
+  await sleep(100);
+  assert($('sm_peer_nga_status').textContent.includes('synthetic.AT2'), '應該顯示已選擇的檔名: ' + $('sm_peer_nga_status').textContent);
+  assert(ev(`seismicPeerNgaText`) === at2Text, '讀到的檔案內容應該跟原始文字完全一致');
+  $('sm_dt').value = '0.01'; $('sm_nsteps').value = '600';
+  $('btnSolve').click();
+  await waitFor(() => $('status').textContent.includes('非線性地震反應分析完成') && ev(`seismicResult.n_steps`) === 600, 'PEER NGA地震歷程結果');
+  console.log('PEER NGA檔案上傳: 讀檔、送出分析、Solve成功 OK');
+
   // ---- 後端錯誤: 拿掉塑鉸容量 -> 清楚訊息, 舊結果不被破壞 ----
   const backup = ev(`JSON.stringify(model.members)`);
   ev(`model.members.forEach(m => { m.Mp_i = null; m.Mp_j = null; });`);
@@ -178,7 +206,8 @@ async function waitFor(fn, what, ms = 20000) {
   $('btnSolve').click();
   await waitFor(() => $('status').textContent.includes('非線性地震反應分析失敗'), '錯誤訊息');
   assert($('status').textContent.includes('塑鉸容量'), '應說明沒有塑鉸容量: ' + $('status').textContent);
-  assert(ev(`seismicResult.n_steps`) === r.n_steps, '失敗時不應清掉上一次的結果');
+  const nStepsBeforeFailure = ev(`seismicResult.n_steps`);   // PEER NGA那次求解之後seismicResult已經更新過, 不能再拿最早的r比對
+  assert(nStepsBeforeFailure === 600, '失敗時不應清掉上一次(PEER NGA)的結果');
   console.log('沒有塑鉸容量: 顯示清楚訊息 OK ->', $('status').textContent.slice(0, 50));
   ev(`model.members = ${backup};`);
 

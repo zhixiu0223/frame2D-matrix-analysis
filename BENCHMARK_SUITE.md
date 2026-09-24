@@ -218,3 +218,4 @@ offset要用有意義的長度(建議>=桿長的1%), 不要用極小值逼近端
 | `test_seismic_web.py` | 網頁非線性地震核心: sine_pulse/custom地震歷程公式、nonlinear_seismic_web_analysis與seismic_to_dict跟核心逐項一致、動畫抽稀(動力 D6b) |
 | `test_web_seismic_api.py` | 網頁後端 `/nonlinear_seismic`: stdlib 與 FastAPI 回傳一致、對核心逐項相同、各種錯誤訊息 |
 | `test_web_seismic_e2e.py` | 網頁端到端(選用, 需 node+jsdom): 匯入範例模型→選「非線性地震」→Solve→地震動畫播放/時程圖/遲滯迴圈/塑鉸圖(含變形放大倍率數值比對)→單位切換→自訂地震歷程→錯誤訊息 |
+| `test_ground_motion_io.py` | PEER NGA .AT2格式解析: 標準格式、4種格式容錯變體、peer_nga_to_points抽稀、明確拒絕(D9真實地震紀錄支援) |

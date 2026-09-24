@@ -65,7 +65,9 @@ def core_expected(payload):
         apply_gravity_loads=payload.get("seismic_apply_gravity_loads", True),
         ground_motion_type=payload["seismic_ground_motion_type"],
         pulse_amplitude_g=payload.get("seismic_pulse_amplitude_g"), pulse_freq_hz=payload.get("seismic_pulse_freq_hz"),
-        pulse_decay=payload.get("seismic_pulse_decay", 0.0), custom_points_g=payload.get("seismic_custom_points_g"))
+        pulse_decay=payload.get("seismic_pulse_decay", 0.0), custom_points_g=payload.get("seismic_custom_points_g"),
+        peer_nga_text=payload.get("seismic_peer_nga_text"),
+        peer_nga_max_points=payload.get("seismic_peer_nga_max_points", 2000))
     return seismic_to_dict(pkg)
 
 
@@ -118,6 +120,25 @@ def main():
         base_payload(seismic_dt=1e-5, seismic_n_steps=5000)), "上限")
     expect_error("找不到控制節點", lambda: _nonlinear_seismic_payload(base_payload(seismic_control_node=99)),
                 "找不到控制節點")
+
+    print("=== (1b) stdlib 後端: peer_nga 地震歷程 ===")
+    dt_gm, n_gm = 0.02, 200
+    lines = ["SYNTHETIC EQ", "STATION X", "ACCELERATION TIME HISTORY IN UNITS OF G", f"NPTS={n_gm}, DT={dt_gm} SEC"]
+    import math
+    vals_gm = [round(0.3 * math.sin(2 * math.pi * 1.0 * i * dt_gm) * math.exp(-0.1 * i * dt_gm), 6) for i in range(n_gm)]
+    for i in range(0, n_gm, 5):
+        lines.append(" ".join(f"{v:.6f}" for v in vals_gm[i:i + 5]))
+    peer_text = "\n".join(lines) + "\n"
+    peer_payload = base_payload(seismic_ground_motion_type="peer_nga", seismic_pulse_amplitude_g=None,
+                                seismic_pulse_freq_hz=None, seismic_peer_nga_text=peer_text,
+                                seismic_dt=0.01, seismic_n_steps=1000)
+    out_p = _nonlinear_seismic_payload(peer_payload)
+    want_p = core_expected(peer_payload)
+    assert json.loads(json.dumps(out_p, allow_nan=False)) == json.loads(json.dumps(want_p))
+    print(f"  peer_nga地震歷程: /nonlinear_seismic 與核心逐項相同, n_steps={out_p['n_steps']}")
+    expect_error("peer_nga缺文字", lambda: _nonlinear_seismic_payload(base_payload(
+        seismic_ground_motion_type="peer_nga", seismic_pulse_amplitude_g=None, seismic_pulse_freq_hz=None)),
+                "peer_nga_text")
 
     print("=== (2) FastAPI 後端 ===")
     try:

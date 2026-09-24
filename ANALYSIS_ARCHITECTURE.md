@@ -67,6 +67,7 @@ pushover 的線性 P-Delta 求解函式(`solve_pdelta()`),目前**還沒**
 | `nonlinear_newmark_integrate()` | frame2d/nonlinear_newmark.py | 塑鉸(雙線性運動硬化) | 線性(小位移) | Newmark-β + event-to-event(力控制, 精確解不是Newton疊代) | **驗證過**: 彈性極限對線性Newmark、能量平衡、對D7 run_pushover(第一個降伏事件)、對OpenSeesPy(SDOF)到機器精度; MDOF對OpenSeesPy未完全對上(已記錄), 改用能量平衡+run_pushover撐住 |
 | `seismic_analysis()` | frame2d/seismic.py | 塑鉸(雙線性運動硬化) | 線性(小位移) | 一站式入口, 不含新求解邏輯, 呼叫D2/D5/D6/D7 | **驗證過**: 能量平衡(無/有重力預載)、對手動組裝D2/D5/D6逐項相同、Rayleigh阻尼比對全部模態; 不重複做OpenSeesPy交叉驗證(底層元件已在D5/D6驗證過, 這裡只驗證組裝本身) |
 | 網頁 `/nonlinear_seismic` | webapi | 同`seismic_analysis()` | 同`seismic_analysis()` | 一站式入口+動畫幀抽稀 | **驗證過**: 對核心`seismic_analysis()`逐項相同(含JSON化後能量平衡)、兩後端一致、e2e測試(動畫/時程/遲滯迴圈/塑鉸圖)含變形放大倍率數值比對 |
+| `parse_peer_nga()`/`peer_nga_to_points()` | frame2d/ground_motion_io.py | 不含求解邏輯(讀檔解析) | 不適用 | 正規表示式找NPTS/DT行+空白切詞, 對排版差異容錯 | **驗證過**: 標準格式逐點比對、4種格式變體、peer_nga_to_points抽稀、對nonlinear_seismic_web_analysis的整合路徑一致 |
 
 ## 已經做到的「分層」證據(不是理想化的說法, 有程式碼可以查)
 
