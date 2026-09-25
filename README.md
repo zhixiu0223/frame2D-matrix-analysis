@@ -99,6 +99,10 @@ frame2d/
                      analysis/seismic_to_dict: 網頁用的地震歷程adapter與入口(含動畫抽稀)
   ground_motion_io.py — parse_peer_nga()/peer_nga_to_points(): 讀取真實強震紀錄(PEER NGA
                      .AT2格式, 對排版差異容錯), 接上custom_ground_motion()使用
+
+匯出: 網頁「匯出Markdown」現在支援全部分析類型(線性/P-Delta/Pushover/模態/反應譜/循環/
+非線性地震), 每份報告都包含完整輸入資料(讓拿到報告的人可以自己重建模型驗證結果), PEER NGA
+地震歷程會附完整原始檔案內容。PDF 匯出目前只支援線性/P-Delta/Pushover, 其餘四種規劃中
   hinge.py         — 塑性鉸狀態機 + 含鉸樑元素勁度
   pushover.py      — 遞增側推(位移/力控制、event-to-event、幾何更新、Picard疊代)
   corotational.py  — co-rotational 桿件運動學與內力

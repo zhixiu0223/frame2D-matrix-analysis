@@ -147,6 +147,26 @@ async function waitFor(fn, what, ms = 15000) {
   ev(`model.members = ${backup};`);
   console.log('沒有塑鉸容量: 顯示清楚訊息 OK ->', $('status').textContent.slice(0, 50));
 
+  // ---- 匯出 Markdown ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;
+      window.downloadBlob = (blob, name) => { window.__capturedBlob = blob; window.__capturedName = name; };`);
+  $('btnExportMd').click();
+  await sleep(50);
+  const exportName = ev(`window.__capturedName`);
+  assert(exportName && exportName.endsWith('.md'), '應該產生一個 .md 檔案: ' + exportName);
+  const mdText = await ev(`window.__capturedBlob.text()`);
+  assert(mdText.includes('# frame2d 循環(遲滯)分析結果'), '應該是循環分析報告的標題');
+  assert(mdText.includes('## 輸入資料'), '應該包含輸入資料段落(節點/斷面/桿件/塑鉸容量, 讓人可以重建模型)');
+  assert(mdText.includes('## 分析設定'), '應該包含控制節點/方向/位移幅值/圈數等分析設定');
+  const wantAmps = ev(`cyclicResult.amplitudes.length`);
+  assert(mdText.includes('位移幅值'), '應該記錄位移幅值');
+  const wantNPts = ev(`cyclicResult.u.length`);
+  const rowsMatch = mdText.match(/### 完整力-位移曲線[\s\S]*/);
+  assert(rowsMatch, '應該有完整力-位移曲線段落');
+  const nRows = (rowsMatch[0].match(/^\| \d+ \|/gm) || []).length;
+  assert(nRows === wantNPts, `完整曲線應該有 ${wantNPts} 列(逐點對照畫面上的迴圈), 實際 ${nRows}`);
+  console.log(`匯出 Markdown: 標題/輸入資料/分析設定/完整力-位移曲線(${nRows}點)都正確 OK`);
+
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`cyclicResult`) === null && $('btnViewCyclic').style.display === 'none' && $('btnViewCyclicHinge').style.display === 'none'

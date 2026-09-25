@@ -211,6 +211,25 @@ async function waitFor(fn, what, ms = 20000) {
   console.log('沒有塑鉸容量: 顯示清楚訊息 OK ->', $('status').textContent.slice(0, 50));
   ev(`model.members = ${backup};`);
 
+  // ---- 匯出 Markdown ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;
+      window.downloadBlob = (blob, name) => { window.__capturedBlob = blob; window.__capturedName = name; };`);
+  $('btnExportMd').click();
+  await sleep(50);
+  const exportName = ev(`window.__capturedName`);
+  assert(exportName && exportName.endsWith('.md'), '應該產生一個 .md 檔案: ' + exportName);
+  const mdText = await ev(`window.__capturedBlob.text()`);
+  assert(mdText.includes('# frame2d 非線性地震反應分析結果'), '應該是非線性地震報告的標題');
+  assert(mdText.includes('## 輸入資料'), '應該包含輸入資料段落(節點/斷面/桿件/塑鉸容量, 讓人可以重建模型)');
+  assert(mdText.match(/\| 1 \| 0 \| 4 \|/), '節點1的座標應該出現在輸入資料表格裡: ' + mdText.slice(0, 400));
+  assert(mdText.includes('地震歷程來源: PEER NGA .AT2 上傳檔案'), '應該記錄地震歷程來源是PEER NGA(最後一次成功求解用的那個)');
+  assert(mdText.includes('SYNTHETIC EQ FOR E2E TEST'), '應該包含完整的原始PEER NGA檔案內容, 讓人可以重新上傳重現同一段地震歷程');
+  assert(mdText.includes('尖峰位移'), '應該包含結果摘要');
+  assert(mdText.includes('能量平衡'), '應該包含能量平衡自我檢核(驗證結果最直接的方法)');
+  const wantSteps = ev(`seismicResult.n_steps`);
+  assert(mdText.includes(`總步數=${wantSteps}`), `分析設定段落應該記錄總步數=${wantSteps}: ` + mdText.slice(0, 800));
+  console.log('匯出 Markdown: 標題/輸入資料/塑鉸容量/地震歷程來源(含完整PEER NGA檔案內容)/結果/能量平衡都正確 OK');
+
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`seismicResult`) === null && $('btnViewSeisAnim').style.display === 'none'

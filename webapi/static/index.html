@@ -708,6 +708,10 @@ let rsaCustomPoints = [[0.1, 9.80665], [0.5, 9.80665]];   // 自訂反應譜的(
 let seismicResult = null;       // /nonlinear_seismic 的回傳(非線性地震反應結果)
 let seismicCustomPoints = [[0.0, 0.0], [0.5, 0.3]];   // 自訂地震歷程的(t,ag)點, t=s, ag=g的倍數
 let seismicPeerNgaText = null;   // 使用者上傳的 PEER NGA .AT2 檔案文字內容(尚未選檔時是null)
+// 每種分析實際送出去的payload(=model+分析參數), 專門給「匯出Markdown/PDF」用: 匯出時直接
+// 用這份、不是即時讀DOM/model, 這樣匯出的報告一定精確對應「畫面上顯示的這組結果」是怎麼
+// 算出來的, 就算使用者匯出前又動了模型或設定列也不會對不上。
+let lastModalPayload = null, lastRsaPayload = null, lastCyclicPayload = null, lastSeismicPayload = null;
 let seismicFrameIndex = 0;      // 目前播放到第幾個動畫影格(索引到 seismicResult.frames)
 let seismicPlaying = false;
 let seismicPlayTimer = null;
@@ -5238,6 +5242,7 @@ async function runRsaAnalysis() {
     });
     if (!res.ok) { setStatus('反應譜分析失敗: ' + await apiErrorMessage(res)); return; }
     rsaResult = await res.json();
+    lastRsaPayload = body;
     document.getElementById('btnViewRsa').style.display = '';
     const bar = document.getElementById('viewBar');
     if (!bar.classList.contains('open')) {
@@ -5514,6 +5519,7 @@ async function runSeismicAnalysis() {
     });
     if (!res.ok) { setStatus('非線性地震反應分析失敗: ' + await apiErrorMessage(res)); return; }
     seismicResult = await res.json();
+    lastSeismicPayload = body;
     seismicFrameIndex = 0;
     stopSeismicPlayback();
     computeSeismicDrawScale();
@@ -5549,6 +5555,7 @@ async function runCyclicAnalysis() {
     });
     if (!res.ok) { setStatus('反覆載重分析失敗: ' + await apiErrorMessage(res)); return; }
     cyclicResult = await res.json();
+    lastCyclicPayload = body;
     document.getElementById('btnViewCyclic').style.display = '';
     document.getElementById('btnViewCyclicHinge').style.display = '';
     const bar = document.getElementById('viewBar');
@@ -5592,6 +5599,7 @@ async function runModalAnalysis() {
     });
     if (!res.ok) { setStatus('模態分析失敗: ' + await apiErrorMessage(res)); return; }
     modalResult = await res.json();
+    lastModalPayload = body;
     modalModeIndex = 0;
     document.getElementById('btnViewModal').style.display = '';
     const bar = document.getElementById('viewBar');
@@ -5868,30 +5876,23 @@ document.getElementById('importJsonFile').addEventListener('change', (e) => {
   e.target.value = '';
 });
 
-document.getElementById('btnExportMd').addEventListener('click', () => {
-  if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
-  const du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
-  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A');
-  let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
-
-  // 輸入資料: 讓這份報告本身就能完全重現模型或手算驗證, 不用另外
-  // 回頭翻建模畫面確認座標/斷面/載重數值。改用目前「顯示設定」選的
-  // 單位(跟下面「結果」段落、跟PDF匯出一致), 不再固定用SI——之前
-  // 這裡固定SI、但下面的「結果」段落一直都是用顯示單位, 同一份
-  // 報告裡兩段用不同單位基準會讓人搞混, 現在統一。
-  md += `## 輸入資料(E:${eu}, I:${iu}, A:${au}, 力:${fu}, 彎矩:${mu}, 座標/長度固定用m)\n\n`;
+// 共用: 輸入資料段落(節點/斷面/桿件含塑鉸/支承/載重), pl 是任何有.nodes/.sections/.members/
+// .supports/.point_loads/.distributed_loads/.member_point_loads 的物件——可以是即時的 model,
+// 也可以是某次分析實際送出去的 payload(=lastXxxPayload)。用後者時, 匯出的報告精確對應「畫面上
+// 這組結果」是拿哪個模型算出來的, 不會因為匯出前又動了模型或設定列而對不上, 這是「拿到報告的人
+// 可以自己重建模型驗證結果」這個目標最基本的前提——報告裡的結構描述必須跟真正被拿去分析的
+// 那個模型一模一樣, 不能是使用者匯出當下畫面上剛好顯示的(可能已經改過的)那個。
+function buildInputDataMd(pl, du, fu, mu, eu, iu, au) {
+  let md = `## 輸入資料(E:${eu}, I:${iu}, A:${au}, 力:${fu}, 彎矩:${mu}, 座標/長度固定用m)\n\n`;
   md += `### 節點座標\n\n| node | x (m) | y (m) |\n|---|---|---|\n`;
-  for (const n of model.nodes) md += `| ${n.id} | ${n.x} | ${n.y} |\n`;
+  for (const n of pl.nodes) md += `| ${n.id} | ${n.x} | ${n.y} |\n`;
   md += `\n### 斷面性質\n\n| 名稱 | E (${eu}) | I (${iu}) | A (${au}) |\n|---|---|---|---|\n`;
-  for (const s of model.sections) md += `| ${s.name} | ${fromSI('E', s.E)} | ${fromSI('I', s.I)} | ${fromSI('A', s.A)} |\n`;
-  // 桿件連接表加上塑鉸容量(Mp/R): Pushover驗證最重要的輸入之一, 之前
-  // 這裡完全沒有匯出, 別人光看這份報告根本不知道你哪根桿件哪一端設了
-  // 塑鉸、Mp跟R各是多少, 沒辦法真的重新檢驗你的過程。
-  const anyHinge = model.members.some(m => m.Mp_i != null || m.Mp_j != null);
+  for (const s of pl.sections) md += `| ${s.name} | ${fromSI('E', s.E)} | ${fromSI('I', s.I)} | ${fromSI('A', s.A)} |\n`;
+  const anyHinge = pl.members.some(m => m.Mp_i != null || m.Mp_j != null);
   md += `\n### 桿件連接${anyHinge ? '(含塑鉸容量, Mp單位' + mu + ', R單位' + mu + '/rad)' : ''}\n\n`;
   if (anyHinge) {
     md += `| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 | Mp_i | R_i | Mp_j | R_j |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
-    for (const m of model.members) {
+    for (const m of pl.members) {
       md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j}`
         + ` | ${m.Mp_i != null ? fromSI('moment', m.Mp_i).toFixed(3) : '-'}`
         + ` | ${m.R_post_yield_i != null ? fromSI('moment', m.R_post_yield_i).toFixed(3) : '-'}`
@@ -5900,22 +5901,198 @@ document.getElementById('btnExportMd').addEventListener('click', () => {
     }
   } else {
     md += `| member | i端 | j端 | 斷面 | 類型 | i端釋放 | j端釋放 |\n|---|---|---|---|---|---|---|\n`;
-    for (const m of model.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
+    for (const m of pl.members) md += `| ${m.id} | N${m.node_i} | N${m.node_j} | ${m.section} | ${m.member_type} | ${m.release_i} | ${m.release_j} |\n`;
   }
   md += `\n### 支承條件(空白=自由, 0=固定, 非0=強制位移, m/rad)\n\n| node | ux | uy | rot |\n|---|---|---|---|\n`;
-  for (const s of model.supports) md += `| ${s.node} | ${s.ux ?? ''} | ${s.uy ?? ''} | ${s.rot ?? ''} |\n`;
-  if (model.point_loads.length) {
+  for (const s of pl.supports) md += `| ${s.node} | ${s.ux ?? ''} | ${s.uy ?? ''} | ${s.rot ?? ''} |\n`;
+  if (pl.point_loads && pl.point_loads.length) {
     md += `\n### 節點集中力\n\n| node | fx (${fu}) | fy (${fu}) | m (${mu}) |\n|---|---|---|---|\n`;
-    for (const p of model.point_loads) md += `| ${p.node} | ${fromSI('force', p.fx)} | ${fromSI('force', p.fy)} | ${fromSI('moment', p.m)} |\n`;
+    for (const p of pl.point_loads) md += `| ${p.node} | ${fromSI('force', p.fx)} | ${fromSI('force', p.fy)} | ${fromSI('moment', p.m)} |\n`;
   }
-  if (model.distributed_loads.length) {
+  if (pl.distributed_loads && pl.distributed_loads.length) {
     md += `\n### 桿件均佈載重(w單位: ${fu}/m)\n\n| member | w1 | w2 | x起點(m) | x終點(m) | 方向 | 角度 |\n|---|---|---|---|---|---|---|\n`;
-    for (const d of model.distributed_loads) md += `| ${d.member} | ${fromSI('force', d.w_start)} | ${d.w_end !== undefined && d.w_end !== null ? fromSI('force', d.w_end) : '=w1'} | ${d.x_start ?? 0} | ${d.x_end ?? '全長'} | ${d.direction} | ${d.angle_deg ?? '-'} |\n`;
+    for (const d of pl.distributed_loads) md += `| ${d.member} | ${fromSI('force', d.w_start)} | ${d.w_end !== undefined && d.w_end !== null ? fromSI('force', d.w_end) : '=w1'} | ${d.x_start ?? 0} | ${d.x_end ?? '全長'} | ${d.direction} | ${d.angle_deg ?? '-'} |\n`;
   }
-  if (model.member_point_loads.length) {
+  if (pl.member_point_loads && pl.member_point_loads.length) {
     md += `\n### 桿件內部集中力/彎矩(fx/fy/F單位: ${fu}, m單位: ${mu})\n\n| member | a(m) | 方向 | fx | fy | F | 角度 | m |\n|---|---|---|---|---|---|---|---|\n`;
-    for (const p of model.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx !== undefined && p.fx !== null ? fromSI('force', p.fx) : '-'} | ${p.fy !== undefined && p.fy !== null ? fromSI('force', p.fy) : '-'} | ${p.F !== undefined && p.F !== null ? fromSI('force', p.F) : '-'} | ${p.angle_deg ?? '-'} | ${fromSI('moment', p.m)} |\n`;
+    for (const p of pl.member_point_loads) md += `| ${p.member} | ${p.a} | ${p.direction} | ${p.fx !== undefined && p.fx !== null ? fromSI('force', p.fx) : '-'} | ${p.fy !== undefined && p.fy !== null ? fromSI('force', p.fy) : '-'} | ${p.F !== undefined && p.F !== null ? fromSI('force', p.F) : '-'} | ${p.angle_deg ?? '-'} | ${fromSI('moment', p.m)} |\n`;
   }
+  return md;
+}
+
+// 共用: 質量設定段落(斷面密度ρ、節點質量), D2以後的分析(模態/反應譜/循環/非線性地震)都建立
+// 在質量矩陣上, 沒有這段訊息光有幾何/斷面資料還原不出動力分析要用的質量矩陣。
+function buildMassDataMd(pl, mu2, iu2) {
+  const mu_ = unitOf('mass'), iu_ = unitOf('inertia');
+  let md = '';
+  const anyRho = pl.sections.some(s => s.rho);
+  if (anyRho) {
+    md += `\n### 斷面密度 ρ(${unitOf('density')})\n\n| 名稱 | ρ |\n|---|---|\n`;
+    for (const s of pl.sections) if (s.rho) md += `| ${s.name} | ${fromSI('density', s.rho)} |\n`;
+  }
+  const anyMass = pl.nodes.some(n => n.mx || n.my || n.Iz);
+  if (anyMass) {
+    md += `\n### 節點集中質量(平移 ${mu_}, 轉動慣量 ${iu_})\n\n| node | mx | my | Iz |\n|---|---|---|---|\n`;
+    for (const n of pl.nodes) {
+      if (n.mx || n.my || n.Iz) {
+        md += `| ${n.id} | ${n.mx ? fromSI('mass', n.mx).toPrecision(5) : '-'} | ${n.my ? fromSI('mass', n.my).toPrecision(5) : '-'} | ${n.Iz ? fromSI('inertia', n.Iz).toPrecision(5) : '-'} |\n`;
+      }
+    }
+  }
+  return md;
+}
+
+// ================= 四種動力/非線性分析的 Markdown 匯出 =================
+// 都遵守同一個原則: 匯出的內容除了結果, 一定包含 buildInputDataMd()+buildMassDataMd() 描述的
+// 完整模型輸入, 加上這次分析實際用的設定參數(從 lastXxxPayload 讀, 不是即時的DOM/model),
+// 讓拿到這份檔案的人不需要回頭問任何人, 就能照著「分析設定」段落自己重建同一個模型、跑同一種
+// 分析、拿完整結果表逐項核對。
+
+function exportModalMd(du, fu, mu, eu, iu, au) {
+  const pl = lastModalPayload, r = modalResult;
+  let md = `# frame2d 模態分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += buildInputDataMd(pl, du, fu, mu, eu, iu, au);
+  md += buildMassDataMd(pl);
+  md += `\n## 分析設定\n\n質量矩陣: ${pl.modal_mass_kind === 'lumped' ? '集中質量' : '一致質量'}; 要求模態數: ${pl.modal_n_modes}\n\n`;
+  const mu_ = unitOf('mass');
+  md += `## 結果: 共 ${r.modes.length} 個模態(x向可動質量 ${fromSI('mass', r.mass_free.x).toPrecision(6)} ${mu_}, `
+    + `y向 ${fromSI('mass', r.mass_free.y).toPrecision(6)} ${mu_})\n\n`;
+  md += `| 模態 | T (s) | f (Hz) | ω (rad/s) | Γx | 質量比x | 累積(總)x | Γy | 質量比y | 累積(總)y |\n`
+    + `|---|---|---|---|---|---|---|---|---|---|\n`;
+  for (const m of r.modes) {
+    md += `| ${m.index} | ${m.period.toFixed(5)} | ${m.frequency.toFixed(4)} | ${m.omega.toFixed(4)} `
+      + `| ${m.gamma_x.toFixed(4)} | ${fmtPct(m.ratio_x)} | ${fmtPct(m.cum_total_x)} `
+      + `| ${m.gamma_y.toFixed(4)} | ${fmtPct(m.ratio_y)} | ${fmtPct(m.cum_total_y)} |\n`;
+  }
+  const blob = new Blob([md], {type: 'text/markdown'});
+  downloadBlob(blob, (currentName || 'frame2d_modal') + '.md');
+}
+
+function exportRsaMd(du, fu, mu, eu, iu, au) {
+  const pl = lastRsaPayload, r = rsaResult, accu = unitOf('accel');
+  let md = `# frame2d 反應譜分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += buildInputDataMd(pl, du, fu, mu, eu, iu, au);
+  md += buildMassDataMd(pl);
+  md += `\n## 分析設定\n\n方向: ${r.direction === 'x' ? '水平(x)' : '垂直(y)'}; 組合方法: ${r.combine}; `
+    + `阻尼比: ${r.damping}; 質量矩陣: ${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}; `
+    + `模態數: ${r.n_modes}\n\n`;
+  if (pl.rsa_spectrum_type === 'code') {
+    md += `反應譜來源: 規範(簡化四段式形狀, **不是精確工址查表版本**), `
+      + `S_DS=${pl.rsa_code_sds}, S_D1=${pl.rsa_code_sd1}, T_L=${pl.rsa_code_tl}\n\n`;
+  } else {
+    md += `反應譜來源: 自訂\n\n| T(s) | Sa(${accu}) |\n|---|---|\n`;
+    for (const pt of pl.rsa_custom_points) md += `| ${pt[0]} | ${fromSI('accel', pt[1])} |\n`;
+    md += `\n`;
+  }
+  md += `## 結果\n\n基底剪力: ${fmtNum(r.base_shear, 'force', 6)} ${fu}; 累積質量比(總): ${fmtPct(r.cum_ratio_total)}\n\n`;
+  md += `### 各模態\n\n| 模態 | T(s) | f(Hz) | Sa(${accu}) | Γ | 質量比 | 累積(總) | 模態基底剪力(${fu}) |\n`
+    + `|---|---|---|---|---|---|---|---|\n`;
+  for (const m of r.modes) {
+    md += `| ${m.index} | ${m.period.toFixed(5)} | ${m.frequency.toFixed(4)} | ${fmtNum(m.sa, 'accel', 5)} `
+      + `| ${m.gamma.toFixed(4)} | ${fmtPct(m.eff_ratio)} | ${fmtPct(m.cum_ratio_total)} | ${fmtNum(m.modal_base_shear, 'force', 5)} |\n`;
+  }
+  md += `\n### 節點位移\n\n| node | ux(${du}) | uy(${du}) |\n|---|---|---|\n`;
+  for (const nid of Object.keys(r.nodes).sort((a, b) => Number(a) - Number(b))) {
+    const n = r.nodes[nid];
+    md += `| ${nid} | ${fmtNum(n.ux, 'disp', 5)} | ${fmtNum(n.uy, 'disp', 5)} |\n`;
+  }
+  md += `\n### 桿件端點內力\n\n| member | Nᵢ(${fu}) | Vᵢ(${fu}) | Mᵢ(${mu}) | Nⱼ(${fu}) | Vⱼ(${fu}) | Mⱼ(${mu}) |\n`
+    + `|---|---|---|---|---|---|---|\n`;
+  for (const mid of Object.keys(r.members).sort((a, b) => Number(a) - Number(b))) {
+    const mm = r.members[mid];
+    md += `| ${mid} | ${fmtNum(mm.Fx_i, 'force', 5)} | ${fmtNum(mm.Fy_i, 'force', 5)} | ${fmtNum(mm.M_i, 'moment', 5)} `
+      + `| ${fmtNum(mm.Fx_j, 'force', 5)} | ${fmtNum(mm.Fy_j, 'force', 5)} | ${fmtNum(mm.M_j, 'moment', 5)} |\n`;
+  }
+  const blob = new Blob([md], {type: 'text/markdown'});
+  downloadBlob(blob, (currentName || 'frame2d_rsa') + '.md');
+}
+
+function exportCyclicMd(du, fu, mu, eu, iu, au) {
+  const pl = lastCyclicPayload, r = cyclicResult;
+  let md = `# frame2d 循環(遲滯)分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += buildInputDataMd(pl, du, fu, mu, eu, iu, au);
+  md += buildMassDataMd(pl);
+  md += `\n## 分析設定\n\n控制節點: ${r.control_nodes.join(', ')}; 權重: ${pl.cyclic_weights ? pl.cyclic_weights.join(', ') : '全部1.0'}; `
+    + `方向: ${r.direction === 'x' ? '水平(x)' : '垂直(y)'}\n\n`;
+  md += `位移幅值(${du}): ${r.amplitudes.map(a => fromSI('disp', a).toPrecision(5)).join(', ')}; `
+    + `每級圈數: ${r.n_cycles}; 步長: ${fmtNum(pl.cyclic_step, 'disp', 5)} ${du}\n\n`;
+  const nYield = r.events.filter(e => e.kind === 'yield').length, nUnload = r.events.filter(e => e.kind === 'unload').length;
+  md += `## 結果\n\n共 ${r.u.length} 個記錄點, ${nYield} 次降伏, ${nUnload} 次卸載, `
+    + `全部塑鉸累積塑性功 ${fmtNum(r.total_plastic_work, 'moment', 5)} ${mu}\n\n`;
+  md += `### 每級幅值一個完整迴圈的耗能\n\n| 幅值(${du}) | F_max(${fu}) | 耗能(${mu}) | ξ_eq |\n|---|---|---|---|\n`;
+  for (const l of r.loops) {
+    md += `| ${fromSI('disp', l.amplitude).toPrecision(5)} | ${l.F_max != null ? fmtNum(l.F_max, 'force', 5) : '—'} `
+      + `| ${l.energy != null ? fmtNum(l.energy, 'moment', 5) : '—'} | ${l.xi_eq != null ? l.xi_eq.toFixed(3) : '—'} |\n`;
+  }
+  md += `\n### 塑鉸降伏順序\n\n| # | 塑鉸 | 降伏時位移(${du}) | 降伏時力(${fu}) | 降伏次數 | 累積塑性功(${mu}) |\n|---|---|---|---|---|---|\n`;
+  r.hinges.forEach((h, i) => {
+    md += `| ${i + 1} | ${h.label} | ${fromSI('disp', h.first_yield.u).toPrecision(5)} `
+      + `| ${fromSI('force', h.first_yield.F).toPrecision(6)} | ${h.n_yield} | ${fmtNum(h.work, 'moment', 5)} |\n`;
+  });
+  md += `\n### 完整力-位移曲線(每一列一個記錄點, 可以直接拿去畫圖對照畫面上的遲滯迴圈)\n\n`
+    + `| # | 位移(${du}) | 力(${fu}) |\n|---|---|---|\n`;
+  for (let i = 0; i < r.u.length; i++) md += `| ${i + 1} | ${fromSI('disp', r.u[i]).toPrecision(6)} | ${fromSI('force', r.F[i]).toPrecision(6)} |\n`;
+  const blob = new Blob([md], {type: 'text/markdown'});
+  downloadBlob(blob, (currentName || 'frame2d_cyclic') + '.md');
+}
+
+function exportSeismicMd(du, fu, mu, eu, iu, au) {
+  const pl = lastSeismicPayload, r = seismicResult;
+  let md = `# frame2d 非線性地震反應分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += buildInputDataMd(pl, du, fu, mu, eu, iu, au);
+  md += buildMassDataMd(pl);
+  md += `\n## 分析設定\n\n控制節點: ${r.control_node}; 方向: ${r.direction === 'x' ? '水平(x)' : '垂直(y)'}; `
+    + `阻尼比目標: ${r.zeta_target}; Rayleigh控制模態(0起算): ${pl.seismic_damping_modes.join(', ')}`
+    + `(α=${r.alpha.toFixed(6)}, β=${r.beta.toExponential(4)}); `
+    + `質量矩陣: ${r.mass_kind === 'lumped' ? '集中質量' : '一致質量'}; `
+    + `${r.apply_gravity_loads ? '已做重力預載' : '未做重力預載'}; Δt=${r.dt.toPrecision(5)}s, 總步數=${r.n_steps}\n\n`;
+  if (pl.seismic_ground_motion_type === 'pulse') {
+    md += `地震歷程來源: 衰減脈衝(**不是真實地震紀錄**, 示範用), `
+      + `峰值加速度=${pl.seismic_pulse_amplitude_g}g, 頻率=${pl.seismic_pulse_freq_hz}Hz, `
+      + `衰減係數=${pl.seismic_pulse_decay}\n\n`;
+  } else if (pl.seismic_ground_motion_type === 'custom') {
+    md += `地震歷程來源: 自訂\n\n| t(s) | ag(g) |\n|---|---|\n`;
+    for (const pt of pl.seismic_custom_points_g) md += `| ${pt[0]} | ${pt[1]} |\n`;
+    md += `\n`;
+  } else {
+    md += `地震歷程來源: PEER NGA .AT2 上傳檔案(抽稀上限 ${pl.seismic_peer_nga_max_points} 點), `
+      + `原始檔案內容(可以直接存成 .AT2 檔重新上傳, 完全重現同一段地震歷程):\n\n`
+      + '```\n' + pl.seismic_peer_nga_text + '\n```\n\n';
+  }
+  md += `## 結果\n\n尖峰位移 ${fmtNum(r.peak_displacement, 'disp', 6)} ${du}; `
+    + `${r.events.filter(e => e.kind === 'yield').length} 次降伏, ${r.events.filter(e => e.kind === 'unload').length} 次卸載\n\n`;
+  const eFinal = r.energy.Wext[r.energy.Wext.length - 1];
+  const eCheck = r.energy.KE[r.energy.KE.length - 1] + r.energy.Wdamp[r.energy.Wdamp.length - 1] + r.energy.Wint[r.energy.Wint.length - 1];
+  md += `能量平衡(最終累積值, 驗證這組結果最直接的方法): 外力作功=${fmtNum(eFinal, 'moment', 6)} ${mu}, `
+    + `動能+阻尼耗能+桿件內力作功=${fmtNum(eCheck, 'moment', 6)} ${mu}(兩者應該精確相等)\n\n`;
+  if (r.hinges.length) {
+    md += `### 降伏的塑鉸\n\n| 塑鉸 | 降伏次數 | 累積塑性功(${mu}) |\n|---|---|---|\n`;
+    for (const h of r.hinges) md += `| ${h.label} | ${h.n_yield} | ${fmtNum(h.work_final, 'moment', 5)} |\n`;
+  } else {
+    md += `全程彈性, 沒有任何塑鉸降伏。\n`;
+  }
+  md += `\n### 完整時間歷程(每一列一個時間步; 地面加速度/控制節點相對位移/有效慣性力合力,\n`
+    + `後者不是嚴格的支承反力, 是這個方向上全部質量的慣性力合力, 見網頁上的說明)\n\n`
+    + `| # | t(s) | ag(g) | 位移(${du}) | 有效慣性力合力(${fu}) |\n|---|---|---|---|---|\n`;
+  for (let i = 0; i < r.t.length; i++) {
+    md += `| ${i} | ${r.t[i].toFixed(5)} | ${(r.ground_motion[i] / 9.80665).toPrecision(6)} `
+      + `| ${fromSI('disp', r.control_disp[i]).toPrecision(6)} | ${fromSI('force', r.equivalent_force[i]).toPrecision(6)} |\n`;
+  }
+  const blob = new Blob([md], {type: 'text/markdown'});
+  downloadBlob(blob, (currentName || 'frame2d_seismic') + '.md');
+}
+
+document.getElementById('btnExportMd').addEventListener('click', () => {
+  const du = unitOf('disp'), fu = unitOf('force'), mu = unitOf('moment');
+  const eu = unitOf('E'), iu = unitOf('I'), au = unitOf('A');
+  const analysisTypeNow = document.getElementById('analysisType').value;
+  if (analysisTypeNow === 'modal' && modalResult) { exportModalMd(du, fu, mu, eu, iu, au); return; }
+  if (analysisTypeNow === 'rsa' && rsaResult) { exportRsaMd(du, fu, mu, eu, iu, au); return; }
+  if (analysisTypeNow === 'cyclic' && cyclicResult) { exportCyclicMd(du, fu, mu, eu, iu, au); return; }
+  if (analysisTypeNow === 'seismic' && seismicResult) { exportSeismicMd(du, fu, mu, eu, iu, au); return; }
+  if (!lastResult) { setStatus('請先按 Solve 才有結果可匯出'); return; }
+  let md = `# frame2d 分析結果${currentName ? '(' + currentName + ')' : ''}\n\n`;
+  md += buildInputDataMd(model, du, fu, mu, eu, iu, au);
 
   if (lastResult.analysis_type === 'pushover') {
     // Pushover的結果是一整條歷程, 不是單一狀態的節點/桿件表——跟

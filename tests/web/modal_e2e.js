@@ -156,6 +156,25 @@ async function waitFor(fn, what, ms = 8000) {
   assert($('status').textContent.includes('不小於 1'), '模態數 < 1 應被前端擋下');
   console.log('模態數驗證 OK');
 
+  // ---- 匯出 Markdown ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;
+      window.downloadBlob = (blob, name) => { window.__capturedBlob = blob; window.__capturedName = name; };`);
+  $('btnExportMd').click();
+  await sleep(50);
+  const exportName = ev(`window.__capturedName`);
+  assert(exportName && exportName.endsWith('.md'), '應該產生一個 .md 檔案: ' + exportName);
+  const mdText = await ev(`window.__capturedBlob.text()`);
+  assert(mdText.includes('# frame2d 模態分析結果'), '應該是模態分析報告的標題');
+  assert(mdText.includes('## 輸入資料'), '應該包含輸入資料段落(節點/斷面/桿件, 讓人可以重建模型)');
+  assert(mdText.includes('### 節點集中質量'), '應該包含節點質量段落(模態分析建立在質量矩陣上, 沒這段還原不出來)');
+  const wantModes = ev(`modalResult.modes.length`);
+  const modeSection = mdText.match(/## 結果[\s\S]*/)[0];
+  const mdRows = (modeSection.match(/^\| \d+ \| [\d.]+ \| [\d.]+ \| [\d.]+ \|/gm) || []).length;
+  assert(mdRows === wantModes, `模態結果表應該有 ${wantModes} 列, 實際 ${mdRows}`);
+  const gxWant = ev(`modalResult.modes[0].gamma_x.toFixed(4)`);
+  assert(modeSection.includes(`| ${gxWant} |`), `第1個模態的Γx欄位應該是 ${gxWant}: ` + modeSection.split('\n')[2]);
+  console.log(`匯出 Markdown: 標題/輸入資料/節點質量/模態結果表(${mdRows}列)都正確 OK`);
+
   // ---- 新建/載入時重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`modalResult`) === null && $('btnViewModal').style.display === 'none' && $('modalConfigBar').style.display === 'none',

@@ -168,6 +168,23 @@ async function waitFor(fn, what, ms = 15000) {
   console.log('機構/支承不足: 顯示清楚訊息 OK ->', $('status').textContent.slice(0, 50));
   ev(`model.supports = ${supBackup};`);
 
+  // ---- 匯出 Markdown ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;
+      window.downloadBlob = (blob, name) => { window.__capturedBlob = blob; window.__capturedName = name; };`);
+  $('btnExportMd').click();
+  await sleep(50);
+  const exportName = ev(`window.__capturedName`);
+  assert(exportName && exportName.endsWith('.md'), '應該產生一個 .md 檔案: ' + exportName);
+  const mdText = await ev(`window.__capturedBlob.text()`);
+  assert(mdText.includes('# frame2d 反應譜分析結果'), '應該是反應譜分析報告的標題');
+  assert(mdText.includes('## 輸入資料'), '應該包含輸入資料段落(節點/斷面/桿件, 讓人可以重建模型)');
+  assert(mdText.includes('反應譜來源: 自訂'), '這次匯出的應該是最後一次成功求解(自訂反應譜)的那份結果');
+  const wantModes = ev(`rsaResult.n_modes`);
+  const modeSection = mdText.match(/### 各模態[\s\S]*?(?=\n### |$)/)[0];
+  const modeRows = (modeSection.match(/^\| \d+ \| [\d.]+ \| [\d.]+ \| [\d.]+ \|/gm) || []).length;
+  assert(modeRows === wantModes, `模態表應該有 ${wantModes} 列, 實際 ${modeRows}`);
+  console.log(`匯出 Markdown: 標題/輸入資料/自訂反應譜來源/模態結果表(${modeRows}列)都正確 OK`);
+
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`rsaResult`) === null && $('btnViewRsa').style.display === 'none' && $('rsaConfigBar').style.display === 'none'
