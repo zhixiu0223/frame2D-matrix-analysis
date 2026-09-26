@@ -268,6 +268,32 @@ def build_input_data_pages(f, units=None):
     return [page1, page2, page3]
 
 
+def build_mass_data_page(f, units=None):
+    """質量設定(斷面密度ρ + 節點集中質量)表格頁, 給D2以後的動力分析報告用(模態/反應譜/
+    循環/非線性地震)——D0/D1(線性/P-Delta/Pushover)不需要質量矩陣, 沒有這一頁, 這裡只在
+    build_modal_pdf_report()等四個新函式裡呼叫。跟 build_input_data_pages() 用同一套
+    _table_page()/_fmt()/_from_si()機制, 保持格式一致。沒有任何ρ或節點質量時仍然回傳一頁
+    (兩個表都是空的), 讓報告頁碼固定、呼叫端不用另外判斷要不要插這一頁。"""
+    du_mass = _unit_label(units, "mass", "kg")
+    du_inertia = _unit_label(units, "inertia", "kg·m²")
+    du_density = _unit_label(units, "density", "kg/m³")
+
+    sections = sorted(f.sections.values(), key=lambda s: s.name)
+    rho_rows = [[s.name, _fmt(_from_si(units, "density", s.rho, "kg/m³"))] for s in sections if s.rho]
+    nodes_with_mass = sorted(f.node_masses, key=lambda nm: nm.node)
+    mass_rows = [[
+        str(nm.node),
+        _fmt(_from_si(units, "mass", nm.mx, "kg")) if nm.mx else "-",
+        _fmt(_from_si(units, "mass", nm.my, "kg")) if nm.my else "-",
+        _fmt(_from_si(units, "inertia", nm.Iz, "kg·m²")) if nm.Iz else "-",
+    ] for nm in nodes_with_mass]
+    return _table_page(f"Input Data: Mass (dynamic analysis)", [
+        (f"Section Density (ρ in {du_density})", ["Section Name", f"ρ ({du_density})"], rho_rows),
+        (f"Nodal Lumped Mass (translational in {du_mass}, rotational inertia in {du_inertia})",
+         ["Node ID", f"mx ({du_mass})", f"my ({du_mass})", f"Iz ({du_inertia})"], mass_rows),
+    ])
+
+
 def build_result_data_page(f, result, units=None):
     """反力/位移結果表格頁, 讓報告本身就能對照手算或別的軟體算出的
     反力/位移數值, 不用只能從圖上目測峰值。units同build_input_data_pages。"""
@@ -556,4 +582,76 @@ def build_pdf_report(f, units=None, member_ids=None, include_member_diagrams=Tru
                                                         moment_unit=mu, moment_factor=mf)
                     pdf.savefig(own_fig)
                     plt.close(own_fig)
+    return buf.getvalue()
+
+
+def _mode_shape_fig(f, modal_result, mode_indices, ncols=2):
+    """畫一頁最多6個模態振型小圖(灰色虛線=未變形結構, 橘色實線=變形後形狀, 座標已經是
+    modal_to_dict()算好的絕對座標, 這裡不重算)。mode_indices是這一頁要畫的模態編號
+    (modal_result['modes']裡的index, 1起算)清單。"""
+    n = len(mode_indices)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4.2 * nrows), squeeze=False)
+    modes_by_index = {m["index"]: m for m in modal_result["modes"]}
+    for k, idx in enumerate(mode_indices):
+        ax = axes[k // ncols][k % ncols]
+        m = modes_by_index[idx]
+        for member in f.members.values():
+            ni, nj = f.nodes[member.node_i], f.nodes[member.node_j]
+            ax.plot([ni.x, nj.x], [ni.y, nj.y], color="#bbbbbb", lw=1.2, ls="--", zorder=1)
+        for mid_str, curve in m["curves"].items():
+            ax.plot(curve["X"], curve["Y"], color="#ea580c", lw=1.8, zorder=2)
+        ax.set_title(f"Mode {idx}: T={m['period']:.4f}s, f={m['frequency']:.4f}Hz "
+                     f"(Γx={m['gamma_x']:.3f}, Γy={m['gamma_y']:.3f})", fontsize=10)
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.tick_params(labelsize=8)
+    for k in range(n, nrows * ncols):
+        axes[k // ncols][k % ncols].axis("off")
+    fig.suptitle("Mode Shapes (scaled for visibility, not true amplitude)", fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    return fig
+
+
+def build_modal_pdf_report(f, modal_result, units=None) -> bytes:
+    """模態分析的PDF報告: 週期/頻率/參與係數/有效質量比表 + 振型圖(每頁最多6個, 直接用
+    modal_to_dict()已經算好的變形曲線座標, 不重算) + 完整輸入資料(含質量設定)。
+
+    modal_result: dict, `frame2d.modal.modal_to_dict()`的回傳值(webapi/main.py的
+    /export/pdf(modal)路徑負責準備, 重新跑一次eigen()拿到)。
+    """
+    mu_ = _unit_label(units, "mass", "kg")
+
+    mode_rows = [[
+        str(m["index"]), f"{m['period']:.5f}", f"{m['frequency']:.4f}", f"{m['omega']:.4f}",
+        f"{m['gamma_x']:.4f}", f"{(m['ratio_x'] or 0) * 100:.1f}%" if m["ratio_x"] is not None else "-",
+        f"{(m['cum_total_x'] or 0) * 100:.1f}%" if m["cum_total_x"] is not None else "-",
+        f"{m['gamma_y']:.4f}", f"{(m['ratio_y'] or 0) * 100:.1f}%" if m["ratio_y"] is not None else "-",
+        f"{(m['cum_total_y'] or 0) * 100:.1f}%" if m["cum_total_y"] is not None else "-",
+    ] for m in modal_result["modes"]]
+    table_fig = _table_page(
+        f"Modal Analysis Results ({modal_result['mass_kind']} mass, {modal_result['n_modes']} modes; "
+        f"free mass x={_from_si(units,'mass',modal_result['mass_free']['x'],'kg'):.4g}{mu_}, "
+        f"y={_from_si(units,'mass',modal_result['mass_free']['y'],'kg'):.4g}{mu_})",
+        [("", ["Mode", "T (s)", "f (Hz)", "ω (rad/s)", "Γx", "Ratio x", "Cum(total) x",
+              "Γy", "Ratio y", "Cum(total) y"], mode_rows)], figsize=(14, 3 + 0.35 * len(mode_rows)))
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        pdf.savefig(table_fig, bbox_inches="tight")
+        plt.close(table_fig)
+
+        all_idx = [m["index"] for m in modal_result["modes"]]
+        for i in range(0, len(all_idx), 6):
+            fig = _mode_shape_fig(f, modal_result, all_idx[i:i + 6])
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        mass_fig = build_mass_data_page(f, units)
+        pdf.savefig(mass_fig, bbox_inches="tight")
+        plt.close(mass_fig)
+
+        for page_fig in build_input_data_pages(f, units):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
     return buf.getvalue()

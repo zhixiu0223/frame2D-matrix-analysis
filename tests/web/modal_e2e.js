@@ -175,6 +175,20 @@ async function waitFor(fn, what, ms = 8000) {
   assert(modeSection.includes(`| ${gxWant} |`), `第1個模態的Γx欄位應該是 ${gxWant}: ` + modeSection.split('\n')[2]);
   console.log(`匯出 Markdown: 標題/輸入資料/節點質量/模態結果表(${mdRows}列)都正確 OK`);
 
+  // ---- 匯出 PDF ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;`);
+  $('btnExportPdf').click();
+  await waitFor(() => ev(`window.__capturedBlob !== null`), 'PDF匯出完成', 15000);
+  const pdfName = ev(`window.__capturedName`);
+  assert(pdfName && pdfName.endsWith('_modal.pdf'), '檔名應該以 _modal.pdf 結尾: ' + pdfName);
+  const pdfBlob = ev(`window.__capturedBlob`);
+  assert(pdfBlob.type === 'application/pdf', 'blob類型應該是application/pdf: ' + pdfBlob.type);
+  const pdfBuf = await ev(`window.__capturedBlob.arrayBuffer()`);
+  const pdfHead = Buffer.from(pdfBuf.slice(0, 4)).toString('ascii');
+  assert(pdfHead === '%PDF', 'PDF檔案應該以%PDF開頭: ' + pdfHead);
+  assert(pdfBuf.byteLength > 10000, `PDF檔案大小應該有相當內容(振型圖+表格), 實際只有${pdfBuf.byteLength}bytes`);
+  console.log(`匯出 PDF: application/pdf、檔名_modal.pdf、有效PDF檔頭、大小${pdfBuf.byteLength}bytes OK`);
+
   // ---- 新建/載入時重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`modalResult`) === null && $('btnViewModal').style.display === 'none' && $('modalConfigBar').style.display === 'none',

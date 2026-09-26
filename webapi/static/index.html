@@ -6294,26 +6294,36 @@ document.getElementById('fbdPreviewExportImages').addEventListener('click', asyn
 document.getElementById('btnExportPdf').addEventListener('click', async () => {
   sanitizeModel();
   const isPushoverResult = lastResult && lastResult.analysis_type === 'pushover';
+  const analysisTypeNow = document.getElementById('analysisType').value;
+  const isModalResult = analysisTypeNow === 'modal' && modalResult && lastModalPayload;
   setStatus(isPushoverResult ? '產生Pushover PDF報告中...' : '產生 PDF 中...');
   try {
     // 把目前「顯示設定」選的單位一起送給後端, 讓PDF報告顯示的數字/
     // 單位標籤跟畫面上看到的一致, 不用另外猜這份報告是SI還是別的
     // 單位基準。Pushover結果要另外送pushover_*那組欄位(控制節點/目標/
     // 控制方式等), 跟/solve送的是同一組, 用buildPushoverPayload()共用,
-    // 不用兩邊分別維護。
+    // 不用兩邊分別維護。模態結果用 lastModalPayload(求解當下實際送出去
+    // 的那份, 含modal_n_modes/modal_mass_kind), 補上analysis_type跟units
+    // ——跟Markdown匯出同一個「精確對應畫面上這組結果」的原則。
     let payload;
     if (isPushoverResult) {
       payload = buildPushoverPayload();
       if (!payload) return;
+    } else if (isModalResult) {
+      payload = {...lastModalPayload, analysis_type: 'modal', units: currentUnitsPayload()};
+    } else if (analysisTypeNow === 'rsa' || analysisTypeNow === 'cyclic' || analysisTypeNow === 'seismic') {
+      setStatus('這種分析的 PDF 匯出還在做, 目前請用「匯出Markdown」。');
+      return;
     } else {
       payload = {...model, units: currentUnitsPayload()};
     }
     const res = await fetch('/export/pdf', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
-    if (!res.ok) { setStatus('PDF 產生失敗: ' + await res.text()); return; }
+    if (!res.ok) { setStatus('PDF 產生失敗: ' + await apiErrorMessage(res)); return; }
     const blob = await res.blob();
-    downloadBlob(blob, (currentName || 'frame2d_report') + (isPushoverResult ? '_pushover' : '') + '.pdf');
+    const suffix = isPushoverResult ? '_pushover' : isModalResult ? '_modal' : '';
+    downloadBlob(blob, (currentName || 'frame2d_report') + suffix + '.pdf');
     setStatus('PDF 已下載');
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }
 });

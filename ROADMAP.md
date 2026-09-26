@@ -255,6 +255,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D6b | 網頁: 非線性地震反應(選地震歷程、地震動畫播放、時程/遲滯迴圈/塑鉸M-θp圖) | webapi | ✅ |
 | D9 | 真實地震紀錄支援(PEER NGA .AT2格式) | `ground_motion_io.py` | ✅ |
 | D10 | 網頁匯出Markdown: 模態/反應譜/循環/非線性地震 | webapi/static/index.html | ✅(Markdown; PDF規劃中) |
+| D11 | 網頁匯出PDF: 模態(反應譜/循環/非線性地震規劃中) | webapi/pdf_export.py | ✅(模態; 其餘規劃中) |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
 
@@ -831,4 +832,39 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   了列數沒檢查數值而沒被抓到, 加了一個對照 `modalResult.modes[0].gamma_x` 實際數值的檢查
   才抓到
 - **規劃中**: PDF 匯出(需要重新畫圖, 工作量比 Markdown 大很多, 這次先不做)
+
+#### D11 網頁匯出 PDF: 模態 ✅ 已完成(反應譜/循環/非線性地震規劃中)
+
+- 新增 `webapi/pdf_export.py` 的 `build_modal_pdf_report()`: 週期/頻率/參與係數/有效質量比表
+  + 振型圖(每頁最多6個模態, **直接重用 `modal_to_dict()` 已經算好的變形曲線座標, 不重算**
+  ——`_mode_shape_fig()` 對這份資料是精確的 pass-through)+ 質量設定頁(新增
+  `build_mass_data_page()`, D2以後的分析都建立在質量矩陣上, 沒這頁還原不出質量設定)+
+  完整輸入資料頁(重用既有的 `build_input_data_pages()`)
+- `/export/pdf` 依 `analysis_type` 分派(FastAPI 與 stdlib 兩後端都接): `modal` 重新跑一次
+  `eigen()` 產生報告; `rsa`/`cyclic`/`seismic` 目前回傳清楚的「還在做, 目前只能匯出
+  Markdown」400 訊息, 不是壞掉的PDF或不明錯誤; `FrameIn.analysis_type` 的允許值從
+  `linear`/`pdelta`/`pushover` 擴充到含 `modal`/`rsa`/`cyclic`/`seismic`(只有
+  `/export/pdf` 認得後四種, `/solve` 還是只認前三種)
+- 驗證(`tests/test_pdf_export_modal.py`): **不依賴pymupdf等PDF解析套件**——直接檢查
+  `_mode_shape_fig()`/`build_mass_data_page()` 回傳的 matplotlib Figure 物件本身(座標軸
+  標題文字、線段資料點、表格儲存格文字), 這些內容之後會被 `PdfPages` 原封不動存成PDF頁面,
+  檢查Figure本身等於檢查了最終PDF長什麼樣子。分頁邏輯用monkeypatch監聽
+  `build_modal_pdf_report()`內部實際呼叫`_mode_shape_fig()`時傳入的模態編號區間, 不是隔著
+  PDF猜頁數。突變檢查4個, 一開始只抓到1個——「振型圖標題只檢查週期/頻率沒檢查參與係數」
+  「分頁大小改變但總頁數不變」「質量表某一欄漏轉換單位但檢查用的是全表模糊比對」這三種都
+  是「檢查得不夠精確」型態的測試盲點, 逐一補上精確比對後4個全部抓到。第4層(FastAPI跟
+  stdlib文字內容比對)選用, 需要pymupdf(不是這個專案原有的依賴, 沒裝就SKIPPED)
+  - **這裡也踩到一個測試撰寫本身的坑**: 第一版把「選用pymupdf」跟後面「還需要fastapi」的
+    程式碼混在同一個módule層級的try/except裡, 但只catch了ImportError一次——結果在沒有
+    fastapi、但有pymupdf的環境下(這個專案的「Termux風格」測試環境正是這樣), `import
+    pymupdf`成功進到`else`分支, 接著`from fastapi.testclient import TestClient`才真正
+    炸開, 而且是在pytest**收集(collection)** 階段就炸開(這種純腳本風格的測試檔案沒有
+    `if __name__=="__main__"`包住主要邏輯時, pytest匯入檔案就等於直接執行全部內容),
+    導致整個測試套件在Termux風格環境下完全跑不起來、不是只有這個檔案的問題。修法是把
+    pymupdf 跟 fastapi 的 import 合併在同一個 try 區塊裡, 讓兩者只要缺任何一個都會被同一個
+    except ImportError 擋下來
+- **對 PDF 匯出補的測試涵蓋率缺口(誠實記錄)**: 這個專案原本的線性/P-Delta/Pushover PDF
+  匯出(`build_pdf_report()`/`build_pushover_pdf_report()`)完全沒有自動化測試, 這次沒有
+  回頭補——只針對新增的模態PDF匯出建立測試, 沒有擴大範圍去補舊功能的測試債
+- 範例: 網頁選「模態」分析、Solve、按「匯出PDF」
 

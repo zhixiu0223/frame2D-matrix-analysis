@@ -26,7 +26,8 @@ from frame2d.seismic import nonlinear_seismic_web_analysis, seismic_to_dict
 from .schemas import FrameIn, SolveOut, NodeResultOut, MemberResultOut
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
-from .pdf_export import build_pdf_report, build_fbd_previews, build_fbd_images_archive, build_pushover_pdf_report, _pushover_final_solve_result
+from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
+                         build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report)
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -637,8 +638,36 @@ def _export_pushover_pdf(payload: FrameIn) -> bytes:
     return build_pushover_pdf_report(f, pushover_result, units=payload.units)
 
 
+def _export_modal_pdf(payload: FrameIn) -> bytes:
+    """analysis_type='modal'時/export/pdf走的路徑: 重新跑一次模態分析(/export/pdf端點本身
+    不知道使用者上次算出來的modalResult是什麼, 只能重新算; 跟/modal共用同一套eigen()呼叫)。"""
+    f = _build_frame(payload)
+    try:
+        md = eigen(f, n_modes=payload.modal_n_modes, mass=payload.modal_mass_kind)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return build_modal_pdf_report(f, modal_to_dict(md), units=payload.units)
+
+
 @app.post("/export/pdf")
 def export_pdf(payload: FrameIn):
+    if payload.analysis_type == 'modal':
+        pdf_bytes = _export_modal_pdf(payload)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="frame2d_modal_report.pdf"'},
+        )
+    if payload.analysis_type in ('rsa', 'cyclic', 'seismic'):
+        names = {'rsa': '反應譜', 'cyclic': '循環(遲滯)', 'seismic': '非線性地震'}
+        raise HTTPException(
+            status_code=400,
+            detail=f"{names[payload.analysis_type]}分析的 PDF 匯出還在做, 目前只能匯出 Markdown。",
+        )
     if payload.analysis_type == 'pushover':
         try:
             pdf_bytes = _export_pushover_pdf(payload)

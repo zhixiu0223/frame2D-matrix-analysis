@@ -218,7 +218,9 @@ class FrameIn(BaseModel):
     """只有/modal端點用: 要幾個模態(從最低頻算起), None=全部。"""
     modal_mass_kind: Literal['lumped', 'consistent'] = 'lumped'
     """只有/modal端點用: 集中質量(預設)或一致質量, 見frame2d/mass.py。"""
-    analysis_type: Literal['linear', 'pdelta', 'pushover'] = 'linear'
+    analysis_type: Literal['linear', 'pdelta', 'pushover', 'modal', 'rsa', 'cyclic', 'seismic'] = 'linear'
+    """/solve只認 linear/pdelta/pushover; /export/pdf 額外認 modal/rsa/cyclic/seismic,
+    用來判斷該重新跑哪一種分析、產生對應的 PDF 報告(見 webapi/main.py 的 export_pdf())。"""
     """'linear'(預設, 完全等同舊行為)、'pdelta'(疊代更新軸力的線性化
     P-Delta, 見frame2d.dofmanager.solve_pdelta)、或'pushover'(遞增側推,
     見frame2d.pushover.run_pushover)。舊的呼叫端不帶這個欄位時預設
