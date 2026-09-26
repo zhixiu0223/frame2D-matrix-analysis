@@ -255,7 +255,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
 | D6b | 網頁: 非線性地震反應(選地震歷程、地震動畫播放、時程/遲滯迴圈/塑鉸M-θp圖) | webapi | ✅ |
 | D9 | 真實地震紀錄支援(PEER NGA .AT2格式) | `ground_motion_io.py` | ✅ |
 | D10 | 網頁匯出Markdown: 模態/反應譜/循環/非線性地震 | webapi/static/index.html | ✅(Markdown; PDF規劃中) |
-| D11 | 網頁匯出PDF: 模態+反應譜(循環/非線性地震規劃中) | webapi/pdf_export.py | ✅(模態/反應譜; 其餘規劃中) |
+| D11 | 網頁匯出PDF: 模態+反應譜+循環(非線性地震規劃中) | webapi/pdf_export.py | ✅(模態/反應譜/循環; 非線性地震規劃中) |
 
 #### D0 前置: 公開 assemble_K ✅ 已完成
 
@@ -833,7 +833,7 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   才抓到
 - **規劃中**: PDF 匯出(需要重新畫圖, 工作量比 Markdown 大很多, 這次先不做)
 
-#### D11 網頁匯出 PDF: 模態 + 反應譜 ✅ 已完成(循環/非線性地震規劃中)
+#### D11 網頁匯出 PDF: 模態 + 反應譜 + 循環 ✅ 已完成(非線性地震規劃中)
 
 - 新增 `webapi/pdf_export.py` 的 `build_modal_pdf_report()`: 週期/頻率/參與係數/有效質量比表
   + 振型圖(每頁最多6個模態, **直接重用 `modal_to_dict()` 已經算好的變形曲線座標, 不重算**
@@ -882,4 +882,31 @@ transient`, 每一步的矩陣與演算法都看得到、都有解析解或第�
   完整環境的測試套件在這次收集時直接失敗(不是新bug, 是舊測試沒有跟著功能進度更新)
 - 前端「匯出PDF」按鈕依 `analysisType` 分派時, 反應譜結果一樣用 `lastRsaPayload`(求解當下
   實際送出去的那份)+ `analysis_type: 'rsa'` + 當前顯示單位, 跟模態同一個原則
+
+**追加: 循環(遲滯)PDF匯出**
+- `build_cyclic_pdf_report()`: 整體遲滯迴圈圖(黃色三角形標記降伏事件)+ 每級幅值耗能表
+  (F_max/energy/ξ_eq)+ 塑鉸降伏順序表 + 塑鉸M-θp小圖(每頁最多6個)+ 質量設定頁 + 完整
+  輸入資料頁
+- **這次抓到兩個真實bug**:
+  1. `cyclic_to_dict()` 的塑鉸label是中文(例如"M0 i端"), matplotlib預設字型(DejaVu Sans)
+     不支援中文字元, 直接塞進圖表標題/表格會變成缺字框——第一次產生PDF時就跳出字型警告
+     才發現。修法是新增 `_hinge_label_en()`, 用"Member 0, end i"這種英文格式重新組字串,
+     不直接沿用 `h['label']`, 跟 `build_input_data_pages()` 刻意避開中文的既有慣例一致
+  2. **端到端測試自己的bug, 不是產品程式碼的問題**: 循環e2e測試裡「沒有塑鉸容量」的錯誤
+     訊息測試, 為了測錯誤路徑把 `model.members` 的每個物件**原地**改成 Mp=null
+     (`model.members.forEach(m => { m.Mp_i = null; ... })`), 測完再用JSON備份把
+     `model.members`重新賦值回去「還原」。問題是 `lastCyclicPayload`(匯出PDF/Markdown用的
+     那份, 求解成功當下存的)透過物件參照指到**同一批**桿件物件, 原地修改會連 `lastCyclicPayload`
+     一起弄壞, 而「還原」只是把 `model.members` 換成新陣列, 沒有動到 `lastCyclicPayload`
+     裡那些早就被改壞的舊物件——導致後面的PDF匯出檢查一直收到「沒有塑鉸容量」的400錯誤,
+     卡在等一個永遠不會來的blob直到逾時。修法是把原地修改`forEach`改成用`.map()`產生全新
+     物件, 不動到原本的物件, `lastCyclicPayload`自然不受影響, 不需要另外還原它
+- 驗證(`tests/test_pdf_export_cyclic.py`): 用 `warnings.simplefilter('error')` 確認產圖
+  過程不會觸發任何警告(含上述字型缺字, 這是唯一一個明確測「不該發生什麼」而不是「該發生
+  什麼」的檢查, 因為第一次真的因為這個字型問題被抓到過); 迴圈曲線與降伏三角形座標精確
+  比對 `cyclic_to_dict()` 的u/F/events; 分頁邏輯用合成的假塑鉸清單(這個測試模型最多只有
+  6個塑鉸, 不夠測出「分頁大小是不是精確6」, 用複製既有塑鉸資料、只換member編號的方式湊出
+  7個純粹測分頁)。突變檢查4個, 一開始只抓到3個, 補上合成塑鉸清單的分頁測試才抓到第4個
+- 同步修正了 `test_pdf_export_modal.py`/`test_pdf_export_rsa.py` 裡遺留的「cyclic還在做」
+  過時假設(循環PDF做完之後這個假設不再成立)
 

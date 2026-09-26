@@ -747,3 +747,123 @@ def build_rsa_pdf_report(f, rsa_result, units=None) -> bytes:
             plt.close(page_fig)
 
     return buf.getvalue()
+
+
+def _hinge_label_en(h):
+    """`cyclic_to_dict()`/`seismic_to_dict()`的塑鉸label是中文(例如"M0 i端"), matplotlib預設
+    字型(DejaVu Sans)不支援中文字元, 直接塞進圖表會變成缺字框——跟 build_input_data_pages()
+    刻意避開中文的慣例一致, 這裡改用「Member 0, end i」這種英文格式重新組字串, 不能直接沿用
+    h['label']。"""
+    return f"Member {h['member']}, end {'i' if h['end'] == 0 else 'j'}"
+
+
+def _cyclic_loop_fig(cyclic_result, units=None):
+    """整體遲滯迴圈圖(控制節點位移 vs 力), 黃色三角形標記每個降伏事件的位置(跟網頁
+    drawCyclicLoop()的視覺慣例一致: 降伏事件是路徑上的轉折點)。"""
+    du = _unit_label(units, "disp", "m")
+    fu = _unit_label(units, "force", "N")
+    u = np.array([_from_si(units, "disp", v, "m") for v in cyclic_result["u"]])
+    F = np.array([_from_si(units, "force", v, "N") for v in cyclic_result["F"]])
+    fig, ax = plt.subplots(figsize=(11, 8))
+    ax.plot(u, F, color="#7c3aed", lw=1.4, zorder=1)
+    ax.axhline(0, color="#999999", lw=0.6)
+    ax.axvline(0, color="#999999", lw=0.6)
+    yield_events = [e for e in cyclic_result["events"] if e["kind"] == "yield"]
+    if yield_events:
+        yu = [_from_si(units, "disp", e["u"], "m") for e in yield_events]
+        yf = [_from_si(units, "force", e["F"], "N") for e in yield_events]
+        ax.scatter(yu, yf, marker="^", color="#f59e0b", s=45, zorder=3, label="Yield event")
+        ax.legend(loc="best", fontsize=9)
+    ax.set_xlabel(f"Displacement ({du})")
+    ax.set_ylabel(f"Force ({fu})")
+    ax.set_title(f"Cyclic Hysteresis Loop (control node(s) {cyclic_result['control_nodes']}, "
+                 f"{cyclic_result['direction']}-direction)")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def _cyclic_hinge_fig(cyclic_result, hinges_subset, units=None, ncols=2):
+    """一頁最多6個塑鉸的 M-θp 小圖(跟 _mode_shape_fig() 同一種每頁最多6個的分頁慣例)。"""
+    mu = _unit_label(units, "moment", "N·m")
+    n = len(hinges_subset)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(14, 4.0 * nrows), squeeze=False)
+    for k, h in enumerate(hinges_subset):
+        ax = axes[k // ncols][k % ncols]
+        theta_p = np.array(h["theta_p"]) * 1000
+        M = np.array([_from_si(units, "moment", v, "N·m") for v in h["M"]])
+        ax.plot(theta_p, M, color="#ea580c", lw=1.4)
+        ax.axhline(0, color="#999999", lw=0.6)
+        ax.axvline(0, color="#999999", lw=0.6)
+        ax.set_title(f"{_hinge_label_en(h)} (yielded {h['n_yield']}x)", fontsize=10)
+        ax.set_xlabel("θp (mrad)", fontsize=9)
+        ax.set_ylabel(f"M ({mu})", fontsize=9)
+        ax.tick_params(labelsize=8)
+    for k in range(n, nrows * ncols):
+        axes[k // ncols][k % ncols].axis("off")
+    fig.suptitle("Hinge Moment - Plastic Rotation (M-θp)", fontsize=12, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    return fig
+
+
+def build_cyclic_result_data_page(cyclic_result, units=None):
+    """循環分析的每一級幅值耗能表 + 塑鉸降伏順序表。"""
+    du = _unit_label(units, "disp", "m")
+    fu = _unit_label(units, "force", "N")
+    mu = _unit_label(units, "moment", "N·m")
+
+    loop_rows = [[
+        _fmt(_from_si(units, "disp", loop["amplitude"], "m")),
+        _fmt(_from_si(units, "force", loop["F_max"], "N")) if loop["F_max"] is not None else "-",
+        _fmt(_from_si(units, "moment", loop["energy"], "N·m")) if loop["energy"] is not None else "-",
+        f"{loop['xi_eq']:.4f}" if loop["xi_eq"] is not None else "-",
+    ] for loop in cyclic_result["loops"]]
+    hinge_rows = [[
+        str(i + 1), _hinge_label_en(h), _fmt(_from_si(units, "disp", h["first_yield"]["u"], "m")),
+        _fmt(_from_si(units, "force", h["first_yield"]["F"], "N")), str(h["n_yield"]),
+        _fmt(_from_si(units, "moment", h["work"], "N·m")),
+    ] for i, h in enumerate(cyclic_result["hinges"])]
+    return _table_page(
+        f"Cyclic Analysis Results ({cyclic_result['n_steps']} steps, "
+        f"total plastic work = {_fmt(_from_si(units,'moment',cyclic_result['total_plastic_work'],'N·m'))} {mu})",
+        [
+            (f"Energy per Complete Loop at Each Amplitude ({du}, {fu}, {mu})",
+             ["Amplitude", "F_max", "Energy", "ξ_eq"], loop_rows),
+            (f"Hinge Yield Sequence ({du}, {fu}, {mu})",
+             ["#", "Hinge", "Yield u", "Yield F", "N. Yields", "Plastic Work"], hinge_rows),
+        ])
+
+
+def build_cyclic_pdf_report(f, cyclic_result, units=None) -> bytes:
+    """循環(遲滯)分析的PDF報告: 整體遲滯迴圈圖 + 每級幅值耗能表/塑鉸降伏順序表 + 塑鉸M-θp
+    小圖(每頁最多6個)+ 完整輸入資料(含質量設定)。
+
+    cyclic_result: dict, `frame2d.cyclic.cyclic_to_dict()`的回傳值(webapi/main.py的
+    /export/pdf(cyclic)路徑負責準備, 重新跑一次cyclic_analysis()拿到)。
+    """
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        loop_fig = _cyclic_loop_fig(cyclic_result, units)
+        pdf.savefig(loop_fig, bbox_inches="tight")
+        plt.close(loop_fig)
+
+        result_fig = build_cyclic_result_data_page(cyclic_result, units)
+        pdf.savefig(result_fig, bbox_inches="tight")
+        plt.close(result_fig)
+
+        hinges = cyclic_result["hinges"]
+        for i in range(0, len(hinges), 6):
+            fig = _cyclic_hinge_fig(cyclic_result, hinges[i:i + 6], units)
+            pdf.savefig(fig)
+            plt.close(fig)
+
+        mass_fig = build_mass_data_page(f, units)
+        pdf.savefig(mass_fig, bbox_inches="tight")
+        plt.close(mass_fig)
+
+        for page_fig in build_input_data_pages(f, units):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
+    return buf.getvalue()

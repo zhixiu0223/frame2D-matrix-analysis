@@ -138,7 +138,7 @@ async function waitFor(fn, what, ms = 15000) {
 
   // ---- 後端錯誤: 拿掉塑鉸容量 -> 清楚訊息, 舊結果不被破壞 ----
   const backup = ev(`JSON.stringify(model.members)`);
-  ev(`model.members.forEach(m => { m.Mp_i = null; m.Mp_j = null; });`);
+  ev(`model.members = model.members.map(m => ({...m, Mp_i: null, Mp_j: null}));`);
   $('btnViewCyclic').click(); await sleep(20);
   $('btnSolve').click();
   await waitFor(() => $('status').textContent.includes('反覆載重分析失敗'), '錯誤訊息');
@@ -166,6 +166,20 @@ async function waitFor(fn, what, ms = 15000) {
   const nRows = (rowsMatch[0].match(/^\| \d+ \|/gm) || []).length;
   assert(nRows === wantNPts, `完整曲線應該有 ${wantNPts} 列(逐點對照畫面上的迴圈), 實際 ${nRows}`);
   console.log(`匯出 Markdown: 標題/輸入資料/分析設定/完整力-位移曲線(${nRows}點)都正確 OK`);
+
+  // ---- 匯出 PDF ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;`);
+  $('btnExportPdf').click();
+  await waitFor(() => ev(`window.__capturedBlob !== null`), 'PDF匯出完成', 15000);
+  const pdfName = ev(`window.__capturedName`);
+  assert(pdfName && pdfName.endsWith('_cyclic.pdf'), '檔名應該以 _cyclic.pdf 結尾: ' + pdfName);
+  const pdfBlob = ev(`window.__capturedBlob`);
+  assert(pdfBlob.type === 'application/pdf', 'blob類型應該是application/pdf: ' + pdfBlob.type);
+  const pdfBuf = await ev(`window.__capturedBlob.arrayBuffer()`);
+  const pdfHead = Buffer.from(pdfBuf.slice(0, 4)).toString('ascii');
+  assert(pdfHead === '%PDF', 'PDF檔案應該以%PDF開頭: ' + pdfHead);
+  assert(pdfBuf.byteLength > 10000, `PDF檔案大小應該有相當內容, 實際只有${pdfBuf.byteLength}bytes`);
+  console.log(`匯出 PDF: application/pdf、檔名_cyclic.pdf、有效PDF檔頭、大小${pdfBuf.byteLength}bytes OK`);
 
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);

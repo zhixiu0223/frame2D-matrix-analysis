@@ -32,7 +32,7 @@ from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
                          build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report,
-                         build_rsa_pdf_report)
+                         build_rsa_pdf_report, build_cyclic_pdf_report)
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -266,6 +266,19 @@ def _export_rsa_pdf(payload: dict) -> bytes:
         code_sds=payload.get("rsa_code_sds"), code_sd1=payload.get("rsa_code_sd1"),
         code_tl=payload.get("rsa_code_tl", 6.0), custom_points=payload.get("rsa_custom_points"))
     return build_rsa_pdf_report(f, rsa_to_dict(pkg), units=payload.get("units"))
+
+
+def _export_cyclic_pdf(payload: dict) -> bytes:
+    """跟webapi/main.py的_export_cyclic_pdf()邏輯一致, 輸入是dict。"""
+    if not payload.get("cyclic_control_nodes") or not payload.get("cyclic_amplitudes") or payload.get("cyclic_step") is None:
+        raise ValueError("反覆載重需要指定 cyclic_control_nodes(控制節點)、cyclic_amplitudes(幅值序列)、cyclic_step(步長)")
+    f = _build_frame(payload)
+    res = cyclic_analysis(f, payload["cyclic_control_nodes"], payload.get("cyclic_weights"),
+                          payload.get("cyclic_direction", "x"), payload["cyclic_amplitudes"],
+                          payload.get("cyclic_n_cycles", 2), payload["cyclic_step"])
+    d = cyclic_to_dict(res, payload["cyclic_control_nodes"], payload.get("cyclic_direction", "x"),
+                       payload.get("cyclic_n_cycles", 2))
+    return build_cyclic_pdf_report(f, d, units=payload.get("units"))
 
 
 def _export_pushover_pdf(payload: dict) -> bytes:
@@ -593,9 +606,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_bytes(pdf_bytes, "application/pdf",
                                       extra_headers={"Content-Disposition": 'attachment; filename="frame2d_rsa_report.pdf"'})
                     return
-                if at in ("cyclic", "seismic"):
-                    names = {"cyclic": "循環(遲滯)", "seismic": "非線性地震"}
-                    raise ValueError(f"{names[at]}分析的 PDF 匯出還在做, 目前只能匯出 Markdown。")
+                if at == "cyclic":
+                    try:
+                        pdf_bytes = _export_cyclic_pdf(payload)
+                    except KeyError as e:
+                        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+                    self._send_bytes(pdf_bytes, "application/pdf",
+                                      extra_headers={"Content-Disposition": 'attachment; filename="frame2d_cyclic_report.pdf"'})
+                    return
+                if at == "seismic":
+                    raise ValueError("非線性地震分析的 PDF 匯出還在做, 目前只能匯出 Markdown。")
                 if payload.get("analysis_type") == "pushover":
                     try:
                         pdf_bytes = _export_pushover_pdf(payload)

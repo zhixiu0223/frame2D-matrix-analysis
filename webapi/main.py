@@ -28,7 +28,7 @@ from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
                          build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report,
-                         build_rsa_pdf_report)
+                         build_rsa_pdf_report, build_cyclic_pdf_report)
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -673,6 +673,28 @@ def _export_rsa_pdf(payload: FrameIn) -> bytes:
     return build_rsa_pdf_report(f, rsa_to_dict(pkg), units=payload.units)
 
 
+def _export_cyclic_pdf(payload: FrameIn) -> bytes:
+    """analysis_type='cyclic'時/export/pdf走的路徑: 重新跑一次反覆載重分析(跟/cyclic共用
+    同一套cyclic_analysis()呼叫)。"""
+    if not payload.cyclic_control_nodes or not payload.cyclic_amplitudes or payload.cyclic_step is None:
+        raise HTTPException(
+            status_code=400,
+            detail="反覆載重需要指定 cyclic_control_nodes(控制節點)、cyclic_amplitudes(幅值序列)、cyclic_step(步長)")
+    f = _build_frame(payload)
+    try:
+        res = cyclic_analysis(f, payload.cyclic_control_nodes, payload.cyclic_weights,
+                              payload.cyclic_direction, payload.cyclic_amplitudes,
+                              payload.cyclic_n_cycles, payload.cyclic_step)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    d = cyclic_to_dict(res, payload.cyclic_control_nodes, payload.cyclic_direction, payload.cyclic_n_cycles)
+    return build_cyclic_pdf_report(f, d, units=payload.units)
+
+
 @app.post("/export/pdf")
 def export_pdf(payload: FrameIn):
     if payload.analysis_type == 'modal':
@@ -689,11 +711,17 @@ def export_pdf(payload: FrameIn):
             media_type="application/pdf",
             headers={"Content-Disposition": 'attachment; filename="frame2d_rsa_report.pdf"'},
         )
-    if payload.analysis_type in ('cyclic', 'seismic'):
-        names = {'cyclic': '循環(遲滯)', 'seismic': '非線性地震'}
+    if payload.analysis_type == 'cyclic':
+        pdf_bytes = _export_cyclic_pdf(payload)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="frame2d_cyclic_report.pdf"'},
+        )
+    if payload.analysis_type == 'seismic':
         raise HTTPException(
             status_code=400,
-            detail=f"{names[payload.analysis_type]}分析的 PDF 匯出還在做, 目前只能匯出 Markdown。",
+            detail="非線性地震分析的 PDF 匯出還在做, 目前只能匯出 Markdown。",
         )
     if payload.analysis_type == 'pushover':
         try:
