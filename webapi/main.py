@@ -28,7 +28,7 @@ from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
                          build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report,
-                         build_rsa_pdf_report, build_cyclic_pdf_report)
+                         build_rsa_pdf_report, build_cyclic_pdf_report, build_seismic_pdf_report)
 from .query_point import query_point
 
 app = FastAPI(title="frame2d API", description="frame2d 2D 矩陣位移法 solver 的 JSON API 外殼")
@@ -695,6 +695,31 @@ def _export_cyclic_pdf(payload: FrameIn) -> bytes:
     return build_cyclic_pdf_report(f, d, units=payload.units)
 
 
+def _export_seismic_pdf(payload: FrameIn) -> bytes:
+    """analysis_type='seismic'時/export/pdf走的路徑: 重新跑一次非線性地震反應分析(跟
+    /nonlinear_seismic共用同一套nonlinear_seismic_web_analysis()呼叫)。"""
+    if payload.seismic_control_node is None:
+        raise HTTPException(status_code=400, detail="非線性地震分析需要指定 seismic_control_node(控制節點)")
+    f = _build_frame(payload)
+    try:
+        pkg = nonlinear_seismic_web_analysis(
+            f, payload.seismic_control_node, direction=payload.seismic_direction, dt=payload.seismic_dt,
+            n_steps=payload.seismic_n_steps, zeta=payload.seismic_zeta,
+            damping_modes=tuple(payload.seismic_damping_modes), mass_kind=payload.seismic_mass_kind,
+            apply_gravity_loads=payload.seismic_apply_gravity_loads,
+            ground_motion_type=payload.seismic_ground_motion_type,
+            pulse_amplitude_g=payload.seismic_pulse_amplitude_g, pulse_freq_hz=payload.seismic_pulse_freq_hz,
+            pulse_decay=payload.seismic_pulse_decay, custom_points_g=payload.seismic_custom_points_g,
+            peer_nga_text=payload.seismic_peer_nga_text, peer_nga_max_points=payload.seismic_peer_nga_max_points)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return build_seismic_pdf_report(f, seismic_to_dict(pkg), units=payload.units)
+
+
 @app.post("/export/pdf")
 def export_pdf(payload: FrameIn):
     if payload.analysis_type == 'modal':
@@ -719,9 +744,11 @@ def export_pdf(payload: FrameIn):
             headers={"Content-Disposition": 'attachment; filename="frame2d_cyclic_report.pdf"'},
         )
     if payload.analysis_type == 'seismic':
-        raise HTTPException(
-            status_code=400,
-            detail="非線性地震分析的 PDF 匯出還在做, 目前只能匯出 Markdown。",
+        pdf_bytes = _export_seismic_pdf(payload)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="frame2d_seismic_report.pdf"'},
         )
     if payload.analysis_type == 'pushover':
         try:

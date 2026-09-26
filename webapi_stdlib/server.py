@@ -32,7 +32,7 @@ from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
                          build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report,
-                         build_rsa_pdf_report, build_cyclic_pdf_report)
+                         build_rsa_pdf_report, build_cyclic_pdf_report, build_seismic_pdf_report)
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -279,6 +279,26 @@ def _export_cyclic_pdf(payload: dict) -> bytes:
     d = cyclic_to_dict(res, payload["cyclic_control_nodes"], payload.get("cyclic_direction", "x"),
                        payload.get("cyclic_n_cycles", 2))
     return build_cyclic_pdf_report(f, d, units=payload.get("units"))
+
+
+def _export_seismic_pdf(payload: dict) -> bytes:
+    """跟webapi/main.py的_export_seismic_pdf()邏輯一致, 輸入是dict。"""
+    if payload.get("seismic_control_node") is None:
+        raise ValueError("非線性地震分析需要指定 seismic_control_node(控制節點)")
+    f = _build_frame(payload)
+    pkg = nonlinear_seismic_web_analysis(
+        f, payload["seismic_control_node"], direction=payload.get("seismic_direction", "x"),
+        dt=payload.get("seismic_dt"), n_steps=payload.get("seismic_n_steps"),
+        zeta=payload.get("seismic_zeta", 0.05), damping_modes=tuple(payload.get("seismic_damping_modes", [0, 2])),
+        mass_kind=payload.get("seismic_mass_kind", "lumped"),
+        apply_gravity_loads=payload.get("seismic_apply_gravity_loads", True),
+        ground_motion_type=payload.get("seismic_ground_motion_type", "pulse"),
+        pulse_amplitude_g=payload.get("seismic_pulse_amplitude_g"),
+        pulse_freq_hz=payload.get("seismic_pulse_freq_hz"), pulse_decay=payload.get("seismic_pulse_decay", 0.0),
+        custom_points_g=payload.get("seismic_custom_points_g"),
+        peer_nga_text=payload.get("seismic_peer_nga_text"),
+        peer_nga_max_points=payload.get("seismic_peer_nga_max_points", 2000))
+    return build_seismic_pdf_report(f, seismic_to_dict(pkg), units=payload.get("units"))
 
 
 def _export_pushover_pdf(payload: dict) -> bytes:
@@ -615,7 +635,13 @@ class Handler(BaseHTTPRequestHandler):
                                       extra_headers={"Content-Disposition": 'attachment; filename="frame2d_cyclic_report.pdf"'})
                     return
                 if at == "seismic":
-                    raise ValueError("非線性地震分析的 PDF 匯出還在做, 目前只能匯出 Markdown。")
+                    try:
+                        pdf_bytes = _export_seismic_pdf(payload)
+                    except KeyError as e:
+                        raise ValueError(f"找不到 ID 為 {e} 的節點或桿件, 模型內有殘留的參照, 請檢查並移除")
+                    self._send_bytes(pdf_bytes, "application/pdf",
+                                      extra_headers={"Content-Disposition": 'attachment; filename="frame2d_seismic_report.pdf"'})
+                    return
                 if payload.get("analysis_type") == "pushover":
                     try:
                         pdf_bytes = _export_pushover_pdf(payload)

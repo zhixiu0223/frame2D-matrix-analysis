@@ -15,7 +15,7 @@ matplotlib Figure 物件本身。
 層4 `build_cyclic_pdf_report()`: 有效的PDF bytes、分頁公式(曲線1+結果表1+ceil(塑鉸數/6)+
     質量1+輸入資料3)。
 層5 網頁後端(選用, 需要pymupdf): stdlib 與 FastAPI 兩後端文字內容逐頁完全相同;
-    analysis_type='seismic' 回應清楚的「還在做」。
+    (seismic已經在test_pdf_export_seismic.py另外測過)。
 """
 import re
 import warnings
@@ -190,8 +190,5 @@ else:
         assert d1[i].get_text() == d2[i].get_text(), f"第{i}頁文字內容應該完全相同"
     print(f"  stdlib 與 FastAPI 後端產生的 PDF({d1.page_count}頁)文字內容逐頁完全相同")
 
-    rr = client.post("/export/pdf", json=dict(model, analysis_type="seismic"))
-    assert rr.status_code == 400 and "非線性地震" in rr.json()["detail"] and "還在做" in rr.json()["detail"]
-    print("  seismic 的 PDF 匯出回應清楚的「還在做」訊息")
 
 print("\n全部通過: 循環PDF匯出的迴圈圖/塑鉸圖/結果表/頁數/(選用)後端一致性都正確。")

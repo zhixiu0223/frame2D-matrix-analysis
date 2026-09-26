@@ -199,7 +199,7 @@ async function waitFor(fn, what, ms = 20000) {
 
   // ---- 後端錯誤: 拿掉塑鉸容量 -> 清楚訊息, 舊結果不被破壞 ----
   const backup = ev(`JSON.stringify(model.members)`);
-  ev(`model.members.forEach(m => { m.Mp_i = null; m.Mp_j = null; });`);
+  ev(`model.members = model.members.map(m => ({...m, Mp_i: null, Mp_j: null}));`);
   $('sm_gm_type').value = 'pulse'; $('sm_gm_type').dispatchEvent(new w.Event('change'));
   const btnAnim = d.querySelector('.viewBtn[data-view="seismic_anim"]');
   btnAnim.click(); await sleep(20);
@@ -229,6 +229,20 @@ async function waitFor(fn, what, ms = 20000) {
   const wantSteps = ev(`seismicResult.n_steps`);
   assert(mdText.includes(`總步數=${wantSteps}`), `分析設定段落應該記錄總步數=${wantSteps}: ` + mdText.slice(0, 800));
   console.log('匯出 Markdown: 標題/輸入資料/塑鉸容量/地震歷程來源(含完整PEER NGA檔案內容)/結果/能量平衡都正確 OK');
+
+  // ---- 匯出 PDF ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;`);
+  $('btnExportPdf').click();
+  await waitFor(() => ev(`window.__capturedBlob !== null`), 'PDF匯出完成', 30000);
+  const pdfName = ev(`window.__capturedName`);
+  assert(pdfName && pdfName.endsWith('_seismic.pdf'), '檔名應該以 _seismic.pdf 結尾: ' + pdfName);
+  const pdfBlob = ev(`window.__capturedBlob`);
+  assert(pdfBlob.type === 'application/pdf', 'blob類型應該是application/pdf: ' + pdfBlob.type);
+  const pdfBuf = await ev(`window.__capturedBlob.arrayBuffer()`);
+  const pdfHead = Buffer.from(pdfBuf.slice(0, 4)).toString('ascii');
+  assert(pdfHead === '%PDF', 'PDF檔案應該以%PDF開頭: ' + pdfHead);
+  assert(pdfBuf.byteLength > 10000, `PDF檔案大小應該有相當內容, 實際只有${pdfBuf.byteLength}bytes`);
+  console.log(`匯出 PDF: application/pdf、檔名_seismic.pdf、有效PDF檔頭、大小${pdfBuf.byteLength}bytes OK`);
 
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);

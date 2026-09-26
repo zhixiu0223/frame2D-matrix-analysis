@@ -12,7 +12,7 @@
     模態基底剪力), 節點位移表跟桿件內力表逐格比對, 標題裡的基底剪力/累積質量比也要對。
 層3 `build_rsa_pdf_report()`: 有效的PDF bytes、固定7頁(曲線1+結果表2+質量1+輸入資料3)。
 層4 網頁後端(選用, 需要pymupdf): stdlib 與 FastAPI 兩後端文字內容逐頁完全相同;
-    analysis_type='seismic' 回應清楚的「還在做」(cyclic已經在test_pdf_export_cyclic.py另外測過)。
+    (cyclic/seismic已經分別在test_pdf_export_cyclic.py/test_pdf_export_seismic.py另外測過)。
 """
 import re
 
@@ -138,9 +138,5 @@ else:
         assert d1[i].get_text() == d2[i].get_text(), f"第{i}頁文字內容應該完全相同"
     print(f"  stdlib 與 FastAPI 後端產生的 PDF(7頁)文字內容逐頁完全相同")
 
-    for at, keyword in [("seismic", "非線性地震")]:
-        rr = client.post("/export/pdf", json=dict(model, analysis_type=at))
-        assert rr.status_code == 400 and keyword in rr.json()["detail"] and "還在做" in rr.json()["detail"]
-    print("  seismic 的 PDF 匯出回應清楚的「還在做」訊息")
 
 print("\n全部通過: 反應譜PDF匯出的曲線圖/結果表/頁數/(選用)後端一致性都正確。")

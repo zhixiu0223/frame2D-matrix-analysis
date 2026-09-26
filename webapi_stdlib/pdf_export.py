@@ -867,3 +867,138 @@ def build_cyclic_pdf_report(f, cyclic_result, units=None) -> bytes:
             plt.close(page_fig)
 
     return buf.getvalue()
+
+
+def _seismic_history_fig(seismic_result, units=None):
+    """地震時程圖: 地面加速度(g)+ 控制節點相對位移雙圖(上下疊, 跟網頁drawSeismicHistory()
+    同一種版面)。"""
+    du = _unit_label(units, "disp", "m")
+    t = np.array(seismic_result["t"])
+    ag_g = np.array(seismic_result["ground_motion"]) / 9.80665
+    disp = np.array([_from_si(units, "disp", v, "m") for v in seismic_result["control_disp"]])
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8))
+    ax1.plot(t, ag_g, color="#64748b", lw=1.0)
+    ax1.axhline(0, color="#999999", lw=0.5)
+    ax1.set_ylabel("Ground accel. (g)")
+    ax1.set_title("Ground Acceleration ag(t)")
+    ax1.grid(alpha=0.3)
+    ax2.plot(t, disp, color="#0891b2", lw=1.1)
+    ax2.axhline(0, color="#999999", lw=0.5)
+    ax2.set_xlabel("Time (s)")
+    ax2.set_ylabel(f"Rel. disp ({du})")
+    ax2.set_title(f"Control Node {seismic_result['control_node']} Relative Displacement")
+    ax2.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def _seismic_hysteresis_fig(seismic_result, units=None):
+    """全域遲滯圖: 控制節點位移 vs 有效慣性力合力(不是嚴格的支承反力, 見
+    `seismic.seismic_to_dict()` 的說明)。"""
+    du = _unit_label(units, "disp", "m")
+    fu = _unit_label(units, "force", "N")
+    disp = np.array([_from_si(units, "disp", v, "m") for v in seismic_result["control_disp"]])
+    force = np.array([_from_si(units, "force", v, "N") for v in seismic_result["equivalent_force"]])
+    fig, ax = plt.subplots(figsize=(11, 8))
+    ax.plot(disp, force, color="#7c3aed", lw=1.0)
+    ax.axhline(0, color="#999999", lw=0.6)
+    ax.axvline(0, color="#999999", lw=0.6)
+    ax.set_xlabel(f"Displacement ({du})")
+    ax.set_ylabel(f"Equivalent inertial force ({fu})")
+    ax.set_title(f"Displacement vs Equivalent Inertial Force (control node {seismic_result['control_node']}, "
+                 "NOT a strict support reaction -- see report notes)")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def _seismic_energy_fig(seismic_result, units=None):
+    """能量平衡圖: 動能+阻尼耗能+桿件內力作功疊加(stackplot), 對照外力作功(虛線)——虛線應該
+    精確蓋在疊加區域的頂端, 這張圖本身就是驗證這組結果最直接的方式。"""
+    mu = _unit_label(units, "moment", "N·m")
+    t = np.array(seismic_result["energy"]["t"])
+    KE = np.array([_from_si(units, "moment", v, "N·m") for v in seismic_result["energy"]["KE"]])
+    Wdamp = np.array([_from_si(units, "moment", v, "N·m") for v in seismic_result["energy"]["Wdamp"]])
+    Wint = np.array([_from_si(units, "moment", v, "N·m") for v in seismic_result["energy"]["Wint"]])
+    Wext = np.array([_from_si(units, "moment", v, "N·m") for v in seismic_result["energy"]["Wext"]])
+    fig, ax = plt.subplots(figsize=(11, 7))
+    ax.stackplot(t, KE, Wdamp, Wint, labels=["Kinetic", "Damping dissipated", "Member internal work"],
+                colors=["#0891b2", "#64748b", "#ea580c"], alpha=0.85)
+    ax.plot(t, Wext, color="#111827", lw=1.4, ls="--", label="External (effective EQ force) work")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(f"Cumulative energy ({mu})")
+    ax.set_title("Energy Balance: KE + Damping + Member Internal Work vs External Work")
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def build_seismic_result_data_page(seismic_result, units=None):
+    """非線性地震分析的摘要頁: 分析設定/結果摘要表(含能量平衡自我檢核)+ 降伏塑鉸表。"""
+    du = _unit_label(units, "disp", "m")
+    fu = _unit_label(units, "force", "N")
+    mu = _unit_label(units, "moment", "N·m")
+    r = seismic_result
+    n_yield = sum(1 for e in r["events"] if e["kind"] == "yield")
+    n_unload = sum(1 for e in r["events"] if e["kind"] == "unload")
+    e_final = r["energy"]["Wext"][-1]
+    e_check = r["energy"]["KE"][-1] + r["energy"]["Wdamp"][-1] + r["energy"]["Wint"][-1]
+
+    summary_rows = [
+        ["Control node / direction", f"{r['control_node']} / {r['direction']}"],
+        ["Mass kind / gravity preload", f"{r['mass_kind']} / {'yes' if r['apply_gravity_loads'] else 'no'}"],
+        ["T1 / ζ_target", f"{r['period1']:.4f} s / {r['zeta_target']}"],
+        ["Rayleigh α / β", f"{r['alpha']:.5f} / {r['beta']:.3e}"],
+        ["Δt / steps", f"{r['dt']:.5g} s / {r['n_steps']}"],
+        [f"Peak displacement ({du})", _fmt(_from_si(units, "disp", r["peak_displacement"], "m"))],
+        ["Yield / unload events", f"{n_yield} / {n_unload}"],
+        [f"Energy balance: external work ({mu})", _fmt(_from_si(units, "moment", e_final, "N·m"))],
+        [f"Energy balance: KE+damping+internal ({mu}, should match above exactly)",
+         _fmt(_from_si(units, "moment", e_check, "N·m"))],
+    ]
+    hinge_rows = [[_hinge_label_en(h), str(h["n_yield"]),
+                  _fmt(_from_si(units, "moment", h["work_final"], "N·m"))] for h in r["hinges"]]
+    return _table_page(
+        "Nonlinear Seismic Analysis Results",
+        [("Summary", ["Item", "Value"], summary_rows),
+         (f"Yielded Hinges (plastic work in {mu})", ["Hinge", "N. Yields", "Plastic Work"], hinge_rows)],
+        figsize=(14, 6 + 0.3 * max(1, len(hinge_rows))))
+
+
+def build_seismic_pdf_report(f, seismic_result, units=None) -> bytes:
+    """非線性地震反應分析的PDF報告: 地震時程圖(地面加速度+位移)+ 全域遲滯圖 + 能量平衡圖 +
+    摘要表(含能量平衡自我檢核)+ 塑鉸M-θp小圖(每頁最多6個, 重用 `_cyclic_hinge_fig()`——
+    seismic_to_dict()跟cyclic_to_dict()的塑鉸dict形狀相容, 都有member/end/M/theta_p/
+    n_yield)+ 質量設定頁 + 完整輸入資料頁。
+
+    seismic_result: dict, `frame2d.seismic.seismic_to_dict()`的回傳值(webapi/main.py的
+    /export/pdf(seismic)路徑負責準備, 重新跑一次nonlinear_seismic_web_analysis()拿到)。
+    """
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for fig in (_seismic_history_fig(seismic_result, units),
+                   _seismic_hysteresis_fig(seismic_result, units),
+                   _seismic_energy_fig(seismic_result, units)):
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        result_fig = build_seismic_result_data_page(seismic_result, units)
+        pdf.savefig(result_fig, bbox_inches="tight")
+        plt.close(result_fig)
+
+        hinges = seismic_result["hinges"]
+        for i in range(0, len(hinges), 6):
+            hinge_fig = _cyclic_hinge_fig(seismic_result, hinges[i:i + 6], units)
+            pdf.savefig(hinge_fig)
+            plt.close(hinge_fig)
+
+        mass_fig = build_mass_data_page(f, units)
+        pdf.savefig(mass_fig, bbox_inches="tight")
+        plt.close(mass_fig)
+
+        for page_fig in build_input_data_pages(f, units):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
+    return buf.getvalue()

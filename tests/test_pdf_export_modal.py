@@ -15,9 +15,8 @@
     也不出錯(表格是空的, 頁數照常)。
 層4 網頁後端(`/export/pdf`, analysis_type='modal'): stdlib 與 FastAPI 兩後端萃取出來的
     純文字內容逐頁完全相同(用來對照「同一份資料兩邊算出同一份報告」, 不比較原始bytes——PDF
-    裡嵌了產生時間戳記, 兩次呼叫的bytes本來就不會相同, 這不是bug); analysis_type='seismic'
-    回應清楚的「還在做」訊息, 不是壞掉的PDF或不明錯誤(rsa/cyclic已經分別在
-    test_pdf_export_rsa.py/test_pdf_export_cyclic.py另外測過, 這裡不重複測)。這一層需要
+    裡嵌了產生時間戳記, 兩次呼叫的bytes本來就不會相同, 這不是bug)(rsa/cyclic/seismic已經
+    分別在對應的test_pdf_export_*.py另外測過, 這裡不重複測)。這一層需要
     pymupdf, 沒裝就印 SKIPPED 並正常結束。
 """
 import numpy as np
@@ -195,10 +194,5 @@ else:
         assert d1[i].get_text() == d2[i].get_text(), f"第{i}頁文字內容應該完全相同"
     print(f"  stdlib 與 FastAPI 後端產生的 PDF({d1.page_count}頁)文字內容逐頁完全相同")
 
-    for at, keyword in [("seismic", "非線性地震")]:
-        rr = client.post("/export/pdf", json=dict(model, analysis_type=at))
-        assert rr.status_code == 400 and keyword in rr.json()["detail"] and "還在做" in rr.json()["detail"], \
-            f"{at}: 應該回400且說明還在做: {rr.status_code} {rr.text[:100]}"
-    print("  seismic 的 PDF 匯出回應清楚的「還在做」訊息(不是壞掉的PDF)")
 
 print("\n全部通過: 模態PDF匯出的振型圖/質量表/頁數/(選用)後端一致性都正確。")
