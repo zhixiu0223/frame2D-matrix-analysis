@@ -185,6 +185,20 @@ async function waitFor(fn, what, ms = 15000) {
   assert(modeRows === wantModes, `模態表應該有 ${wantModes} 列, 實際 ${modeRows}`);
   console.log(`匯出 Markdown: 標題/輸入資料/自訂反應譜來源/模態結果表(${modeRows}列)都正確 OK`);
 
+  // ---- 匯出 PDF ----
+  ev(`window.__capturedBlob = null; window.__capturedName = null;`);
+  $('btnExportPdf').click();
+  await waitFor(() => ev(`window.__capturedBlob !== null`), 'PDF匯出完成', 15000);
+  const pdfName = ev(`window.__capturedName`);
+  assert(pdfName && pdfName.endsWith('_rsa.pdf'), '檔名應該以 _rsa.pdf 結尾: ' + pdfName);
+  const pdfBlob = ev(`window.__capturedBlob`);
+  assert(pdfBlob.type === 'application/pdf', 'blob類型應該是application/pdf: ' + pdfBlob.type);
+  const pdfBuf = await ev(`window.__capturedBlob.arrayBuffer()`);
+  const pdfHead = Buffer.from(pdfBuf.slice(0, 4)).toString('ascii');
+  assert(pdfHead === '%PDF', 'PDF檔案應該以%PDF開頭: ' + pdfHead);
+  assert(pdfBuf.byteLength > 10000, `PDF檔案大小應該有相當內容, 實際只有${pdfBuf.byteLength}bytes`);
+  console.log(`匯出 PDF: application/pdf、檔名_rsa.pdf、有效PDF檔頭、大小${pdfBuf.byteLength}bytes OK`);
+
   // ---- 新建/載入重置 ----
   ev(`resetViewToStructure();`);
   assert(ev(`rsaResult`) === null && $('btnViewRsa').style.display === 'none' && $('rsaConfigBar').style.display === 'none'

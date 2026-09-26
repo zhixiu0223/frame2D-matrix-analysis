@@ -6305,13 +6305,16 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
     // 不用兩邊分別維護。模態結果用 lastModalPayload(求解當下實際送出去
     // 的那份, 含modal_n_modes/modal_mass_kind), 補上analysis_type跟units
     // ——跟Markdown匯出同一個「精確對應畫面上這組結果」的原則。
+    const isRsaResult = analysisTypeNow === 'rsa' && rsaResult && lastRsaPayload;
     let payload;
     if (isPushoverResult) {
       payload = buildPushoverPayload();
       if (!payload) return;
     } else if (isModalResult) {
       payload = {...lastModalPayload, analysis_type: 'modal', units: currentUnitsPayload()};
-    } else if (analysisTypeNow === 'rsa' || analysisTypeNow === 'cyclic' || analysisTypeNow === 'seismic') {
+    } else if (isRsaResult) {
+      payload = {...lastRsaPayload, analysis_type: 'rsa', units: currentUnitsPayload()};
+    } else if (analysisTypeNow === 'cyclic' || analysisTypeNow === 'seismic') {
       setStatus('這種分析的 PDF 匯出還在做, 目前請用「匯出Markdown」。');
       return;
     } else {
@@ -6322,7 +6325,7 @@ document.getElementById('btnExportPdf').addEventListener('click', async () => {
     });
     if (!res.ok) { setStatus('PDF 產生失敗: ' + await apiErrorMessage(res)); return; }
     const blob = await res.blob();
-    const suffix = isPushoverResult ? '_pushover' : isModalResult ? '_modal' : '';
+    const suffix = isPushoverResult ? '_pushover' : isModalResult ? '_modal' : isRsaResult ? '_rsa' : '';
     downloadBlob(blob, (currentName || 'frame2d_report') + suffix + '.pdf');
     setStatus('PDF 已下載');
   } catch (e) { setStatus('PDF 產生失敗: ' + e.message); }

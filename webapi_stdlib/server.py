@@ -31,7 +31,8 @@ from frame2d.seismic import nonlinear_seismic_web_analysis, seismic_to_dict
 from .diagrams import build_diagrams_and_deformed, build_deformed_with_scale
 from .storage import LocalFileStorage, InvalidNameError, NotFoundError
 from .pdf_export import (build_pdf_report, build_fbd_previews, build_fbd_images_archive,
-                         build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report)
+                         build_pushover_pdf_report, _pushover_final_solve_result, build_modal_pdf_report,
+                         build_rsa_pdf_report)
 from .query_point import query_point
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -253,6 +254,18 @@ def _export_modal_pdf(payload: dict) -> bytes:
     f = _build_frame(payload)
     md = eigen(f, n_modes=payload.get("modal_n_modes"), mass=payload.get("modal_mass_kind", "lumped"))
     return build_modal_pdf_report(f, modal_to_dict(md), units=payload.get("units"))
+
+
+def _export_rsa_pdf(payload: dict) -> bytes:
+    """跟webapi/main.py的_export_rsa_pdf()邏輯一致, 輸入是dict。"""
+    f = _build_frame(payload)
+    pkg = spectrum_analysis(
+        f, direction=payload.get("rsa_direction", "x"), damping=payload.get("rsa_damping", 0.05),
+        combine=payload.get("rsa_combine", "SRSS"), n_modes=payload.get("rsa_n_modes"),
+        mass_kind=payload.get("rsa_mass_kind", "lumped"), spectrum_type=payload.get("rsa_spectrum_type", "code"),
+        code_sds=payload.get("rsa_code_sds"), code_sd1=payload.get("rsa_code_sd1"),
+        code_tl=payload.get("rsa_code_tl", 6.0), custom_points=payload.get("rsa_custom_points"))
+    return build_rsa_pdf_report(f, rsa_to_dict(pkg), units=payload.get("units"))
 
 
 def _export_pushover_pdf(payload: dict) -> bytes:
@@ -575,8 +588,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_bytes(pdf_bytes, "application/pdf",
                                       extra_headers={"Content-Disposition": 'attachment; filename="frame2d_modal_report.pdf"'})
                     return
-                if at in ("rsa", "cyclic", "seismic"):
-                    names = {"rsa": "反應譜", "cyclic": "循環(遲滯)", "seismic": "非線性地震"}
+                if at == "rsa":
+                    pdf_bytes = _export_rsa_pdf(payload)
+                    self._send_bytes(pdf_bytes, "application/pdf",
+                                      extra_headers={"Content-Disposition": 'attachment; filename="frame2d_rsa_report.pdf"'})
+                    return
+                if at in ("cyclic", "seismic"):
+                    names = {"cyclic": "循環(遲滯)", "seismic": "非線性地震"}
                     raise ValueError(f"{names[at]}分析的 PDF 匯出還在做, 目前只能匯出 Markdown。")
                 if payload.get("analysis_type") == "pushover":
                     try:

@@ -655,3 +655,95 @@ def build_modal_pdf_report(f, modal_result, units=None) -> bytes:
             plt.close(page_fig)
 
     return buf.getvalue()
+
+
+def _rsa_spectrum_curve_fig(rsa_result, units=None):
+    """反應譜曲線圖(週期-加速度), 疊上每個模態實際落在譜上的位置(紅點+模態編號標籤)。
+    T軸固定用秒(跟前端一致, 沒有另外的週期單位選項), Sa軸依units換算。"""
+    accu = _unit_label(units, "accel", "m/s²")
+    T = np.array(rsa_result["curve"]["T"])
+    Sa = np.array([_from_si(units, "accel", v, "m/s²") for v in rsa_result["curve"]["Sa"]])
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.plot(T, Sa, color="#0891b2", lw=1.6)
+    for m in rsa_result["modes"]:
+        sa_disp = _from_si(units, "accel", m["sa"], "m/s²")
+        ax.plot(m["period"], sa_disp, "o", color="#dc2626", ms=6, zorder=3)
+        ax.annotate(f"Mode {m['index']}", (m["period"], sa_disp), textcoords="offset points",
+                    xytext=(6, 6), fontsize=8, color="#dc2626")
+    ax.set_xlabel("Period T (s)")
+    ax.set_ylabel(f"Sa ({accu})")
+    ax.set_title(f"Response Spectrum ({rsa_result['direction']}-direction, {rsa_result['combine']}, "
+                 f"damping={rsa_result['damping']})")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def build_rsa_result_data_page(rsa_result, units=None):
+    """反應譜結果表格頁: 各模態的組合貢獻表 + 節點位移表 + 桿件端點內力表。跟
+    build_result_data_page() 不一樣, 這裡的資料來自 `rsa_to_dict()` 的 dict, 不是
+    frame2d.postprocess 的 solve result 物件——反應譜結果本身就是組合過的(SRSS/CQC),
+    沒有對應的單一SolveResult可以重用。"""
+    du = _unit_label(units, "disp", "m")
+    fu = _unit_label(units, "force", "N")
+    mu = _unit_label(units, "moment", "N·m")
+    accu = _unit_label(units, "accel", "m/s²")
+
+    mode_rows = [[
+        str(m["index"]), f"{m['period']:.5f}", f"{m['frequency']:.4f}",
+        _fmt(_from_si(units, "accel", m["sa"], "m/s²")), f"{m['gamma']:.4f}",
+        f"{m['eff_ratio'] * 100:.1f}%" if m["eff_ratio"] is not None else "-",
+        f"{m['cum_ratio_total'] * 100:.1f}%" if m["cum_ratio_total"] is not None else "-",
+        _fmt(_from_si(units, "force", m["modal_base_shear"], "N")),
+    ] for m in rsa_result["modes"]]
+    page1 = _table_page(
+        f"Response Spectrum Results ({rsa_result['direction']}-dir, {rsa_result['combine']}, "
+        f"damping={rsa_result['damping']}, {rsa_result['mass_kind']} mass, {rsa_result['n_modes']} modes): "
+        f"Base Shear = {_fmt(_from_si(units,'force',rsa_result['base_shear'],'N'))} {fu}, "
+        f"Cumulative Mass Ratio = {rsa_result['cum_ratio_total'] * 100:.1f}%",
+        [("", ["Mode", "T (s)", "f (Hz)", f"Sa ({accu})", "Γ", "Eff. Ratio", "Cum(total)",
+              f"Modal Base Shear ({fu})"], mode_rows)], figsize=(14, 3 + 0.35 * len(mode_rows)))
+
+    node_rows = [[
+        nid, _fmt(_from_si(units, "disp", v["ux"], "m")), _fmt(_from_si(units, "disp", v["uy"], "m")),
+    ] for nid, v in sorted(rsa_result["nodes"].items(), key=lambda kv: int(kv[0]))]
+    member_rows = [[
+        mid, _fmt(_from_si(units, "force", v["Fx_i"], "N")), _fmt(_from_si(units, "force", v["Fy_i"], "N")),
+        _fmt(_from_si(units, "moment", v["M_i"], "N·m")), _fmt(_from_si(units, "force", v["Fx_j"], "N")),
+        _fmt(_from_si(units, "force", v["Fy_j"], "N")), _fmt(_from_si(units, "moment", v["M_j"], "N·m")),
+    ] for mid, v in sorted(rsa_result["members"].items(), key=lambda kv: int(kv[0]))]
+    page2 = _table_page("Response Spectrum Results: Node Displacements / Member End Forces", [
+        (f"Node Displacements ({du}, SRSS/CQC combined -- always non-negative-ish magnitude, not a signed value)",
+         ["Node ID", f"ux ({du})", f"uy ({du})"], node_rows),
+        (f"Member End Forces ({fu}, {mu}, combined)",
+         ["Member ID", f"Nᵢ ({fu})", f"Vᵢ ({fu})", f"Mᵢ ({mu})", f"Nⱼ ({fu})", f"Vⱼ ({fu})", f"Mⱼ ({mu})"], member_rows),
+    ])
+    return [page1, page2]
+
+
+def build_rsa_pdf_report(f, rsa_result, units=None) -> bytes:
+    """反應譜分析的PDF報告: 反應譜曲線圖(疊模態點) + 模態組合表(含基底剪力) + 節點位移/
+    桿件端點內力表 + 完整輸入資料(含質量設定)。
+
+    rsa_result: dict, `frame2d.spectrum.rsa_to_dict()`的回傳值(webapi/main.py的
+    /export/pdf(rsa)路徑負責準備, 重新跑一次spectrum_analysis()拿到)。
+    """
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        curve_fig = _rsa_spectrum_curve_fig(rsa_result, units)
+        pdf.savefig(curve_fig, bbox_inches="tight")
+        plt.close(curve_fig)
+
+        for page_fig in build_rsa_result_data_page(rsa_result, units):
+            pdf.savefig(page_fig, bbox_inches="tight")
+            plt.close(page_fig)
+
+        mass_fig = build_mass_data_page(f, units)
+        pdf.savefig(mass_fig, bbox_inches="tight")
+        plt.close(mass_fig)
+
+        for page_fig in build_input_data_pages(f, units):
+            pdf.savefig(page_fig)
+            plt.close(page_fig)
+
+    return buf.getvalue()
